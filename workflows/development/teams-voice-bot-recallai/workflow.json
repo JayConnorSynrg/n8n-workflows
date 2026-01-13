@@ -1,0 +1,194 @@
+{
+  "id": "gjYSN6xNjLw8qsA1",
+  "name": "Teams Voice Bot - Recall.ai + XTTS-v2",
+  "active": false,
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Receive Transcript",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "transcript",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [200, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"received\" } }}"
+      }
+    },
+    {
+      "id": "filter-code",
+      "name": "Filter Final Transcripts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nconst filtered = [];\nfor (const item of items) {\n  const data = item.json;\n  if (data.event === 'transcript.data' && data.data?.is_final === true && \n      data.data?.speaker_name !== 'AI Voice Assistant') {\n    filtered.push(item);\n  }\n}\nreturn filtered;"
+      }
+    },
+    {
+      "id": "extract-transcript",
+      "name": "Extract Transcript Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 300],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {"id": "transcript", "name": "transcript", "value": "={{ $json.data.words.map(w => w.text).join(' ') }}", "type": "string"},
+            {"id": "speaker", "name": "speaker", "value": "={{ $json.data.speaker_name }}", "type": "string"},
+            {"id": "bot_id", "name": "bot_id", "value": "={{ $json.bot_id }}", "type": "string"},
+            {"id": "timestamp", "name": "timestamp", "value": "={{ $now.toISO() }}", "type": "string"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "ai-agent",
+      "name": "AI Voice Assistant",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [800, 300],
+      "parameters": {
+        "options": {
+          "systemMessage": "You are an AI voice assistant participating in a Microsoft Teams meeting. You respond to questions and discussions in a helpful, concise, and professional manner. Keep responses brief (1-3 sentences) since they will be converted to speech. Avoid bullet points, special characters, or formatting that doesn't translate well to spoken audio. Be conversational and natural."
+        }
+      }
+    },
+    {
+      "id": "openai-model",
+      "name": "OpenAI GPT-4",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [800, 500],
+      "parameters": {
+        "model": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"},
+        "options": {"temperature": 0.7}
+      }
+    },
+    {
+      "id": "memory-buffer",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [1000, 500],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Extract Transcript Data').first().json.bot_id }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "tts-request",
+      "name": "Generate TTS Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1000, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/tts",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": $json.output, \"speaker_wav\": \"default\", \"language\": \"en\" } }}",
+        "options": {
+          "response": {"response": {"responseFormat": "file"}},
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "send-to-recall",
+      "name": "Send Audio to Recall.ai",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1200, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://us-west-2.recall.ai/api/v1/bot/' + $('Extract Transcript Data').first().json.bot_id + '/output_audio/' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{"name": "Authorization", "value": "={{ $env.RECALL_API_KEY }}"}]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"kind\": \"mp3\", \"b64_data\": $binary.data.toString('base64') } }}"
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "sticky-architecture",
+      "name": "Architecture Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-250, 50],
+      "parameters": {
+        "content": "## Teams Voice Bot Architecture\n\n**Real-Time Conversation Flow:**\n1. Recall.ai joins Teams meeting (via bot_create API)\n2. Recall.ai sends transcripts to n8n webhook\n3. Filter for final, non-bot transcripts\n4. AI Agent generates conversational response\n5. XTTS-v2 converts text to MP3 audio\n6. POST /output_audio sends MP3 to meeting\n\n**API Endpoints Used:**\n- POST /api/v1/bot/ - Create bot\n- POST /api/v1/bot/{id}/output_audio/ - Send audio\n- Webhook receives transcript.data events",
+        "width": 400,
+        "height": 280
+      }
+    },
+    {
+      "id": "sticky-setup",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-250, 380],
+      "parameters": {
+        "content": "## Required Setup\n\n**1. Environment Variables:**\n- RECALL_API_KEY (Token format)\n- OPENAI_API_KEY\n\n**2. Recall.ai Bot Creation:**\n```json\nPOST /api/v1/bot/\n{\n  \"meeting_url\": \"teams-url\",\n  \"recording_config\": {\n    \"realtime_endpoints\": [{\n      \"type\": \"webhook\",\n      \"url\": \"n8n-webhook-url\",\n      \"events\": [\"transcript.data\"]\n    }]\n  },\n  \"automatic_audio_output\": {...}\n}\n```\n\n**3. XTTS-v2 (HTTP mode):**\ndocker run --gpus all -p 8000:8000 xtts-v2",
+        "width": 400,
+        "height": 280
+      }
+    }
+  ],
+  "connections": {
+    "Receive Transcript": {
+      "main": [[{"node": "Filter Final Transcripts", "type": "main", "index": 0}]]
+    },
+    "Filter Final Transcripts": {
+      "main": [[{"node": "Extract Transcript Data", "type": "main", "index": 0}]]
+    },
+    "Extract Transcript Data": {
+      "main": [[{"node": "AI Voice Assistant", "type": "main", "index": 0}]]
+    },
+    "OpenAI GPT-4": {
+      "ai_languageModel": [[{"node": "AI Voice Assistant", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Conversation Memory": {
+      "ai_memory": [[{"node": "AI Voice Assistant", "type": "ai_memory", "index": 0}]]
+    },
+    "AI Voice Assistant": {
+      "main": [[{"node": "Generate TTS Audio", "type": "main", "index": 0}]]
+    },
+    "Generate TTS Audio": {
+      "main": [[{"node": "Send Audio to Recall.ai", "type": "main", "index": 0}]]
+    },
+    "Send Audio to Recall.ai": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

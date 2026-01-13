@@ -1,0 +1,125 @@
+{
+  "name": "TTS Agent Sub-Workflow",
+  "id": "DdwpUSXz7GCZuhlC",
+  "description": "Sub-workflow for text-to-speech generation and delivery to Recall.ai",
+  "nodes": [
+    {
+      "id": "trigger-input",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 240],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "analyze-intent",
+      "name": "Analyze Intent & Prepare Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 240],
+      "parameters": {
+        "jsCode": "// Analyze intent and prepare logging data\nconst input = $input.first().json;\n\n// Extract input fields\nconst responseText = input.response_text || '';\nconst botId = input.bot_id || '';\nconst sessionId = input.session_id || '';\nconst intent = input.intent || 'unknown';\nconst context = input.context || {};\n\n// Analyze response characteristics\nconst wordCount = responseText.split(/\\s+/).filter(w => w).length;\nconst isQuestion = responseText.trim().endsWith('?');\nconst isAcknowledgment = /^(ok|okay|sure|got it|understood|working on|one moment)/i.test(responseText);\n\n// Determine TTS voice based on context\nlet voice = 'alloy'; // default\nif (isQuestion) voice = 'nova';\nif (isAcknowledgment) voice = 'echo';\n\n// Prepare log entry\nconst logEntry = {\n  timestamp: new Date().toISOString(),\n  bot_id: botId,\n  session_id: sessionId,\n  intent: intent,\n  response_text: responseText,\n  word_count: wordCount,\n  is_question: isQuestion,\n  is_acknowledgment: isAcknowledgment,\n  voice_used: voice\n};\n\nreturn [{\n  response_text: responseText,\n  bot_id: botId,\n  session_id: sessionId,\n  voice: voice,\n  log_entry: logEntry\n}];"
+      }
+    },
+    {
+      "id": "generate-tts",
+      "name": "Generate TTS Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [448, 240],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/speech",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"tts-1\",\n  \"input\": \"{{ $json.response_text }}\",\n  \"voice\": \"{{ $json.voice }}\",\n  \"response_format\": \"mp3\"\n}",
+        "options": { "response": { "response": { "responseFormat": "file" } } }
+      },
+      "credentials": { "openAiApi": { "id": "6BIzzQu5jAD5jKlH", "name": "OpenAi account" } }
+    },
+    {
+      "id": "convert-base64",
+      "name": "Convert to Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [672, 240],
+      "parameters": {
+        "jsCode": "// Convert binary audio to base64\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const binaryData = item.binary?.data;\n  \n  if (binaryData) {\n    // Get the base64 data from binary\n    const base64Audio = binaryData.data;\n    \n    results.push({\n      json: {\n        ...item.json,\n        audio_base64: base64Audio,\n        audio_format: 'mp3'\n      }\n    });\n  } else {\n    // No binary data - pass through with error flag\n    results.push({\n      json: {\n        ...item.json,\n        error: 'No audio binary data found',\n        audio_base64: null\n      }\n    });\n  }\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "send-recall",
+      "name": "Send Audio to Recall.ai",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 240],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://us-west-2.recall.ai/api/v1/bot/{{ $('Analyze Intent & Prepare Log').item.json.bot_id }}/output_audio/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"data\": {\n    \"kind\": \"mp3\",\n    \"b64_data\": \"{{ $json.audio_base64 }}\"\n  }\n}"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "azILXPlqpoxANVs8", "name": "SUPABSE SERVICE ROLE- wzlywrurbmiszstzkxed" } }
+    },
+    {
+      "id": "build-immutable-log",
+      "name": "Build Immutable Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 240],
+      "parameters": {
+        "jsCode": "// Build immutable log data for TTS Agent\nconst input = $('Workflow Input').first().json;\nconst analyzed = $('Analyze Intent & Prepare Log').first().json;\nconst recallResult = $input.first().json;\n\n// Build immutable log entry\nconst immutableLog = {\n  transcript_exact: input.response_text || '',\n  agent_output_raw: analyzed.response_text || '',\n  tool_calls: [{\n    tool: 'openai_tts',\n    input: { text: analyzed.response_text, voice: analyzed.voice },\n    output: { success: true }\n  }, {\n    tool: 'recall_audio',\n    input: { bot_id: analyzed.bot_id },\n    output: recallResult\n  }],\n  timestamps: {\n    received_at: Date.now(),\n    processed_at: Date.now(),\n    logged_at: new Date().toISOString()\n  },\n  session_id: analyzed.session_id,\n  bot_id: analyzed.bot_id,\n  classifier_route: 'tts_agent',\n  classifier_intent: 'generate_speech',\n  tts_result: {\n    success: true,\n    audio_sent: true,\n    voice_used: analyzed.voice,\n    word_count: analyzed.log_entry?.word_count || 0\n  },\n  workflow_source: 'tts_agent',\n  error_flags: {\n    tts_error: false,\n    recall_error: !!recallResult.error\n  }\n};\n\nreturn [immutableLog];"
+      }
+    },
+    {
+      "id": "call-logging-agent",
+      "name": "Call Logging Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1200, 240],
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "8LX5tt3SkO8GNuLj", "mode": "id" }
+      }
+    },
+    {
+      "id": "return-result",
+      "name": "Return to Orchestrator",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1400, 240],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "success", "name": "success", "value": true, "type": "boolean" },
+            { "id": "audio_sent", "name": "audio_sent", "value": true, "type": "boolean" },
+            { "id": "bot_id", "name": "bot_id", "value": "={{ $('Analyze Intent & Prepare Log').item.json.bot_id }}", "type": "string" },
+            { "id": "session_id", "name": "session_id", "value": "={{ $('Analyze Intent & Prepare Log').item.json.session_id }}", "type": "string" },
+            { "id": "log_entry", "name": "log_entry", "value": "={{ $json.log_entry }}", "type": "object" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": { "main": [[{ "node": "Analyze Intent & Prepare Log", "type": "main", "index": 0 }]] },
+    "Analyze Intent & Prepare Log": { "main": [[{ "node": "Generate TTS Audio", "type": "main", "index": 0 }]] },
+    "Generate TTS Audio": { "main": [[{ "node": "Convert to Base64", "type": "main", "index": 0 }]] },
+    "Convert to Base64": { "main": [[{ "node": "Send Audio to Recall.ai", "type": "main", "index": 0 }]] },
+    "Send Audio to Recall.ai": { "main": [[{ "node": "Build Immutable Log", "type": "main", "index": 0 }]] },
+    "Build Immutable Log": { "main": [[{ "node": "Call Logging Agent", "type": "main", "index": 0 }]] },
+    "Call Logging Agent": { "main": [[{ "node": "Return to Orchestrator", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

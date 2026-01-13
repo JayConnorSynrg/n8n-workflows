@@ -1,0 +1,490 @@
+{
+  "createdAt": "2025-11-23T00:10:25.339Z",
+  "updatedAt": "2025-11-23T00:28:34.874Z",
+  "id": "8bhcEHkbbvnhdHBh",
+  "name": "dev-marketing-image-quality-loop",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "init",
+      "name": "Initialize Loop Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "iter",
+              "name": "iteration",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "maxiter",
+              "name": "maxIterations",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "topic",
+              "name": "topic",
+              "value": "AI-Powered Resume Processing",
+              "type": "string"
+            },
+            {
+              "id": "score",
+              "name": "qualityScore",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "feedback",
+              "name": "improvementFeedback",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ai-agent",
+      "name": "AI Agent - Generate/Refine Prompt",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        440,
+        240
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.iteration === 0 ? 'Create an image generation prompt for topic: ' + $json.topic + '.\\n\\nSYNRG Aesthetic Guidelines:\\n- Vertical 3:4 aspect ratio, 4K resolution\\n- Super light cold gray background (#f4f4f4)\\n- Frosted glass 3D metaball centerpiece\\n- Gradient: #24DE99 (mint green) → #FFFFFF (pearl white)\\n- Bold geometric sans-serif typography\\n- Gaussian-blurred text through frosted glass\\n- Long soft shadows with mint/cyan glow\\n- Professional, minimalist, futuristic\\n\\nCreate a detailed DALL-E prompt that strictly follows these guidelines.' : 'PREVIOUS ATTEMPT ISSUES:\\n' + $json.improvementFeedback + '\\n\\nOriginal topic: ' + $json.topic + '\\n\\nRefine the image generation prompt to fix these specific issues while maintaining SYNRG aesthetic guidelines. Be precise about:\\n- Color accuracy (#24DE99 → #FFFFFF)\\n- Typography spelling and placement\\n- Frosted glass material properties\\n- Shadow and glow effects\\n\\nOutput ONLY the improved DALL-E prompt.' }}",
+        "options": {
+          "systemMessage": "You are a graphic design prompt writer for an automation company called SYNRG. You create prompts that design modern sleek, minimalist graphics for social media. Focus on precision and adherence to brand guidelines."
+        }
+      }
+    },
+    {
+      "id": "chat-model",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        320,
+        420
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4-turbo",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "memory",
+      "name": "Memory Buffer",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        540,
+        420
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.iteration || 0 }}"
+      }
+    },
+    {
+      "id": "generate-image",
+      "name": "Generate Image with DALL-E-3",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        660,
+        240
+      ],
+      "parameters": {
+        "resource": "image",
+        "model": "dall-e-3",
+        "prompt": "={{ $json.output }}",
+        "options": {
+          "size": "1024x1792",
+          "quality": "hd",
+          "style": "natural"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "analyze-quality",
+      "name": "Analyze Quality with Vision AI",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        880,
+        240
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list"
+        },
+        "text": "Analyze this image against SYNRG brand standards. Score each criterion 0-10 (10 = perfect).\\n\\n**VISUAL CONSISTENCY (60 points):**\\n1. Aspect Ratio (3:4 vertical) - Score: __/10\\n2. Background (#f4f4f4 light gray) - Score: __/10\\n3. Composition (negative space, balance) - Score: __/10\\n4. Frosted glass metaball present - Score: __/10\\n5. Gradient accuracy (#24DE99 → #FFFFFF) - Score: __/10\\n6. Surface detail (grain, softness) - Score: __/10\\n\\n**TEXT QUALITY (40 points):**\\n7. Typography (bold geometric sans-serif) - Score: __/10\\n8. Text spelling (no errors) - Score: __/10\\n9. Text clarity (readable, not distorted) - Score: __/10\\n10. Gaussian blur effect accuracy - Score: __/10\\n\\n**PROFESSIONAL QUALITY (40 points):**\\n11. Character shapes (no mishapen elements) - Score: __/10\\n12. Visual continuity (cohesive design) - Score: __/10\\n13. Shadow/glow effects (soft, mint-tinted) - Score: __/10\\n14. Overall enterprise quality - Score: __/10\\n\\n**TOTAL: __/140**\\n\\n**VERDICT:**\\n- 140 = PERFECT (100%) - Ready to publish\\n- 130-139 = EXCELLENT (93-99%) - Minor improvements\\n- 120-129 = GOOD (86-92%) - Needs refinement\\n- <120 = NEEDS WORK (<86%) - Significant issues\\n\\n**SPECIFIC ISSUES FOUND:**\\n(List any spelling errors, distortions, color inaccuracies, composition problems)\\n\\n**IMPROVEMENT RECOMMENDATIONS:**\\n(If score < 140, what specifically needs to change in the prompt?)",
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "extract-score",
+      "name": "Extract Quality Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        240
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const analysis = $input.item.json.text;\\n\\n// Extract total score\\nconst scoreMatch = analysis.match(/TOTAL:\\\\s*(\\\\d+)/i);\\nconst score = scoreMatch ? parseInt(scoreMatch[1]) : 0;\\n\\n// Extract issues\\nconst issuesMatch = analysis.match(/SPECIFIC ISSUES FOUND:\\\\s*([\\\\s\\\\S]*?)(?=IMPROVEMENT|$)/i);\\nconst issues = issuesMatch ? issuesMatch[1].trim() : '';\\n\\n// Extract recommendations\\nconst recsMatch = analysis.match(/IMPROVEMENT RECOMMENDATIONS:\\\\s*([\\\\s\\\\S]*?)$/i);\\nconst recommendations = recsMatch ? recsMatch[1].trim() : '';\\n\\n// Get current iteration\\nconst currentIteration = $node['Initialize Loop Variables'].json.iteration || 0;\\n\\nreturn [\\n  {\\n    json: {\\n      qualityScore: score,\\n      percentScore: Math.round((score / 140) * 100),\\n      isPerfect: score >= 140,\\n      issues: issues,\\n      recommendations: recommendations,\\n      iteration: currentIteration + 1,\\n      analysisText: analysis\\n    },\\n    binary: $input.item.binary\\n  }\\n];"
+      }
+    },
+    {
+      "id": "quality-check",
+      "name": "Check if Perfect or Max Iterations",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "perfect",
+              "leftValue": "={{ $json.isPerfect }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "maxiter",
+              "leftValue": "={{ $json.iteration }}",
+              "rightValue": "={{ $('Initialize Loop Variables').item.json.maxIterations }}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "save-success",
+      "name": "Save Perfect Image",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        140
+      ],
+      "parameters": {
+        "operation": "upload",
+        "name": "=SYNRG_Perfect_{{ $now.format('yyyy-MM-dd_HHmmss') }}.png",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1v0lANQ70OY7C1d8QM5va4PaZsE83w4Ew",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1760,
+        140
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "SUCCESS",
+              "type": "string"
+            },
+            {
+              "id": "score",
+              "name": "finalScore",
+              "value": "={{ $('Extract Quality Score').item.json.qualityScore }}",
+              "type": "number"
+            },
+            {
+              "id": "pct",
+              "name": "percentScore",
+              "value": "={{ $('Extract Quality Score').item.json.percentScore }}",
+              "type": "number"
+            },
+            {
+              "id": "iters",
+              "name": "iterationsUsed",
+              "value": "={{ $('Extract Quality Score').item.json.iteration }}",
+              "type": "number"
+            },
+            {
+              "id": "msg",
+              "name": "message",
+              "value": "={{ $('Extract Quality Score').item.json.isPerfect ? 'Image achieved 100% quality! Saved to Google Drive.' : 'Max iterations reached. Best attempt saved. Score: ' + $('Extract Quality Score').item.json.percentScore + '%' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare-retry",
+      "name": "Prepare Improvement Feedback",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        340
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "iter",
+              "name": "iteration",
+              "value": "={{ $json.iteration }}",
+              "type": "number"
+            },
+            {
+              "id": "feedback",
+              "name": "improvementFeedback",
+              "value": "={{ \"Score: \" + $json.qualityScore + \"/140 (\" + $json.percentScore + \"%)\\n\\nIssues Found:\\n\" + $json.issues + \"\\n\\nRecommendations:\\n\" + $json.recommendations }}",
+              "type": "string"
+            },
+            {
+              "id": "topic",
+              "name": "topic",
+              "value": "={{ $node['Initialize Loop Variables'].json.topic }}",
+              "type": "string"
+            },
+            {
+              "id": "maxiter",
+              "name": "maxIterations",
+              "value": "={{ $node['Initialize Loop Variables'].json.maxIterations }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Initialize Loop Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Loop Variables": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Generate/Refine Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Generate/Refine Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Image with DALL-E-3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Generate/Refine Prompt",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Buffer": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent - Generate/Refine Prompt",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image with DALL-E-3": {
+      "main": [
+        [
+          {
+            "node": "Analyze Quality with Vision AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Quality with Vision AI": {
+      "main": [
+        [
+          {
+            "node": "Extract Quality Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Quality Score": {
+      "main": [
+        [
+          {
+            "node": "Check if Perfect or Max Iterations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Perfect or Max Iterations": {
+      "main": [
+        [
+          {
+            "node": "Save Perfect Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Improvement Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Perfect Image": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Improvement Feedback": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Generate/Refine Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "c7d03686-0506-4d32-80ae-df90986a609e",
+  "triggerCount": 0
+}

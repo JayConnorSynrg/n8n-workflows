@@ -1,0 +1,1336 @@
+{
+  "updatedAt": "2025-12-10T22:45:46.000Z",
+  "createdAt": "2025-11-23T00:10:25.339Z",
+  "id": "8bhcEHkbbvnhdHBh",
+  "name": "AI Carousel Generator - 5 Slides",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "SYNRG Carousel Generator",
+        "formDescription": "Generate a 5-slide carousel with AI-powered imagery following SYNRG brand standards",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "What is the main subject/theme?",
+              "placeholder": "e.g., Client Onboarding Automation, Email Sequences, Business Scaling",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Target Audience",
+              "placeholder": "e.g., Agency Owners, Marketing Directors, Entrepreneurs",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Call to Action",
+              "placeholder": "e.g., Book a Call, Learn More, Get Started"
+            },
+            {
+              "fieldLabel": "Brand Style",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "SYNRG Enterprise"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Image Dimensions",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Portrait (1024x1536) - Instagram/Stories"
+                  },
+                  {
+                    "option": "Square (1024x1024) - Feed Posts"
+                  },
+                  {
+                    "option": "Landscape (1536x1024) - LinkedIn/Headers"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "form-trigger",
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        64,
+        336
+      ],
+      "webhookId": "carousel-form"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "theme",
+              "name": "carousel_theme",
+              "value": "={{ $json['What is the main subject/theme?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "audience",
+              "name": "target_audience",
+              "value": "={{ $json['Target Audience'] }}",
+              "type": "string"
+            },
+            {
+              "id": "cta",
+              "name": "call_to_action",
+              "value": "={{ $json['Call to Action'] || 'Learn More' }}",
+              "type": "string"
+            },
+            {
+              "id": "brand-style",
+              "name": "brand_style",
+              "value": "={{ $json['Brand Style'] }}",
+              "type": "string"
+            },
+            {
+              "id": "dimensions-raw",
+              "name": "image_dimensions_raw",
+              "value": "={{ $json['Image Dimensions'] }}",
+              "type": "string"
+            },
+            {
+              "id": "dimensions",
+              "name": "image_dimensions",
+              "value": "={{ $json['Image Dimensions'].includes('Portrait') ? '1024x1536' : $json['Image Dimensions'].includes('Square') ? '1024x1024' : '1536x1024' }}",
+              "type": "string"
+            },
+            {
+              "id": "aspect-ratio",
+              "name": "aspect_ratio",
+              "value": "={{ $json['Image Dimensions'].includes('Portrait') ? '3:4' : $json['Image Dimensions'].includes('Square') ? '1:1' : '4:3' }}",
+              "type": "string"
+            },
+            {
+              "id": "style-desc",
+              "name": "style_description",
+              "value": "SYNRG Enterprise: Hyper-clean minimalist futuristic aesthetic. Super light cold gray background (#f4f4f4). 3D frosted-glass metaball centerpiece with mint green (#24DE99) to pearl white (#FFFFFF) gradient. Long diffused shadows with mint/cyan tint. Bold geometric sans-serif typography (Satoshi/Monument style) partially obscured behind frosted elements. Soft reflections, subtle noise grain, professional studio lighting. Enterprise-grade, premium, communicating clarity and innovation.",
+              "type": "string"
+            },
+            {
+              "id": "slides",
+              "name": "slide_count",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "carousel-id",
+              "name": "carousel_id",
+              "value": "={{ 'carousel_' + $now.format('YYYY-MM-DD_HHmmss') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-user-input",
+      "name": "Set User Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        272,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "={{ $json.carousel_id }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1v0lANQ70OY7C1d8QM5va4PaZsE83w4Ew",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "create-carousel-folder",
+      "name": "Create Carousel Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        464,
+        336
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "folder-id",
+              "name": "carousel_folder_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "folder-url",
+              "name": "carousel_folder_url",
+              "value": "={{ $json.webViewLink }}",
+              "type": "string"
+            },
+            {
+              "id": "carousel-theme",
+              "name": "carousel_theme",
+              "value": "={{ $('Set User Input').item.json.carousel_theme }}",
+              "type": "string"
+            },
+            {
+              "id": "target-audience",
+              "name": "target_audience",
+              "value": "={{ $('Set User Input').item.json.target_audience }}",
+              "type": "string"
+            },
+            {
+              "id": "cta",
+              "name": "call_to_action",
+              "value": "={{ $('Set User Input').item.json.call_to_action }}",
+              "type": "string"
+            },
+            {
+              "id": "brand-style",
+              "name": "brand_style",
+              "value": "={{ $('Set User Input').item.json.brand_style }}",
+              "type": "string"
+            },
+            {
+              "id": "style-desc",
+              "name": "style_description",
+              "value": "={{ $('Set User Input').item.json.style_description }}",
+              "type": "string"
+            },
+            {
+              "id": "dimensions",
+              "name": "image_dimensions",
+              "value": "={{ $('Set User Input').item.json.image_dimensions }}",
+              "type": "string"
+            },
+            {
+              "id": "aspect-ratio",
+              "name": "aspect_ratio",
+              "value": "={{ $('Set User Input').item.json.aspect_ratio }}",
+              "type": "string"
+            },
+            {
+              "id": "carousel-id",
+              "name": "carousel_id",
+              "value": "={{ $('Set User Input').item.json.carousel_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "store-folder-info",
+      "name": "Store Folder Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        672,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 4000,
+          "temperature": 0.7
+        }
+      },
+      "id": "openai-model",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        832,
+        608
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ 'carousel_' + $('Set User Input').item.json.carousel_id }}"
+      },
+      "id": "memory-buffer",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1072,
+        656
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"carousel_title\": { \"type\": \"string\", \"description\": \"Catchy title for the carousel (5-8 words)\" },\n    \"carousel_description\": { \"type\": \"string\", \"description\": \"Brief description of carousel theme (15-20 words)\" },\n    \"slide_prompts\": {\n      \"type\": \"array\",\n      \"description\": \"Array of 5 detailed GPT Image 1 prompts following psychology framework\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"slide_number\": { \"type\": \"number\", \"description\": \"Slide number (1-5)\" },\n          \"slide_purpose\": { \"type\": \"string\", \"description\": \"Psychology purpose: hook, pain_point, why_problem, solution, or call_to_action\" },\n          \"prompt\": { \"type\": \"string\", \"description\": \"Detailed visual description for GPT Image 1 following SYNRG aesthetic (200-300 chars)\" },\n          \"description\": { \"type\": \"string\", \"description\": \"Brief slide description (15-20 words)\" },\n          \"visual_elements\": { \"type\": \"array\", \"description\": \"Key visual elements that must appear in the image\", \"items\": { \"type\": \"string\" } }\n        },\n        \"required\": [\"slide_number\", \"slide_purpose\", \"prompt\", \"description\", \"visual_elements\"]\n      },\n      \"minItems\": 5,\n      \"maxItems\": 5\n    },\n    \"tags\": { \"type\": \"array\", \"description\": \"3-5 relevant hashtags\", \"items\": { \"type\": \"string\" } }\n  },\n  \"required\": [\"carousel_title\", \"carousel_description\", \"slide_prompts\", \"tags\"]\n}"
+      },
+      "id": "output-parser",
+      "name": "Parse Slide Prompts",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1328,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ \"Theme: \" + $json.carousel_theme + \"\\nTarget Audience: \" + $json.target_audience + \"\\nCall to Action: \" + $json.call_to_action + \"\\nBrand Style: \" + $json.brand_style + \"\\nImage Dimensions: \" + $json.image_dimensions + \" (\" + $json.aspect_ratio + \")\\nStyle Direction: \" + $json.style_description + \"\\n\\nGenerate 5 carousel slide prompts following the EXACT JSON schema provided. Each prompt MUST be 200-300 characters with specific SYNRG aesthetic details.\" }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are SYNRG's expert visual prompt engineer. Your job is to generate GPT Image 1 prompts that produce the signature SYNRG aesthetic WITH high-quality typography.\n\nSYNRG Aesthetic + Marketing Checklist (score each 0-10)\n\n1. Aspect Ratio & Resolution - Match the selected dimensions, 4K quality maintained.\n2. Background - Super light cold gray (#f4f4f4 or lighter), soft gradient lighting.\n3. Composition - Balanced layout with generous negative space and intentional symmetry.\n4. Central Object Presence - Distinct frosted-glass metaball form present and central.\n5. Gradient Accuracy - Gradient from bright mint green (#24DE99) to pearl white (#FFFFFF) correctly applied.\n6. Surface Detail - Silky translucency, subtle grain, edge softness, accurate light diffusion.\n7. Shadow & Glow Quality - Long, soft shadows and faint mint/cyan ambient glow visible and consistent.\n8. Typography Style - Bold geometric sans-serif (Satoshi, Monument, or Eurostile Bold); text placement aligned and legible.\n9. Blur & Overlay Accuracy - Partial Gaussian-blurred text correctly appears behind frosted object.\n10. Visual Integrity - No misspellings, artifacts, distortions, or inconsistent materials.\n\n11. Pain Point Clarity - Image clearly depicts or implies a business problem.\n12. Solution Clarity - Automation-driven benefit is visually represented or implied with clarity.\n13. Enterprise Value - Image conveys professionalism, scalability, and ROI-aligned impact.\n14. Brand Fidelity - Tone, materials, and composition remain true to SYNRG's aesthetic identity."
+        }
+      },
+      "id": "ai-agent",
+      "name": "Carousel Prompt Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        992,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "output.slide_prompts",
+        "options": {}
+      },
+      "id": "split-slides",
+      "name": "Split Slide Prompts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1456,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": true
+        }
+      },
+      "id": "quality-retry-loop",
+      "name": "Quality Retry Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1664,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "prompt",
+              "name": "current_prompt",
+              "value": "={{ $json.current_prompt || $json.prompt }}",
+              "type": "string"
+            },
+            {
+              "id": "original-prompt",
+              "name": "original_prompt",
+              "value": "={{ $json.original_prompt || $json.prompt }}",
+              "type": "string"
+            },
+            {
+              "id": "purpose",
+              "name": "slide_purpose",
+              "value": "={{ $json.slide_purpose }}",
+              "type": "string"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "visual-elements",
+              "name": "visual_elements",
+              "value": "={{ $json.visual_elements ? (typeof $json.visual_elements === 'string' ? $json.visual_elements : $json.visual_elements.join(', ')) : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "attempt",
+              "name": "attempt_number",
+              "value": "={{ $json.attempt_number || 1 }}",
+              "type": "number"
+            },
+            {
+              "id": "max-attempts",
+              "name": "max_attempts",
+              "value": "={{ $json.max_attempts || 3 }}",
+              "type": "number"
+            },
+            {
+              "id": "dalle-style",
+              "name": "dalle_style",
+              "value": "={{ $json.dalle_style || $('Store Folder Info').item.json.dalle_style }}",
+              "type": "string"
+            },
+            {
+              "id": "folder-id",
+              "name": "carousel_folder_id",
+              "value": "={{ $json.carousel_folder_id || $('Store Folder Info').item.json.carousel_folder_id }}",
+              "type": "string"
+            },
+            {
+              "id": "style-desc",
+              "name": "style_description",
+              "value": "={{ $json.style_description || $('Store Folder Info').item.json.style_description }}",
+              "type": "string"
+            },
+            {
+              "id": "carousel-id",
+              "name": "carousel_id",
+              "value": "={{ $json.carousel_id || $('Store Folder Info').item.json.carousel_id }}",
+              "type": "string"
+            },
+            {
+              "id": "image-dimensions",
+              "name": "image_dimensions",
+              "value": "={{ $json.image_dimensions || $('Store Folder Info').item.json.image_dimensions }}",
+              "type": "string"
+            },
+            {
+              "id": "quality-prompt",
+              "name": "quality_prompt",
+              "value": "You are SYNRG Image Analyzer. Analyze this image and return ONLY valid JSON.\n\nReturn:\n{\n  \"scores\": { \"aspect_ratio\": 0-10, \"background\": 0-10, \"composition\": 0-10, \"metaball\": 0-10, \"gradient\": 0-10, \"surface\": 0-10, \"shadows\": 0-10, \"typography\": 0-10, \"blur\": 0-10, \"visual_integrity\": 0-10, \"pain_point_clarity\": 0-10, \"solution_clarity\": 0-10, \"enterprise_value\": 0-10, \"brand_fidelity\": 0-10 },\n  \"total_score\": 0-140,\n  \"verdict\": \"Effective|Needs Improvement|Off-Brand\",\n  \"passes\": true/false,\n  \"critical_issues\": [],\n  \"improvement_suggestions\": []\n}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-slide-context",
+      "name": "Set Slide Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1856,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "options": {
+          "fallbackOutput": "none"
+        },
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "portrait-condition",
+                    "leftValue": "={{ $json.image_dimensions }}",
+                    "rightValue": "1024x1536",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Portrait"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "square-condition",
+                    "leftValue": "={{ $json.image_dimensions }}",
+                    "rightValue": "1024x1024",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Square"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "landscape-condition",
+                    "leftValue": "={{ $json.image_dimensions }}",
+                    "rightValue": "1536x1024",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Landscape"
+            }
+          ]
+        }
+      },
+      "id": "route-dimension",
+      "name": "Route by Dimension",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1824,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "model": "gpt-image-1",
+        "prompt": "={{ $json.current_prompt }}",
+        "options": {
+          "quality": "high",
+          "size": "1536x1024"
+        }
+      },
+      "id": "gen-landscape",
+      "name": "Generate Landscape (1536x1024)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2528,
+        16
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "text": "={{ $('Set Slide Context').item.json.quality_prompt }}",
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "simplify": true,
+        "options": {
+          "detail": "high",
+          "maxTokens": 1000
+        }
+      },
+      "id": "analyze-image-quality",
+      "name": "Analyze Image Quality",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2048,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the SYNRG quality analysis result\nconst items = $input.all();\nconst results = [];\nconst MIN_QUALITY_SCORE = 112;\nconst MAX_SCORE = 140;\n\nfor (const item of items) {\n  try {\n    const imageData = item.binary || {};\n    let slideData;\n    try {\n      const itemIndex = item.pairedItem?.item ?? 0;\n      slideData = $('Set Slide Context').all()[itemIndex]?.json || {};\n    } catch (e) { slideData = {}; }\n    \n    const analysisText = item.json.content || item.json.message?.content || item.json.text || item.json.output || JSON.stringify(item.json);\n    let analysis;\n    try {\n      const jsonMatch = analysisText.match(/\\{[\\s\\S]*\\}/);\n      if (jsonMatch) { analysis = JSON.parse(jsonMatch[0]); }\n      else { throw new Error('No JSON found'); }\n    } catch (parseError) {\n      analysis = { total_score: 0, scores: {}, verdict: 'Off-Brand', passes: false, critical_issues: ['Could not parse quality analysis'], improvement_suggestions: [] };\n    }\n    \n    const scores = analysis.scores || {};\n    const totalScore = analysis.total_score || Object.values(scores).reduce((sum, s) => sum + (s || 0), 0) || 0;\n    const normalizedTotal = Math.round((totalScore / MAX_SCORE) * 100);\n    const passesMinimum = totalScore >= MIN_QUALITY_SCORE;\n    const passesQuality = analysis.passes === true || analysis.verdict === 'Effective' || passesMinimum;\n    \n    results.push({\n      json: { ...slideData, quality_score: totalScore, quality_score_percent: normalizedTotal, passes_quality: passesQuality, verdict: analysis.verdict || (passesQuality ? 'Effective' : 'Needs Improvement'), scores: scores, quality_issues: analysis.critical_issues || [], improvement_suggestions: analysis.improvement_suggestions || [] },\n      binary: imageData,\n      pairedItem: item.pairedItem\n    });\n  } catch (error) {\n    results.push({ json: { quality_score: 0, passes_quality: false, verdict: 'Off-Brand', error: error.message }, pairedItem: item.pairedItem });\n  }\n}\nreturn results;"
+      },
+      "id": "parse-quality-result",
+      "name": "Parse Quality Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "quality-pass",
+              "operator": {
+                "name": "filter.operator.equals",
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.passes_quality }}",
+              "rightValue": true
+            },
+            {
+              "id": "max-attempts",
+              "operator": {
+                "name": "filter.operator.gte",
+                "type": "number",
+                "operation": "gte"
+              },
+              "leftValue": "={{ $json.attempt_number }}",
+              "rightValue": "={{ $json.max_attempts }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "quality-check",
+      "name": "Quality Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2928,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.carousel_id + '_slide_' + $json.slide_number + '.png' }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.carousel_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "upload-approved-image",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3072,
+        112
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGoogleDrive": "",
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "share",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "permissionsUi": {},
+        "options": {}
+      },
+      "id": "set-public",
+      "name": "Set Public Permissions",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3264,
+        112
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $('Parse Quality Result').item.json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "purpose",
+              "name": "slide_purpose",
+              "value": "={{ $('Parse Quality Result').item.json.slide_purpose }}",
+              "type": "string"
+            },
+            {
+              "id": "url",
+              "name": "image_url",
+              "value": "={{ 'https://drive.google.com/uc?export=view&id=' + $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "file-id",
+              "name": "file_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "filename",
+              "name": "file_name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $('Parse Quality Result').item.json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "quality-score",
+              "name": "quality_score",
+              "value": "={{ $('Parse Quality Result').item.json.quality_score }}",
+              "type": "number"
+            },
+            {
+              "id": "attempts",
+              "name": "attempts_used",
+              "value": "={{ $('Parse Quality Result').item.json.attempt_number }}",
+              "type": "number"
+            },
+            {
+              "id": "final-prompt",
+              "name": "final_prompt",
+              "value": "={{ $('Parse Quality Result').item.json.current_prompt }}",
+              "type": "string"
+            },
+            {
+              "id": "folder-url",
+              "name": "folder_url",
+              "value": "={{ $('Store Folder Info').item.json.carousel_folder_url }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-slide-result",
+      "name": "Format Slide Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3472,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Refine prompt based on quality issues\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  const issues = data.quality_issues || [];\n  const suggestions = data.improvement_suggestions || [];\n  const scores = data.scores || {};\n  const currentPrompt = data.current_prompt || data.original_prompt;\n  const attemptNumber = (data.attempt_number || 1) + 1;\n  \n  let refinedPrompt = currentPrompt;\n  const refinements = [];\n  \n  if ((scores.background || 0) < 7) refinements.push('BACKGROUND: Super light cold gray #f4f4f4');\n  if ((scores.metaball || 0) < 7) refinements.push('CENTERPIECE: 3D frosted glass metaball');\n  if ((scores.gradient || 0) < 7) refinements.push('GRADIENT: #24DE99 mint to #FFFFFF pearl white');\n  \n  if (refinements.length > 0) {\n    refinedPrompt += '\\n\\n=== IMPROVEMENTS ===\\n' + refinements.join('\\n');\n  }\n  \n  results.push({ json: { ...data, current_prompt: refinedPrompt, attempt_number: attemptNumber }, binary: item.binary });\n}\nreturn results;"
+      },
+      "id": "refine-prompt",
+      "name": "Refine Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3072,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "wait-before-retry",
+      "name": "Wait Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3264,
+        512
+      ],
+      "webhookId": "quality-retry-wait"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "completed",
+              "name": "slide_completed",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "loop-back-to-quality",
+      "name": "Loop Back to Quality Check",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3664,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "merge-slides",
+      "name": "Merge All Slides",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        3872,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slides = $input.all();\nconst agentOutput = $('Carousel Prompt Generator').first().json.output || {};\nconst userInput = $('Set User Input').first().json;\nconst folderInfo = $('Store Folder Info').first().json;\n\nconst MAX_SCORE = 140;\nconst qualityScores = slides.map(s => s.json.quality_score || 0).filter(score => typeof score === 'number');\nconst avgQuality = qualityScores.length > 0 ? Math.round(qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length) : 0;\nconst avgQualityPercent = Math.round((avgQuality / MAX_SCORE) * 100);\nconst totalAttempts = slides.reduce((sum, s) => sum + (s.json.attempts_used || 1), 0);\n\nconst slideDetails = slides.map((slide, index) => ({\n  slide_number: slide.json.slide_number || (index + 1),\n  slide_purpose: slide.json.slide_purpose || 'Content',\n  quality_score: slide.json.quality_score || 0,\n  attempts_used: slide.json.attempts_used || 1,\n  image_url: slide.json.image_url || null,\n  file_id: slide.json.file_id || null\n}));\n\nconst folderUrl = slides.find(s => s.json.folder_url)?.json.folder_url || folderInfo.carousel_folder_url || null;\nconst qualitySummary = avgQualityPercent >= 80 ? 'Excellent' : avgQualityPercent >= 70 ? 'Very Good' : avgQualityPercent >= 50 ? 'Needs Improvement' : 'Off-Brand';\n\nreturn [{ json: {\n  title: agentOutput.carousel_title || userInput.carousel_theme || 'AI Generated Carousel',\n  description: agentOutput.carousel_description || '',\n  slide_count: slides.length,\n  slides: slideDetails,\n  average_quality_score: avgQuality,\n  average_quality_percent: avgQualityPercent,\n  total_generation_attempts: totalAttempts,\n  folder_url: folderUrl,\n  tags: agentOutput.tags || [],\n  quality_summary: qualitySummary,\n  theme: userInput.carousel_theme,\n  target_audience: userInput.target_audience,\n  generated_at: new Date().toISOString()\n}}];"
+      },
+      "id": "generate-metadata",
+      "name": "Generate Carousel Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4064,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Carousel Generated Successfully!",
+        "completionMessage": "={{ '# ' + $json.title + '\\n\\n**Quality:** ' + $json.quality_summary + ' (' + $json.average_quality_percent + '%)\\n\\n**Slides:** ' + $json.slide_count + '\\n**Total Attempts:** ' + $json.total_generation_attempts + '\\n\\n' + ($json.folder_url ? '[Open Google Drive Folder](' + $json.folder_url + ')' : '') }}",
+        "options": {
+          "formTitle": "SYNRG Carousel Generator - Results"
+        }
+      },
+      "id": "form-completion",
+      "name": "Show Results",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        4272,
+        304
+      ],
+      "webhookId": "a5dd0d31-e95b-4dc8-a428-c317774f67d3"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "model": "gpt-image-1",
+        "prompt": "={{ $json.current_prompt }}",
+        "options": {
+          "quality": "high",
+          "size": "1024x1536"
+        }
+      },
+      "id": "gen-portrait",
+      "name": "Generate Portrait (1024x1536)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2256,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "model": "gpt-image-1",
+        "prompt": "={{ $json.current_prompt }}",
+        "options": {
+          "quality": "high",
+          "size": "1024x1024"
+        },
+        "operation": "generate"
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2288,
+        304
+      ],
+      "id": "78671822-c77d-4e39-b3f0-3a4bfa1904e7",
+      "name": "Generate Square (1024x1024)",
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set User Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set User Input": {
+      "main": [
+        [
+          {
+            "node": "Create Carousel Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Carousel Folder": {
+      "main": [
+        [
+          {
+            "node": "Store Folder Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Folder Info": {
+      "main": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4o": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slide Prompts": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carousel Prompt Generator": {
+      "main": [
+        [
+          {
+            "node": "Split Slide Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Slide Prompts": {
+      "main": [
+        [
+          {
+            "node": "Quality Retry Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Retry Loop": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Set Slide Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Slide Context": {
+      "main": [
+        [
+          {
+            "node": "Route by Dimension",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Dimension": {
+      "main": [
+        [
+          {
+            "node": "Generate Portrait (1024x1536)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Square (1024x1024)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Landscape (1536x1024)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Landscape (1536x1024)": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Image Quality": {
+      "main": [
+        [
+          {
+            "node": "Parse Quality Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Quality Result": {
+      "main": [
+        [
+          {
+            "node": "Quality Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Check": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Refine Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Set Public Permissions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Public Permissions": {
+      "main": [
+        [
+          {
+            "node": "Format Slide Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slide Result": {
+      "main": [
+        [
+          {
+            "node": "Loop Back to Quality Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back to Quality Check": {
+      "main": [
+        [
+          {
+            "node": "Quality Retry Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refine Prompt": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Retry": {
+      "main": [
+        [
+          {
+            "node": "Quality Retry Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Slides": {
+      "main": [
+        [
+          {
+            "node": "Generate Carousel Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Carousel Metadata": {
+      "main": [
+        [
+          {
+            "node": "Show Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Portrait (1024x1536)": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Square (1024x1024)": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "70843b5e-36bf-4696-8c03-cdb31cbf5e8f",
+  "versionCounter": 48,
+  "triggerCount": 0,
+  "shared": [
+    {
+      "updatedAt": "2025-11-23T00:10:25.341Z",
+      "createdAt": "2025-11-23T00:10:25.341Z",
+      "role": "workflow:owner",
+      "workflowId": "8bhcEHkbbvnhdHBh",
+      "projectId": "vaRklvnINMqrVVkS",
+      "project": {
+        "updatedAt": "2025-05-03T20:14:26.988Z",
+        "createdAt": "2025-05-03T20:14:24.356Z",
+        "id": "vaRklvnINMqrVVkS",
+        "name": "Jay Connor <jayconnor@exesyndrome.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "projectRelations": [
+          {
+            "updatedAt": "2025-05-03T20:14:24.357Z",
+            "createdAt": "2025-05-03T20:14:24.357Z",
+            "userId": "cd6f3efb-1d17-4b28-b2dc-bb38f830be30",
+            "projectId": "vaRklvnINMqrVVkS",
+            "user": {
+              "updatedAt": "2025-12-10T22:45:08.884Z",
+              "createdAt": "2025-05-03T20:14:22.867Z",
+              "id": "cd6f3efb-1d17-4b28-b2dc-bb38f830be30",
+              "email": "jayconnor@exesyndrome.com",
+              "firstName": "Jay",
+              "lastName": "Connor",
+              "personalizationAnswers": null,
+              "settings": {
+                "userActivated": true,
+                "easyAIWorkflowOnboarded": true,
+                "firstSuccessfulWorkflowId": "6ALGaDd2bXw27jRn",
+                "userActivatedAt": 1747420903813,
+                "npsSurvey": {
+                  "responded": true,
+                  "lastShownAt": 1765406705766
+                }
+              },
+              "disabled": false,
+              "mfaEnabled": false,
+              "lastActiveAt": "2025-12-10",
+              "isPending": false
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": []
+}

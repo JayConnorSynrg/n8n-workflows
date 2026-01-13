@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYNRG Voice Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Main status display (visible in meeting camera) -->
+    <div class="status-card">
+      <div class="status-indicator">
+        <div id="status-dot" class="status-dot disconnected"></div>
+        <div class="status-text">
+          <div id="status-label" class="status-label">Disconnected</div>
+          <div id="status-url" class="status-url">No server configured</div>
+        </div>
+      </div>
+
+      <!-- Speaking indicator (pulses when bot is talking) -->
+      <div id="speaking-indicator" class="speaking-indicator" style="display: none;">
+        <div class="pulse-ring"></div>
+        <div class="pulse-ring"></div>
+        <div class="pulse-ring"></div>
+        <span class="speaking-text">Speaking...</span>
+      </div>
+
+      <!-- Agent branding -->
+      <div class="agent-branding">
+        <div class="agent-name">SYNRG</div>
+        <div class="agent-subtitle">Voice Assistant</div>
+      </div>
+    </div>
+
+    <!-- Error message (if any) -->
+    <div id="error-message" class="error-message" style="display: none;"></div>
+
+    <!-- Instructions (shown when disconnected) -->
+    <div id="instructions" class="instructions">
+      <h3>Connection Instructions</h3>
+      <p>Add URL parameters to connect:</p>
+      <code>?wss=wss://your-relay-server.com</code>
+      <p>Optional parameters:</p>
+      <ul>
+        <li><code>calendar_webhook</code> - n8n calendar tools URL</li>
+        <li><code>email_webhook</code> - n8n email tools URL</li>
+        <li><code>crm_webhook</code> - n8n CRM tools URL</li>
+        <li><code>knowledge_webhook</code> - n8n knowledge base URL</li>
+        <li><code>webhook_secret</code> - Authentication secret</li>
+      </ul>
+    </div>
+
+    <!-- Debug panel (hidden by default, toggle with ?debug=true) -->
+    <div id="debug-panel" class="debug-panel" style="display: none;">
+      <h4>Debug Info</h4>
+      <pre id="debug-output"></pre>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+  <script>
+    // Show debug panel if requested
+    if (new URLSearchParams(window.location.search).get('debug') === 'true') {
+      document.getElementById('debug-panel').style.display = 'block';
+
+      // Override console.log to show in debug panel
+      const debugOutput = document.getElementById('debug-output');
+      const originalLog = console.log;
+      console.log = function(...args) {
+        originalLog.apply(console, args);
+        const text = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : a).join(' ');
+        debugOutput.textContent = text + '\n' + debugOutput.textContent.slice(0, 5000);
+      };
+    }
+
+    // Hide instructions when connected
+    const observer = new MutationObserver(() => {
+      const statusDot = document.getElementById('status-dot');
+      const instructions = document.getElementById('instructions');
+      if (statusDot.classList.contains('connected')) {
+        instructions.style.display = 'none';
+      } else if (statusDot.classList.contains('error')) {
+        instructions.style.display = 'block';
+      }
+    });
+    observer.observe(document.getElementById('status-dot'), { attributes: true, attributeFilter: ['class'] });
+  </script>
+</body>
+</html>

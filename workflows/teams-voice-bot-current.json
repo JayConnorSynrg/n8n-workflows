@@ -1,0 +1,298 @@
+{
+  "id": "gjYSN6xNjLw8qsA1",
+  "name": "Teams Voice Bot - Recall.ai + OpenAI TTS",
+  "active": true,
+  "nodeCount": 30,
+  "versionCounter": 190,
+  "triggerCount": 1,
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Receive Transcript",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 304],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "transcript"
+      },
+      "webhookId": "365249dd-c530-4761-8187-c2a81b20cec8"
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [176, 304]
+    },
+    {
+      "id": "filter-code",
+      "name": "Filter Final Transcripts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [368, 304],
+      "purpose": "Filter for final transcripts, exclude bot speech"
+    },
+    {
+      "id": "extract-transcript",
+      "name": "Extract Transcript Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [528, 304],
+      "extracts": ["transcript", "speaker", "bot_id", "timestamp"]
+    },
+    {
+      "id": "load-state",
+      "name": "Load Bot State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [704, 304],
+      "dataTableId": "kYJQ3EWJf9ImHQfK"
+    },
+    {
+      "id": "pre-filter",
+      "name": "Quick Bot Address Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1008, 96],
+      "purpose": "Complete thought detection without LLM - fast response gating"
+    },
+    {
+      "id": "needs-intent-check",
+      "name": "Needs Intent Check?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1344, 96],
+      "purpose": "Route based on should_respond"
+    },
+    {
+      "id": "state-router",
+      "name": "Route by State",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1584, 80],
+      "outputs": ["normal", "spelling", "confirming", "error_state"]
+    },
+    {
+      "id": "first-message-check",
+      "name": "Is First Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1600, -120]
+    },
+    {
+      "id": "greeting-audio",
+      "name": "Set Greeting Audio",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1800, -200],
+      "response": "Hi, welcome to your AI ecosystem. How may I assist you?"
+    },
+    {
+      "id": "handle-normal",
+      "name": "Handle Normal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 32],
+      "purpose": "Detect email commands, route to AI or direct response"
+    },
+    {
+      "id": "handle-spelling",
+      "name": "Handle Spelling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 336],
+      "purpose": "NATO phonetic alphabet email spelling"
+    },
+    {
+      "id": "handle-confirmation",
+      "name": "Handle Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1856, 192],
+      "purpose": "Yes/No confirmation for spelled email"
+    },
+    {
+      "id": "merge-handlers",
+      "name": "Merge Handlers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2080, 192]
+    },
+    {
+      "id": "update-state",
+      "name": "Update State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [2272, 192],
+      "operation": "update"
+    },
+    {
+      "id": "skip-ai-decision",
+      "name": "Skip AI",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [2224, 512],
+      "purpose": "Route to AI agent or direct response"
+    },
+    {
+      "id": "ai-agent",
+      "name": "AI Voice Assistant",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [752, 496],
+      "purpose": "Main conversational AI with Gmail tool"
+    },
+    {
+      "id": "memory-buffer",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [848, 768],
+      "sessionKey": "bot_id",
+      "contextWindowLength": 10
+    },
+    {
+      "id": "da09257b-564a-465b-bdba-39a7aca88635",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [688, 768],
+      "credentials": "OpenRouter account"
+    },
+    {
+      "id": "gmail-tool",
+      "name": "Gmail Tool",
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.2,
+      "position": [992, 800],
+      "credentials": "Jayconnor@synrgscaling.com"
+    },
+    {
+      "id": "set-direct-response",
+      "name": "Direct Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2432, 720]
+    },
+    {
+      "id": "tts-request",
+      "name": "Generate TTS Audio (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1312, 512],
+      "api": "https://api.openai.com/v1/audio/speech",
+      "model": "tts-1",
+      "voice": "alloy",
+      "format": "mp3"
+    },
+    {
+      "id": "convert-to-base64",
+      "name": "Convert Audio to Base64",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [1568, 528]
+    },
+    {
+      "id": "send-to-recall",
+      "name": "Send Audio to Recall.ai",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1856, 528],
+      "api": "https://us-west-2.recall.ai/api/v1/bot/{bot_id}/output_audio/",
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "id": "skip-to-end",
+      "name": "End Silent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1616, 320]
+    },
+    {
+      "id": "intent-classifier",
+      "name": "Intent Classifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [880, 304],
+      "disabled": true,
+      "api": "https://api.openai.com/v1/chat/completions",
+      "model": "gpt-4o-mini"
+    },
+    {
+      "id": "parse-intent",
+      "name": "Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1056, 304],
+      "disabled": true
+    },
+    {
+      "id": "route-decision",
+      "name": "Should Respond?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1360, 304],
+      "disabled": true
+    }
+  ],
+  "apiConnections": {
+    "openai": {
+      "tts": {
+        "url": "https://api.openai.com/v1/audio/speech",
+        "model": "tts-1",
+        "voice": "alloy",
+        "format": "mp3",
+        "credentialId": "6BIzzQu5jAD5jKlH"
+      },
+      "chatCompletions": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "model": "gpt-4o-mini",
+        "purpose": "Intent classification (currently disabled)"
+      }
+    },
+    "recallAi": {
+      "outputAudio": {
+        "url": "https://us-west-2.recall.ai/api/v1/bot/{bot_id}/output_audio/",
+        "method": "POST",
+        "body": { "kind": "mp3", "b64_data": "base64_audio" },
+        "credentialId": "XksCwcWinBg0uQBa"
+      }
+    },
+    "openRouter": {
+      "chat": {
+        "credentialId": "OPPAOWUbmkR2frSd",
+        "purpose": "Main AI agent chat model"
+      }
+    },
+    "gmail": {
+      "send": {
+        "credentialId": "Wagsju9B8ofYq2Sl",
+        "account": "Jayconnor@synrgscaling.com"
+      }
+    }
+  },
+  "dataTable": {
+    "id": "kYJQ3EWJf9ImHQfK",
+    "name": "bot_conversation_state",
+    "fields": ["bot_id", "state", "email_chars", "pending_email", "message_count", "session_id", "last_updated"]
+  },
+  "states": {
+    "IDLE": "Waiting for user input",
+    "LISTENING": "Active conversation",
+    "SPELLING_EMAIL": "Collecting email characters",
+    "CONFIRMING_EMAIL": "Awaiting yes/no confirmation"
+  },
+  "flow": {
+    "main": "Receive Transcript → Filter → Extract → Load State → Quick Check → Route by State → Handle → Update State → AI/Direct → TTS → Send Audio → Respond OK",
+    "parallel": false,
+    "currentIssue": "Sequential flow - no parallel TTS while tool executes"
+  },
+  "credentials": {
+    "openAiApi": "6BIzzQu5jAD5jKlH",
+    "httpHeaderAuth": "XksCwcWinBg0uQBa",
+    "openRouterApi": "OPPAOWUbmkR2frSd",
+    "gmailOAuth2": "Wagsju9B8ofYq2Sl"
+  }
+}

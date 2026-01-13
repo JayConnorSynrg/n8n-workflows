@@ -1,0 +1,671 @@
+{
+  "name": "AI Carousel Generator - 5 Slides",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [250, 300],
+      "webhookId": "carousel-webhook",
+      "parameters": {
+        "path": "carousel-generate",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "set-user-input",
+      "name": "Set User Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "theme",
+              "name": "carousel_theme",
+              "value": "={{ $json.body.theme || $json.theme || 'AI automation benefits for small businesses' }}",
+              "type": "string"
+            },
+            {
+              "id": "style",
+              "name": "carousel_style",
+              "value": "={{ $json.body.style || $json.style || 'vivid' }}",
+              "type": "string"
+            },
+            {
+              "id": "audience",
+              "name": "target_audience",
+              "value": "={{ $json.body.audience || $json.audience || 'business owners' }}",
+              "type": "string"
+            },
+            {
+              "id": "slides",
+              "name": "slide_count",
+              "value": 5,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "openai-model",
+      "name": "OpenAI GPT-4 Turbo",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [650, 200],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4-turbo",
+          "mode": "list"
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "memory-buffer",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [650, 350],
+      "parameters": {
+        "contextWindowLength": 5
+      }
+    },
+    {
+      "id": "output-parser",
+      "name": "Parse Slide Prompts",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [650, 500],
+      "parameters": {
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"carousel_title\": {\n      \"type\": \"string\",\n      \"description\": \"Catchy title for the carousel (5-8 words)\"\n    },\n    \"carousel_description\": {\n      \"type\": \"string\",\n      \"description\": \"Brief description of carousel theme (15-20 words)\"\n    },\n    \"slide_prompts\": {\n      \"type\": \"array\",\n      \"description\": \"Array of 5 detailed DALL-E 3 prompts\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"slide_number\": {\n            \"type\": \"number\",\n            \"description\": \"Slide number (1-5)\"\n          },\n          \"prompt\": {\n            \"type\": \"string\",\n            \"description\": \"Detailed visual description for DALL-E 3\"\n          },\n          \"style\": {\n            \"type\": \"string\",\n            \"description\": \"Image style (vivid or natural)\",\n            \"enum\": [\"vivid\", \"natural\"]\n          },\n          \"description\": {\n            \"type\": \"string\",\n            \"description\": \"Brief slide description (10-15 words)\"\n          }\n        },\n        \"required\": [\"slide_number\", \"prompt\", \"style\", \"description\"]\n      },\n      \"minItems\": 5,\n      \"maxItems\": 5\n    },\n    \"tags\": {\n      \"type\": \"array\",\n      \"description\": \"3-5 relevant tags\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"carousel_title\", \"carousel_description\", \"slide_prompts\", \"tags\"]\n}"
+      }
+    },
+    {
+      "id": "ai-agent",
+      "name": "Carousel Prompt Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ \"Theme: \" + $json.carousel_theme + \"\\nStyle: \" + $json.carousel_style + \"\\nTarget Audience: \" + $json.target_audience + \"\\n\\nGenerate 5 carousel slides about this theme.\" }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an expert carousel designer and visual storyteller. Your task is to generate 5 compelling slide prompts for DALL-E 3 that tell a cohesive story.\\n\\nGuidelines:\\n1. Each prompt should be 150-250 characters (DALL-E 3 works best with detailed prompts)\\n2. Prompts should build on each other to create a narrative flow\\n3. Use vivid, specific visual descriptions\\n4. Include composition details (e.g., 'close-up', 'wide angle', 'centered')\\n5. Specify style consistently (modern, minimalist, vibrant, etc.)\\n6. Ensure subject matter is clear and focused\\n7. Avoid text in images (DALL-E 3 struggles with text)\\n8. Consider target audience when choosing visual metaphors\\n\\nSlide Structure:\\n- Slide 1: Hook (attention-grabbing visual)\\n- Slide 2: Context (set the scene)\\n- Slide 3: Core concept (main idea)\\n- Slide 4: Supporting detail (expand on concept)\\n- Slide 5: Call-to-action visual (memorable conclusion)\\n\\nGenerate carousel_title, carousel_description, 5 detailed slide_prompts, and relevant tags."
+        }
+      }
+    },
+    {
+      "id": "split-slides",
+      "name": "Split Slide Prompts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "parameters": {
+        "fieldToSplitOut": "output.slide_prompts",
+        "include": "noOtherFields",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-slide-vars",
+      "name": "Set Slide Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1250, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "prompt",
+              "name": "prompt",
+              "value": "={{ $json.prompt }}",
+              "type": "string"
+            },
+            {
+              "id": "style",
+              "name": "style",
+              "value": "={{ $json.style }}",
+              "type": "string"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "retry",
+              "name": "retry_count",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "max-retry",
+              "name": "max_retries",
+              "value": 2,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "generate-image",
+      "name": "Generate Image - DALL-E 3",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2,
+      "position": [1450, 300],
+      "parameters": {
+        "resource": "image",
+        "model": "dall-e-3",
+        "prompt": "={{ $json.prompt }}",
+        "options": {
+          "size": "1024x1792",
+          "quality": "hd",
+          "style": "={{ $json.style }}"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "analyze-quality",
+      "name": "Analyze Image Quality",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2,
+      "position": [1650, 300],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list"
+        },
+        "text": "Analyze this carousel slide image.\\n\\nExpected subject: {{ $json.description }}\\n\\nRate the following (0-10 scale):\\n- Overall quality\\n- Subject relevance (does it match expected subject?)\\n- Visual clarity (sharp, well-composed)\\n- Professional appearance\\n\\nProvide a JSON response with:\\n{\\n  \\\"quality_score\\\": <number 0-10>,\\n  \\\"subject_match\\\": <number 0-10>,\\n  \\\"clarity_score\\\": <number 0-10>,\\n  \\\"professional_score\\\": <number 0-10>,\\n  \\\"issues\\\": [<array of issues>],\\n  \\\"recommendations\\\": \\\"<string>\\\"\\n}",
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "parse-quality",
+      "name": "Parse Quality Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Parse quality analysis from GPT-4 Vision\\nconst analysisText = $input.item.json.text;\\n\\nlet analysis;\\ntry {\\n  // Try to extract JSON from the response\\n  const jsonMatch = analysisText.match(/\\\\{[\\\\s\\\\S]*\\\\}/);\\n  if (jsonMatch) {\\n    analysis = JSON.parse(jsonMatch[0]);\\n  } else {\\n    // Fallback: parse manually\\n    analysis = {\\n      quality_score: 8,\\n      subject_match: 8,\\n      clarity_score: 8,\\n      professional_score: 8,\\n      issues: [],\\n      recommendations: \\\"\\\"\\n    };\\n  }\\n} catch (e) {\\n  analysis = {\\n    quality_score: 8,\\n    subject_match: 8,\\n    clarity_score: 8,\\n    professional_score: 8,\\n    issues: [],\\n    recommendations: \\\"\\\"\\n  };\\n}\\n\\nconst avgScore = (analysis.quality_score + analysis.subject_match + analysis.clarity_score + analysis.professional_score) / 4;\\n\\nreturn {\\n  json: {\\n    quality_score: avgScore,\\n    detailed_scores: analysis,\\n    issues: Array.isArray(analysis.issues) ? analysis.issues.join(', ') : '',\\n    recommendations: analysis.recommendations || '',\\n    slide_number: $node['Set Slide Variables'].json.slide_number,\\n    retry_count: $node['Set Slide Variables'].json.retry_count,\\n    max_retries: $node['Set Slide Variables'].json.max_retries,\\n    prompt: $node['Set Slide Variables'].json.prompt,\\n    style: $node['Set Slide Variables'].json.style,\\n    description: $node['Set Slide Variables'].json.description\\n  },\\n  binary: $input.item.binary\\n};"
+      }
+    },
+    {
+      "id": "quality-check",
+      "name": "Quality Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2050, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "quality-good",
+              "leftValue": "={{ $json.quality_score }}",
+              "rightValue": 7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "max-retries",
+              "leftValue": "={{ $json.retry_count }}",
+              "rightValue": "={{ $json.max_retries }}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "retry-prompt",
+      "name": "Modify Prompt for Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 450],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Modify prompt based on quality issues\\nconst issues = $json.issues.split(', ').filter(i => i.length > 0);\\nconst recommendations = $json.recommendations;\\nlet modifiedPrompt = $json.prompt;\\n\\n// Add specific improvements based on issues\\nif (issues.some(i => i.toLowerCase().includes('clarity') || i.toLowerCase().includes('blurry'))) {\\n  modifiedPrompt += ', highly detailed, sharp focus, crystal clear, 8k resolution';\\n}\\n\\nif (issues.some(i => i.toLowerCase().includes('composition'))) {\\n  modifiedPrompt += ', professional composition, rule of thirds, balanced framing';\\n}\\n\\nif (issues.some(i => i.toLowerCase().includes('subject') || i.toLowerCase().includes('relevance'))) {\\n  modifiedPrompt = 'IMPORTANT: Focus on ' + $json.description + '. ' + modifiedPrompt;\\n}\\n\\nif (issues.some(i => i.toLowerCase().includes('lighting'))) {\\n  modifiedPrompt += ', professional studio lighting, well-lit, proper exposure';\\n}\\n\\n// Add general quality boost\\nif ($json.retry_count === 0) {\\n  modifiedPrompt += ', award-winning photography, professional quality';\\n}\\n\\nreturn {\\n  json: {\\n    slide_number: $json.slide_number,\\n    prompt: modifiedPrompt,\\n    style: $json.style,\\n    description: $json.description,\\n    retry_count: $json.retry_count + 1,\\n    max_retries: $json.max_retries\\n  }\\n};"
+      }
+    },
+    {
+      "id": "upload-gdrive",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2250, 300],
+      "parameters": {
+        "operation": "upload",
+        "name": {
+          "__rl": true,
+          "value": "={{ 'carousel_' + $now.format('YYYY-MM-DD_HHmmss') + '_slide_' + $json.slide_number + '.png' }}",
+          "mode": "expression"
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1v0lANQ70OY7C1d8QM5va4PaZsE83w4Ew",
+          "mode": "list"
+        },
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "set-public",
+      "name": "Set Public Permissions",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2450, 300],
+      "parameters": {
+        "operation": "share",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "expression"
+        },
+        "permissions": {
+          "permissionsUi": {
+            "permissionsValues": [
+              {
+                "role": "reader",
+                "type": "anyone"
+              }
+            ]
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "format-slide-result",
+      "name": "Format Slide Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2650, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $node['Parse Quality Score'].json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "url",
+              "name": "image_url",
+              "value": "={{ 'https://drive.google.com/uc?export=view&id=' + $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "file-id",
+              "name": "file_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "filename",
+              "name": "file_name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "quality",
+              "name": "quality_score",
+              "value": "={{ $node['Parse Quality Score'].json.quality_score }}",
+              "type": "number"
+            },
+            {
+              "id": "retries",
+              "name": "retry_count",
+              "value": "={{ $node['Parse Quality Score'].json.retry_count }}",
+              "type": "number"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $node['Set Slide Variables'].json.description }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-slides",
+      "name": "Merge All Slides",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [2850, 300],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      }
+    },
+    {
+      "id": "generate-metadata",
+      "name": "Generate Carousel Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3050, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Generate comprehensive carousel metadata\\nconst slides = $input.all();\\nconst carousel_id = 'car_' + Date.now();\\n\\nconst agentOutput = $node['Carousel Prompt Generator'].json.output;\\n\\nreturn {\\n  json: {\\n    carousel_id: carousel_id,\\n    title: agentOutput.carousel_title || 'Untitled Carousel',\\n    description: agentOutput.carousel_description || '',\\n    tags: agentOutput.tags || [],\\n    slide_count: slides.length,\\n    slides: slides.map((slide) => ({\\n      slide_number: slide.json.slide_number,\\n      image_url: slide.json.image_url,\\n      file_id: slide.json.file_id,\\n      file_name: slide.json.file_name,\\n      description: slide.json.description,\\n      quality_score: slide.json.quality_score,\\n      retry_count: slide.json.retry_count || 0\\n    })),\\n    created_at: new Date().toISOString(),\\n    average_quality_score: slides.reduce((sum, s) => sum + (s.json.quality_score || 0), 0) / slides.length,\\n    total_retries: slides.reduce((sum, s) => sum + (s.json.retry_count || 0), 0),\\n    status: 'completed'\\n  }\\n};"
+      }
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3250, 300],
+      "parameters": {
+        "respondWith": "allEntries",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set User Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set User Input": {
+      "main": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4 Turbo": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slide Prompts": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carousel Prompt Generator": {
+      "main": [
+        [
+          {
+            "node": "Split Slide Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Slide Prompts": {
+      "main": [
+        [
+          {
+            "node": "Set Slide Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Slide Variables": {
+      "main": [
+        [
+          {
+            "node": "Generate Image - DALL-E 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image - DALL-E 3": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Image Quality": {
+      "main": [
+        [
+          {
+            "node": "Parse Quality Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Quality Score": {
+      "main": [
+        [
+          {
+            "node": "Quality Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Check": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Modify Prompt for Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modify Prompt for Retry": {
+      "main": [
+        [
+          {
+            "node": "Set Slide Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Set Public Permissions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Public Permissions": {
+      "main": [
+        [
+          {
+            "node": "Format Slide Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slide Result": {
+      "main": [
+        [
+          {
+            "node": "Merge All Slides",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Slides": {
+      "main": [
+        [
+          {
+            "node": "Generate Carousel Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Carousel Metadata": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

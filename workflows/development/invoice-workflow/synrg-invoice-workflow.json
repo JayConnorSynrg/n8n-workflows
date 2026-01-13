@@ -1,0 +1,710 @@
+{
+  "name": "SYNRG Invoice Generator",
+  "nodes": [
+    {
+      "id": "form-trigger",
+      "name": "Invoice Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [0, 0],
+      "parameters": {
+        "path": "invoice-form",
+        "formTitle": "SYNRG Invoice Generator",
+        "formDescription": "Generate and send professional invoices",
+        "responseMode": "lastNode",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Client Name",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Enter client name"
+            },
+            {
+              "fieldLabel": "Client Email",
+              "fieldType": "email",
+              "requiredField": false,
+              "placeholder": "client@example.com"
+            },
+            {
+              "fieldLabel": "Client Company",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "Company name"
+            },
+            {
+              "fieldLabel": "Service Type",
+              "fieldType": "dropdown",
+              "requiredField": false,
+              "fieldOptions": {
+                "values": [
+                  { "option": "Tech Services" },
+                  { "option": "Automation Build" },
+                  { "option": "Consulting" },
+                  { "option": "Strategy" },
+                  { "option": "Retainer" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Payment Terms",
+              "fieldType": "dropdown",
+              "requiredField": false,
+              "fieldOptions": {
+                "values": [
+                  { "option": "Due on Receipt" },
+                  { "option": "Net 7" },
+                  { "option": "Net 15" },
+                  { "option": "Net 30" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Project Summary",
+              "fieldType": "textarea",
+              "requiredField": false,
+              "placeholder": "Technical system implementation, workflow construction, and supporting automation logic."
+            },
+            {
+              "fieldLabel": "Line Item - Service",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "Tech Services"
+            },
+            {
+              "fieldLabel": "Line Item - Description",
+              "fieldType": "textarea",
+              "requiredField": false,
+              "placeholder": "System implementation & workflow construction"
+            },
+            {
+              "fieldLabel": "Quantity/Hours",
+              "fieldType": "number",
+              "requiredField": false,
+              "placeholder": "1"
+            },
+            {
+              "fieldLabel": "Rate ($)",
+              "fieldType": "number",
+              "requiredField": false,
+              "placeholder": "5000"
+            },
+            {
+              "fieldLabel": "Subtotal ($)",
+              "fieldType": "number",
+              "requiredField": false,
+              "placeholder": "5000"
+            },
+            {
+              "fieldLabel": "Discounts ($)",
+              "fieldType": "number",
+              "requiredField": false,
+              "placeholder": "0"
+            },
+            {
+              "fieldLabel": "Tax ($)",
+              "fieldType": "number",
+              "requiredField": false,
+              "placeholder": "0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "process-form-data",
+      "name": "Process Form Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Process Form Data - Extract fields, calculate dates and totals\nconst input = items[0].json;\n\n// Get today's date\nconst today = new Date();\nconst invoiceDate = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });\nconst invoiceDateISO = today.toISOString().split('T')[0];\n\n// Calculate due date based on payment terms\nconst paymentTerms = input['Payment Terms'] || 'Net 7';\nlet daysToAdd = 7; // Default Net 7\nif (paymentTerms === 'Due on Receipt') daysToAdd = 0;\nelse if (paymentTerms === 'Net 15') daysToAdd = 15;\nelse if (paymentTerms === 'Net 30') daysToAdd = 30;\n\nconst dueDate = new Date(today);\ndueDate.setDate(dueDate.getDate() + daysToAdd);\nconst dueDateFormatted = dueDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });\nconst dueDateISO = dueDate.toISOString().split('T')[0];\n\n// Apply defaults for optional fields\nconst client_name = input['Client Name'] || '';\nconst client_email = input['Client Email'] || '';\nconst client_company = input['Client Company'] || '';\nconst service_type = input['Service Type'] || 'Tech Services';\nconst project_summary = input['Project Summary'] || 'Technical system implementation, workflow construction, and supporting automation logic.';\nconst line_service = input['Line Item - Service'] || 'Tech Services';\nconst line_description = input['Line Item - Description'] || 'System implementation & workflow construction';\nconst line_qty = parseFloat(input['Quantity/Hours']) || 1;\nconst line_rate = parseFloat(input['Rate ($)']) || 5000;\nconst subtotal = parseFloat(input['Subtotal ($)']) || 5000;\nconst discounts = parseFloat(input['Discounts ($)']) || 0;\nconst tax = parseFloat(input['Tax ($)']) || 0;\n\n// Calculate amounts\nconst line_amount = line_qty * line_rate;\nconst total_due = subtotal - discounts + tax;\n\n// Format currency values\nconst formatCurrency = (value) => '$' + value.toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');\n\nreturn [{\n  json: {\n    client_name,\n    client_email,\n    client_company,\n    invoice_date: invoiceDate,\n    invoice_date_iso: invoiceDateISO,\n    due_date: dueDateFormatted,\n    due_date_iso: dueDateISO,\n    payment_terms: paymentTerms,\n    service_type,\n    project_summary,\n    line_service,\n    line_description,\n    line_qty,\n    line_rate,\n    line_amount,\n    subtotal,\n    discounts,\n    tax,\n    total_due,\n    subtotal_formatted: formatCurrency(subtotal),\n    discounts_formatted: formatCurrency(discounts),\n    tax_formatted: formatCurrency(tax),\n    total_due_formatted: formatCurrency(total_due),\n    line_rate_formatted: formatCurrency(line_rate),\n    line_amount_formatted: formatCurrency(line_amount)\n  }\n}];"
+      }
+    },
+    {
+      "id": "get-last-invoice",
+      "name": "Get Last Invoice",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [440, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app9XfArSh5A2BJ3x"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "tblcuPbud8EYloNHh"
+        },
+        "returnAll": false,
+        "limit": 1,
+        "sort": {
+          "property": [
+            {
+              "field": "Invoice_ID",
+              "direction": "desc"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "SYNRG Airtable",
+          "name": "SYNRG Airtable"
+        }
+      }
+    },
+    {
+      "id": "generate-invoice-id",
+      "name": "Generate Invoice ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Generate Invoice ID by incrementing the last invoice number\n// Starting at 4200 if no previous invoices exist\n\n// Get the last invoice ID from the Airtable search result\nconst airtableResult = $('Get Last Invoice').first();\nlet lastNum = 4199; // Default so first invoice will be 4200\n\nif (airtableResult && airtableResult.json && airtableResult.json.Invoice_ID) {\n  const lastInvoiceId = airtableResult.json.Invoice_ID;\n  lastNum = parseInt(lastInvoiceId, 10) || 4199;\n}\n\nconst nextInvoiceId = (lastNum + 1).toString();\n\n// Get the processed form data from the previous Code node\nconst formData = $('Process Form Data').first().json;\n\n// Merge the new invoice_id with all form data\nreturn [{\n  json: {\n    ...formData,\n    invoice_id: nextInvoiceId\n  }\n}];"
+      }
+    },
+    {
+      "id": "create-invoice-record",
+      "name": "Create Invoice Record",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [880, 0],
+      "onError": "stopWorkflow",
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app9XfArSh5A2BJ3x"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "tblcuPbud8EYloNHh"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Invoice_ID": "={{ $json.invoice_id }}",
+            "Client_Name": "={{ $json.client_name }}",
+            "Client_Email": "={{ $json.client_email }}",
+            "Client_Company": "={{ $json.client_company }}",
+            "Invoice_Date": "={{ $json.invoice_date_iso }}",
+            "Due_Date": "={{ $json.due_date_iso }}",
+            "Payment_Terms": "={{ $json.payment_terms }}",
+            "Service_Type": "={{ $json.service_type }}",
+            "Project_Summary": "={{ $json.project_summary }}",
+            "Subtotal": "={{ $json.subtotal }}",
+            "Discounts": "={{ $json.discounts }}",
+            "Tax": "={{ $json.tax }}",
+            "Total_Due": "={{ $json.total_due }}",
+            "Payment_Status": "Pending",
+            "STAGE": "Intake"
+          }
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "SYNRG Airtable",
+          "name": "SYNRG Airtable"
+        }
+      }
+    },
+    {
+      "id": "create-line-item",
+      "name": "Create Line Item",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1100, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app9XfArSh5A2BJ3x"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "tblzcObEwjIvZe9Kp"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Service": "={{ $('Generate Invoice ID').item.json.line_service }}",
+            "Description": "={{ $('Generate Invoice ID').item.json.line_description }}",
+            "Qty_Hrs": "={{ $('Generate Invoice ID').item.json.line_qty }}",
+            "Rate": "={{ $('Generate Invoice ID').item.json.line_rate }}",
+            "Amount": "={{ $('Generate Invoice ID').item.json.line_amount }}",
+            "Invoice": "={{ [$('Create Invoice Record').item.json.id] }}"
+          }
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "SYNRG Airtable",
+          "name": "SYNRG Airtable"
+        }
+      }
+    },
+    {
+      "id": "copy-invoice-template",
+      "name": "Copy Invoice Template",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1320, 0],
+      "onError": "stopWorkflow",
+      "parameters": {
+        "resource": "file",
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13mnhbrhpb-J910qOjsjwvgWbbppG-BeW"
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root"
+        },
+        "options": {
+          "name": "=Invoice {{ $('Generate Invoice ID').item.json.invoice_id }} - {{ $('Generate Invoice ID').item.json.client_name }}"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "SYNRG Google",
+          "name": "SYNRG Google"
+        }
+      }
+    },
+    {
+      "id": "update-invoice-doc",
+      "name": "Update Invoice Document",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [1540, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "resource": "document",
+        "operation": "update",
+        "documentURL": "={{ $('Copy Invoice Template').item.json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{INVOICE_ID}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.invoice_id }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{CLIENT_NAME}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.client_name }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{CLIENT_COMPANY}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.client_company }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{CLIENT_EMAIL}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.client_email }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{INVOICE_DATE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.invoice_date }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{DUE_DATE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.due_date }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{PAYMENT_TERMS}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.payment_terms }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{SERVICE_TYPE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.service_type }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{PROJECT_SUMMARY}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.project_summary }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{LINE_SERVICE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.line_service }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{LINE_DESCRIPTION}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.line_description }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{LINE_QTY}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.line_qty }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{LINE_RATE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.line_rate_formatted }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{LINE_AMOUNT}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.line_amount_formatted }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{SUBTOTAL}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.subtotal_formatted }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{DISCOUNTS}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.discounts_formatted }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{TAX}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.tax_formatted }}"
+            },
+            {
+              "action": "replaceAll",
+              "textToReplace": "{{TOTAL_DUE}}",
+              "newText": "={{ $('Generate Invoice ID').item.json.total_due_formatted }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "SYNRG Google",
+          "name": "SYNRG Google"
+        }
+      }
+    },
+    {
+      "id": "export-as-pdf",
+      "name": "Export as PDF",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1760, 0],
+      "onError": "stopWorkflow",
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Copy Invoice Template').item.json.id }}"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/pdf"
+            }
+          },
+          "fileName": "=Invoice_{{ $('Generate Invoice ID').item.json.invoice_id }}_{{ $('Generate Invoice ID').item.json.client_name }}.pdf"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "SYNRG Google",
+          "name": "SYNRG Google"
+        }
+      }
+    },
+    {
+      "id": "check-email-provided",
+      "name": "Check Email Provided",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1980, 0],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "email-check",
+              "operator": {
+                "name": "filter.operator.notEmpty",
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "leftValue": "={{ $('Generate Invoice ID').item.json.client_email }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-invoice-email",
+      "name": "Send Invoice Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2200, -100],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Generate Invoice ID').item.json.client_email }}",
+        "subject": "=Invoice {{ $('Generate Invoice ID').item.json.invoice_id }} from SYNRG",
+        "emailType": "html",
+        "message": "=<html>\n<body style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n  <h2 style=\"color: #333;\">Invoice {{ $('Generate Invoice ID').item.json.invoice_id }}</h2>\n  <p>Dear {{ $('Generate Invoice ID').item.json.client_name }},</p>\n  <p>Please find attached your invoice for {{ $('Generate Invoice ID').item.json.service_type }} services.</p>\n  <table style=\"width: 100%; border-collapse: collapse; margin: 20px 0;\">\n    <tr style=\"background-color: #f5f5f5;\">\n      <td style=\"padding: 10px; border: 1px solid #ddd;\"><strong>Invoice Date:</strong></td>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\">{{ $('Generate Invoice ID').item.json.invoice_date }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\"><strong>Due Date:</strong></td>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\">{{ $('Generate Invoice ID').item.json.due_date }}</td>\n    </tr>\n    <tr style=\"background-color: #f5f5f5;\">\n      <td style=\"padding: 10px; border: 1px solid #ddd;\"><strong>Payment Terms:</strong></td>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\">{{ $('Generate Invoice ID').item.json.payment_terms }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\"><strong>Total Due:</strong></td>\n      <td style=\"padding: 10px; border: 1px solid #ddd; font-weight: bold; color: #2e7d32;\">{{ $('Generate Invoice ID').item.json.total_due_formatted }}</td>\n    </tr>\n  </table>\n  <p>If you have any questions regarding this invoice, please don't hesitate to contact us.</p>\n  <p>Thank you for your business!</p>\n  <p style=\"color: #666; margin-top: 30px;\">Best regards,<br>SYNRG Team</p>\n</body>\n</html>",
+        "options": {
+          "attachmentsBinary": {
+            "attachmentsBinaryValues": [
+              {
+                "binaryData": "data"
+              }
+            ]
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "SYNRG Google",
+          "name": "SYNRG Google"
+        }
+      }
+    },
+    {
+      "id": "update-invoice-stage",
+      "name": "Update Invoice Stage",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [2420, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app9XfArSh5A2BJ3x"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "tblcuPbud8EYloNHh"
+        },
+        "id": "={{ $('Create Invoice Record').item.json.id }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "STAGE": "Distribution"
+          }
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "SYNRG Airtable",
+          "name": "SYNRG Airtable"
+        }
+      }
+    },
+    {
+      "id": "form-response",
+      "name": "Form Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [2640, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Invoice {{ $('Generate Invoice ID').item.json.invoice_id }} created successfully!\",\n  \"invoice_id\": \"{{ $('Generate Invoice ID').item.json.invoice_id }}\",\n  \"client_name\": \"{{ $('Generate Invoice ID').item.json.client_name }}\",\n  \"total_due\": \"{{ $('Generate Invoice ID').item.json.total_due_formatted }}\",\n  \"email_sent\": {{ $('Generate Invoice ID').item.json.client_email ? 'true' : 'false' }}\n}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Invoice Form": {
+      "main": [
+        [
+          {
+            "node": "Process Form Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Form Data": {
+      "main": [
+        [
+          {
+            "node": "Get Last Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last Invoice": {
+      "main": [
+        [
+          {
+            "node": "Generate Invoice ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Invoice ID": {
+      "main": [
+        [
+          {
+            "node": "Create Invoice Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Invoice Record": {
+      "main": [
+        [
+          {
+            "node": "Create Line Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Line Item": {
+      "main": [
+        [
+          {
+            "node": "Copy Invoice Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy Invoice Template": {
+      "main": [
+        [
+          {
+            "node": "Update Invoice Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Invoice Document": {
+      "main": [
+        [
+          {
+            "node": "Export as PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export as PDF": {
+      "main": [
+        [
+          {
+            "node": "Check Email Provided",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Email Provided": {
+      "main": [
+        [
+          {
+            "node": "Send Invoice Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Invoice Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Invoice Email": {
+      "main": [
+        [
+          {
+            "node": "Update Invoice Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Invoice Stage": {
+      "main": [
+        [
+          {
+            "node": "Form Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false
+}

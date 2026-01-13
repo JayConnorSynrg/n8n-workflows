@@ -1,0 +1,185 @@
+{
+  "name": "Logging Agent Sub-Workflow",
+  "id": "8LX5tt3SkO8GNuLj",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {"name": "transcript_exact"},
+            {"name": "agent_output_raw"},
+            {"name": "tool_calls", "type": "array"},
+            {"name": "timestamps", "type": "object"},
+            {"name": "session_id"},
+            {"name": "bot_id"},
+            {"name": "classifier_route"},
+            {"name": "classifier_intent"},
+            {"name": "tts_result", "type": "object"},
+            {"name": "workflow_source"},
+            {"name": "error_flags", "type": "object"},
+            {"name": "session_state", "type": "object"},
+            {"name": "is_first_message", "type": "boolean"}
+          ]
+        }
+      },
+      "id": "trigger-input",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 240]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Intent Tagger - Fast heuristic classifier for routing decisions\nconst input = $input.item.json;\nconst transcript = input.transcript_exact || '';\nconst sessionState = input.session_state || {};\nconst isFirstMessage = input.is_first_message || false;\n\nconst words = transcript.toLowerCase().split(/\\s+/).filter(w => w.length > 0);\nconst lastWord = words[words.length - 1] || '';\nconst wordCount = words.length;\n\nconst FLAGS = {\n  NEAR_END: 1, REQUEST: 2, INCOMPLETE: 4, TOOL_ACTIVE: 8,\n  GREETING: 16, BOT_ADDRESSED: 32, FIRST_MSG: 64\n};\n\n// TAG 1: near_end_of_sentence\nconst endPatterns = [\n  /\\b(please|thanks|thank you)$/i,\n  /\\b(right|okay|ok|sure|yes|no)$/i,\n  /\\b(me|you|it|this|that|them|him|her)$/i,\n  /\\b(email|message|call|meeting|reminder|task)$/i,\n  /\\b(\\w+ed|\\w+ing)$/i\n];\nconst hasEndPattern = endPatterns.some(p => p.test(words.slice(-3).join(' ')));\nconst hasQuestionWord = /^(what|how|when|where|why|can|could|would|will|is|are|do|does)/i.test(transcript);\nconst nearEnd = hasEndPattern || (hasQuestionWord && wordCount >= 5);\nconst confNearEnd = hasEndPattern ? 80 : (hasQuestionWord && wordCount >= 5 ? 50 : 20);\n\n// TAG 2: request_received\nconst hasVerb = /\\b(send|create|make|write|schedule|set|find|get|show|tell|help|check|add|remove|delete|update)\\b/i.test(transcript);\nconst hasPhrase = /\\b(can you|could you|would you|please|i need|i want|help me|i'd like)\\b/i.test(transcript);\nconst hasQuestion = /^(what|how|when|where|why|who|which|can|could|would|will|is|are|do|does)\\b/i.test(transcript);\nconst hasObject = /\\b(email|message|meeting|reminder|calendar|contact|task|note|document)\\b/i.test(transcript);\nconst requestScore = [hasVerb, hasPhrase, hasQuestion, hasObject].filter(Boolean).length;\nconst requestReceived = requestScore >= 2 || (hasPhrase && hasVerb);\nconst confRequest = Math.min(95, 30 + (requestScore * 20));\n\n// TAG 3: not_end_of_thought (incomplete)\nconst incompletePatterns = {\n  articles: /^(a|an|the)$/,\n  prepositions: /^(to|for|with|from|at|in|on|by|about|of)$/,\n  conjunctions: /^(and|but|or|so|because|if|when|while|although)$/,\n  auxiliaries: /^(is|are|was|were|will|would|could|should|can|may|might|have|has|had|do|does|did)$/\n};\nconst isIncomplete = incompletePatterns.articles.test(lastWord) ||\n  incompletePatterns.prepositions.test(lastWord) ||\n  incompletePatterns.conjunctions.test(lastWord) ||\n  (incompletePatterns.auxiliaries.test(lastWord) && wordCount < 4);\nconst incomplete = isIncomplete || wordCount <= 2;\nconst confIncomplete = isIncomplete ? 85 : (wordCount <= 2 ? 60 : 30);\n\n// TAG 4: tool_call_in_progress\nconst activeTools = sessionState.pending_actions || [];\nconst lastResponse = sessionState.last_orchestrator_cues || '';\nconst mentionsPending = /\\b(sending|processing|working on|in progress|drafting|creating)\\b/i.test(lastResponse);\nconst toolActive = activeTools.length > 0 || mentionsPending;\nconst confToolActive = activeTools.length > 0 ? 95 : (mentionsPending ? 60 : 10);\n\n// TAG 5: greeting\nconst lower = transcript.toLowerCase().trim();\nconst isHello = /^(hi|hey|hello|howdy|hiya|yo)\\b/i.test(lower);\nconst isTimeGreeting = /^(good\\s*(morning|afternoon|evening|day))\\b/i.test(lower);\nconst isFarewell = /\\b(bye|goodbye|see you|talk later|that's all|thanks?|thank you)\\s*$/i.test(lower);\nconst isBotGreeting = /\\b(hi|hey|hello)\\s*(synergy|synrg|bot)\\b/i.test(lower);\nconst greetingDetected = isHello || isTimeGreeting || isFarewell || isBotGreeting;\nconst confGreeting = greetingDetected ? 90 : 10;\n\n// TAG 6: bot_addressed (phonetic)\nconst botPatterns = [\n  /\\bsynergy\\s*bot\\b/i, /\\bsynrg\\s*bot\\b/i, /\\bsynergy\\b/i, /\\bsynrg\\b/i,\n  /\\bsin\\s*urge\\s*y?\\b/i, /\\bsin\\s*ergy\\b/i, /\\bcin\\s*ergy\\b/i, /\\bsen\\s*ergy\\b/i,\n  /\\bhey\\s+(synergy|synrg|sin\\s*ergy)\\b/i,\n  /\\b(synergy|synrg)[,\\s]+(can|could|would|will)\\s+you\\b/i\n];\nconst botAddressed = botPatterns.some(p => p.test(transcript));\nconst confBotAddressed = botAddressed ? 95 : 5;\n\n// Encode flags bitfield\nlet flags = 0;\nif (nearEnd) flags |= FLAGS.NEAR_END;\nif (requestReceived) flags |= FLAGS.REQUEST;\nif (incomplete) flags |= FLAGS.INCOMPLETE;\nif (toolActive) flags |= FLAGS.TOOL_ACTIVE;\nif (greetingDetected) flags |= FLAGS.GREETING;\nif (botAddressed) flags |= FLAGS.BOT_ADDRESSED;\nif (isFirstMessage) flags |= FLAGS.FIRST_MSG;\n\n// Routing decision\nlet route = 'W', routeReason = 55, routeConfidence = 50;\nif (isFirstMessage && greetingDetected) {\n  route = 'P'; routeReason = 1; routeConfidence = 95;\n} else if (requestReceived && nearEnd) {\n  route = 'P'; routeReason = 2; routeConfidence = 90;\n} else if (requestReceived && !incomplete) {\n  route = 'P'; routeReason = 3; routeConfidence = 75;\n} else if (botAddressed && requestReceived) {\n  route = 'P'; routeReason = 5; routeConfidence = 80;\n} else if (toolActive) {\n  route = 'P'; routeReason = 4; routeConfidence = 70;\n} else if (incomplete && !requestReceived) {\n  route = 'W'; routeReason = 51; routeConfidence = 80;\n} else if (greetingDetected && !isFirstMessage) {\n  route = 'L'; routeReason = 151; routeConfidence = 75;\n}\n\nreturn {\n  json: {\n    ...input,\n    intent_markers: {\n      flags, conf_end_sentence: confNearEnd, conf_request: confRequest,\n      conf_incomplete: confIncomplete, conf_greeting: confGreeting,\n      conf_bot_addressed: confBotAddressed, conf_tool_active: confToolActive,\n      route, route_reason: routeReason, route_confidence: routeConfidence,\n      transcript_snippet: transcript.substring(0, 100),\n      last_word: lastWord, word_count: wordCount,\n      tagged_at: new Date().toISOString()\n    }\n  }\n};"
+      },
+      "id": "intent-tagger",
+      "name": "Intent Tagger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [112, 240]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Prepare the analysis prompt for the Logging Agent\nconst input = $input.item.json;\n\n// Extract TTS messages for duplicate detection\nlet ttsMesages = [];\nif (input.tool_calls && Array.isArray(input.tool_calls)) {\n  ttsMesages = input.tool_calls\n    .filter(tc => tc.tool === 'tts_tool' || tc.tool === 'TTS Tool')\n    .map(tc => tc.input?.message || tc.input?.text || '')\n    .filter(m => m.length > 0);\n}\n\n// Include intent markers in prompt for AI context\nconst markers = input.intent_markers || {};\n\nconst analysisPrompt = `Analyze this voice bot interaction and provide contextual insights for the SYMBIOTIC ORCHESTRATOR SYSTEM.\n\nIMMUTABLE DATA:\n- User Transcript: \"${input.transcript_exact || ''}\"\n- Agent Response: \"${input.agent_output_raw || ''}\"\n- Tool Calls: ${JSON.stringify(input.tool_calls || [])}\n- TTS Messages Sent: ${JSON.stringify(ttsMesages)}\n- Classifier Route: ${input.classifier_route || 'unknown'}\n- Classifier Intent: ${input.classifier_intent || 'unknown'}\n- Workflow Source: ${input.workflow_source || 'orchestrator'}\n- TTS Success: ${input.tts_result?.success || false}\n- TTS Call Count: ${input.tts_result?.call_count || 0}\n\nINTENT MARKERS (fast heuristic classification):\n- Suggested Route: ${markers.route || 'unknown'} (confidence: ${markers.route_confidence || 0}%)\n- Request Detected: ${(markers.flags & 2) ? 'Yes' : 'No'} (confidence: ${markers.conf_request || 0}%)\n- Bot Addressed: ${(markers.flags & 32) ? 'Yes' : 'No'} (confidence: ${markers.conf_bot_addressed || 0}%)\n- Greeting: ${(markers.flags & 16) ? 'Yes' : 'No'}\n- Word Count: ${markers.word_count || 0}\n\nProvide your analysis as JSON with these exact fields:\n{\n  \"intent_semantic\": \"Brief description of what user actually wants (1 sentence)\",\n  \"conversation_state\": \"one of: greeting, information_request, task_in_progress, task_completed, error_recovery, farewell, unclear\",\n  \"user_satisfaction\": \"one of: positive, neutral, negative, uncertain\",\n  \"tool_usage_summary\": \"What tools were called and outcome (1 sentence, or 'none' if no tools)\",\n  \"messages_sent_exact\": [\"exact text of each TTS message sent in this interaction\"],\n  \"pending_action\": \"any action still in progress or null if none\",\n  \"question_status\": {\n    \"user_asked_question\": true/false,\n    \"question_answered\": true/false,\n    \"question_topic\": \"brief topic or null\"\n  },\n  \"next_action_hint\": \"What user might ask next (1 sentence)\",\n  \"orchestrator_cues\": \"IMPORTANT: Context summary for next interaction - include what was discussed, what was done, any pending items. The orchestrator uses this to avoid repeating itself and to maintain conversation flow. (2-3 sentences)\",\n  \"duplicate_risk\": \"high/medium/low - risk that next response might duplicate what was just said\",\n  \"escalation_needed\": false,\n  \"analysis_confidence\": \"high, medium, or low\"\n}\n\nRespond ONLY with valid JSON, no other text.`;\n\nreturn {\n  json: {\n    ...input,\n    tts_messages_sent: ttsMesages,\n    analysis_prompt: analysisPrompt\n  }\n};"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare Analysis Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [336, 240]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.analysis_prompt }}",
+        "options": {}
+      },
+      "id": "logging-agent",
+      "name": "Logging Analysis Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [528, 240]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse agent output and merge with immutable data\nconst input = $('Intent Tagger').first().json;\nconst agentOutput = $input.item.json;\n\n// Try to parse the agent's JSON response\nlet aiAnalysis = {\n  intent_semantic: 'analysis_failed',\n  conversation_state: 'unclear',\n  user_satisfaction: 'uncertain',\n  tool_usage_summary: 'none',\n  next_action_hint: 'unknown',\n  orchestrator_cues: 'Agent analysis failed - using fallback',\n  escalation_needed: false,\n  analysis_confidence: 'low'\n};\n\ntry {\n  const outputText = agentOutput.output || agentOutput.text || '';\n  const jsonMatch = outputText.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    aiAnalysis = JSON.parse(jsonMatch[0]);\n  }\n} catch (e) {\n  aiAnalysis.parse_error = e.message;\n}\n\n// Build the complete log entry\nconst completeLog = {\n  // Immutable layer\n  transcript_exact: input.transcript_exact,\n  agent_output_raw: input.agent_output_raw,\n  tool_calls: input.tool_calls || [],\n  timestamps: input.timestamps || {},\n  session_id: input.session_id,\n  bot_id: input.bot_id,\n  classifier_route: input.classifier_route,\n  classifier_intent: input.classifier_intent,\n  tts_result: input.tts_result || {},\n  workflow_source: input.workflow_source,\n  error_flags: input.error_flags || {},\n  \n  // Intent markers layer (fast heuristics)\n  intent_markers: input.intent_markers || {},\n  \n  // AI Analysis layer\n  ai_analysis: aiAnalysis,\n  \n  // Metadata\n  log_version: '2.1',\n  logged_at: new Date().toISOString()\n};\n\nreturn {\n  json: {\n    complete_log: completeLog,\n    intent_markers: input.intent_markers\n  }\n};"
+      },
+      "id": "parse-and-merge",
+      "name": "Parse & Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [832, 240]
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "interaction_logs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $json.complete_log.session_id }}",
+            "bot_id": "={{ $json.complete_log.bot_id }}",
+            "transcript_exact": "={{ $json.complete_log.transcript_exact }}",
+            "agent_output_raw": "={{ $json.complete_log.agent_output_raw }}",
+            "tool_calls": "={{ JSON.stringify($json.complete_log.tool_calls) }}",
+            "timestamps": "={{ JSON.stringify($json.complete_log.timestamps) }}",
+            "classifier_route": "={{ $json.complete_log.classifier_route }}",
+            "classifier_intent": "={{ $json.complete_log.classifier_intent }}",
+            "tts_result": "={{ JSON.stringify($json.complete_log.tts_result) }}",
+            "workflow_source": "={{ $json.complete_log.workflow_source }}",
+            "error_flags": "={{ JSON.stringify($json.complete_log.error_flags) }}",
+            "ai_analysis": "={{ JSON.stringify($json.complete_log.ai_analysis) }}",
+            "intent_markers": "={{ JSON.stringify($json.complete_log.intent_markers) }}"
+          },
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "save-to-postgres",
+      "name": "Save to Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1056, 240],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {"id": "log-entry", "name": "log_entry", "value": "={{ $('Parse & Merge Results').first().json.complete_log }}", "type": "object"},
+            {"id": "intent-markers", "name": "intent_markers", "value": "={{ $('Parse & Merge Results').first().json.intent_markers }}", "type": "object"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "return-output",
+      "name": "Return to Caller",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1280, 240]
+    },
+    {
+      "parameters": {
+        "model": "xiaomi/mimo-v2-flash:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [384, 464],
+      "id": "openrouter-model",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "OPPAOWUbmkR2frSd",
+          "name": "OpenRouter account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [[{"node": "Intent Tagger", "type": "main", "index": 0}]]
+    },
+    "Intent Tagger": {
+      "main": [[{"node": "Prepare Analysis Prompt", "type": "main", "index": 0}]]
+    },
+    "Prepare Analysis Prompt": {
+      "main": [[{"node": "Logging Analysis Agent", "type": "main", "index": 0}]]
+    },
+    "Logging Analysis Agent": {
+      "main": [[{"node": "Parse & Merge Results", "type": "main", "index": 0}]]
+    },
+    "Parse & Merge Results": {
+      "main": [[{"node": "Save to Postgres", "type": "main", "index": 0}]]
+    },
+    "Save to Postgres": {
+      "main": [[{"node": "Return to Caller", "type": "main", "index": 0}]]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [[{"node": "Logging Analysis Agent", "type": "ai_languageModel", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

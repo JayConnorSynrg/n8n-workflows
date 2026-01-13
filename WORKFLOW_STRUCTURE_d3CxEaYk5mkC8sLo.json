@@ -1,0 +1,424 @@
+{
+  "workflow": {
+    "id": "d3CxEaYk5mkC8sLo",
+    "name": "Teams Voice Bot v3.0 - Agent Orchestrator",
+    "active": true
+  },
+  "nodes": {
+    "Webhook": {
+      "id": "webhook-1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -256,
+        208
+      ],
+      "disabled": false,
+      "parameters": [
+        "httpMethod",
+        "path",
+        "options"
+      ]
+    },
+    "Process Transcript": {
+      "id": "process-transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -432
+      ],
+      "disabled": true,
+      "parameters": [
+        "mode",
+        "jsCode"
+      ]
+    },
+    "Route Switch": {
+      "id": "route-switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        912,
+        -400
+      ],
+      "disabled": true,
+      "parameters": [
+        "rules",
+        "options"
+      ]
+    },
+    "Log Silent Transcript": {
+      "id": "log-silent-transcript",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1856,
+        -128
+      ],
+      "disabled": false,
+      "parameters": [
+        "schema",
+        "table",
+        "columns",
+        "options"
+      ]
+    },
+    "Wait Log Only": {
+      "id": "wait-log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        80
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Log Wait Transcript": {
+      "id": "log-wait-transcript",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2064,
+        32
+      ],
+      "disabled": false,
+      "parameters": [
+        "schema",
+        "table",
+        "columns",
+        "options"
+      ]
+    },
+    "Load Bot State": {
+      "id": "load-state-1",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1648,
+        560
+      ],
+      "disabled": false,
+      "parameters": [
+        "operation",
+        "query",
+        "options"
+      ]
+    },
+    "Build Agent Context": {
+      "id": "build-context-1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        608
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Orchestrator Agent": {
+      "id": "6b9b0552-8540-47fa-b65d-d2d46882fc5a",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        2480,
+        608
+      ],
+      "disabled": false,
+      "parameters": [
+        "promptType",
+        "text",
+        "options"
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "id": "1dc8c729-f513-4140-94f1-db3ddf723700",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        816
+      ],
+      "disabled": false,
+      "parameters": [
+        "model",
+        "options"
+      ]
+    },
+    "Gmail Agent Tool": {
+      "id": "gmail-tool-1",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        2608,
+        816
+      ],
+      "disabled": false,
+      "parameters": [
+        "description",
+        "workflowId",
+        "workflowInputs"
+      ]
+    },
+    "Think Tool": {
+      "id": "think-tool-1",
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        2752,
+        832
+      ],
+      "disabled": false,
+      "parameters": []
+    },
+    "Build Immutable Log": {
+      "id": "log-1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3440,
+        624
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Call Logging Agent": {
+      "id": "call-logging-agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3664,
+        560
+      ],
+      "disabled": false,
+      "parameters": [
+        "workflowId",
+        "options"
+      ]
+    },
+    "Check Agent Output": {
+      "id": "check-output-if",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2864,
+        592
+      ],
+      "disabled": false,
+      "parameters": [
+        "conditions",
+        "options"
+      ]
+    },
+    "Split into Sentences": {
+      "id": "split-sentences",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3040,
+        432
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Parallel TTS & Send": {
+      "id": "parallel-tts-send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3248,
+        432
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Ultra-Fast Pre-Router": {
+      "id": "ultra-fast-prerouter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        112
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Pre-Route Switch": {
+      "id": "pre-route-switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        368,
+        96
+      ],
+      "disabled": false,
+      "parameters": [
+        "rules",
+        "options"
+      ]
+    },
+    "Quick Acknowledge": {
+      "id": "acknowledge-handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        416
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Quick Reply": {
+      "id": "quick-reply-handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        224
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Fast Intent Query": {
+      "id": "fast-intent-query",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -32,
+        320
+      ],
+      "disabled": false,
+      "parameters": [
+        "operation",
+        "query",
+        "options"
+      ]
+    },
+    "Intent Summary Merger": {
+      "id": "intent-merger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        208
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Interrupt Handler": {
+      "id": "f729ae67-3e74-4693-84c6-7ce42ffa8e67",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        704
+      ],
+      "disabled": false,
+      "parameters": [
+        "jsCode"
+      ]
+    },
+    "Log Interrupt": {
+      "id": "adcdde94-c85d-4e65-8905-f52762503791",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1904,
+        736
+      ],
+      "disabled": false,
+      "parameters": [
+        "schema",
+        "table",
+        "columns",
+        "options"
+      ]
+    }
+  },
+  "connections": {
+    "Process Transcript": {
+      "main": []
+    },
+    "Wait Log Only": {
+      "main": []
+    },
+    "Build Agent Context": {
+      "main": []
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": []
+    },
+    "Gmail Agent Tool": {
+      "ai_tool": []
+    },
+    "Think Tool": {
+      "ai_tool": []
+    },
+    "Build Immutable Log": {
+      "main": []
+    },
+    "Load Bot State": {
+      "main": []
+    },
+    "Orchestrator Agent": {
+      "main": []
+    },
+    "Check Agent Output": {
+      "main": []
+    },
+    "Split into Sentences": {
+      "main": []
+    },
+    "Parallel TTS & Send": {
+      "main": []
+    },
+    "Webhook": {
+      "main": []
+    },
+    "Ultra-Fast Pre-Router": {
+      "main": []
+    },
+    "Pre-Route Switch": {
+      "main": []
+    },
+    "Quick Acknowledge": {
+      "main": []
+    },
+    "Quick Reply": {
+      "main": []
+    },
+    "Fast Intent Query": {
+      "main": []
+    },
+    "Intent Summary Merger": {
+      "main": []
+    },
+    "Interrupt Handler": {
+      "main": []
+    },
+    "Log Interrupt": {
+      "main": []
+    }
+  },
+  "exportDate": "2026-01-10",
+  "extractMethod": "MCP n8n-mcp__n8n_get_workflow"
+}

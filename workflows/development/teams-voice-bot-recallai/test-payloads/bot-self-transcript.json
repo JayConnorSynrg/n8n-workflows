@@ -1,0 +1,16 @@
+{
+  "event": "transcript.data",
+  "bot_id": "test-bot-123",
+  "data": {
+    "is_final": true,
+    "speaker_name": "AI Voice Assistant",
+    "words": [
+      {"text": "Hello", "start_time": 0.0, "end_time": 0.3},
+      {"text": "I'm", "start_time": 0.3, "end_time": 0.5},
+      {"text": "here", "start_time": 0.5, "end_time": 0.7},
+      {"text": "to", "start_time": 0.7, "end_time": 0.8},
+      {"text": "help", "start_time": 0.8, "end_time": 1.0}
+    ],
+    "confidence": 0.99
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "name": "Gmail Agent Sub-Workflow",
+  "id": "kL0AP3CkRby6OmVb",
+  "description": "Sub-workflow for email composition and sending via Gmail",
+  "nodes": [
+    {
+      "id": "trigger-input",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 240],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "transcript" },
+            { "name": "email_address" },
+            { "name": "context", "type": "object" },
+            { "name": "bot_id" },
+            { "name": "session_id" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "prepare-context",
+      "name": "Prepare AI Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 240],
+      "parameters": {
+        "jsCode": "// Prepare context for email composition\nconst input = $input.first().json;\n\n// Build conversation summary from history\nlet conversationSummary = '';\nif (input.context?.conversation_history) {\n  const history = input.context.conversation_history;\n  const recent = history.slice(-5);\n  conversationSummary = recent.map(m => `${m.role}: ${m.content}`).join('\\n');\n}\n\n// Extract key topics from transcript\nconst transcript = input.transcript || '';\nconst topics = transcript.match(/(?:about|regarding|for|concerning)\\s+([^,.!?]+)/i);\nconst mainTopic = topics ? topics[1].trim() : 'your request';\n\nreturn [{\n  email_address: input.email_address,\n  transcript: transcript,\n  conversation_summary: conversationSummary,\n  main_topic: mainTopic,\n  bot_id: input.bot_id,\n  session_id: input.session_id,\n  received_at: Date.now()\n}];"
+      }
+    },
+    {
+      "id": "d16817d2-fc2a-4312-b051-f40e1ed8bb22",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [432, 240],
+      "parameters": { "options": {} }
+    },
+    {
+      "id": "chat-model",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [400, 480],
+      "parameters": {
+        "model": "openai/gpt-4o-mini",
+        "options": { "maxTokens": 1000, "temperature": 0.7 }
+      },
+      "credentials": { "openRouterApi": { "id": "OPPAOWUbmkR2frSd", "name": "OpenRouter account" } }
+    },
+    {
+      "id": "gmail-tool",
+      "name": "Gmail Send",
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.2,
+      "position": [560, 480],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "credentials": { "gmailOAuth2": { "id": "Wagsju9B8ofYq2Sl", "name": "Jayconnor@synrgscaling.com" } }
+    },
+    {
+      "id": "format-output",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [816, 240],
+      "parameters": {
+        "jsCode": "// Format the response for the orchestrator\nconst agentOutput = $input.first().json;\nconst preparedData = $('Prepare AI Context').first().json;\n\nconst aiOutput = agentOutput.output || agentOutput.text || '';\nconst toolCalls = agentOutput.toolCalls || [];\nconst gmailCall = toolCalls.find(t => t.tool === 'Gmail Send');\nconst emailSent = gmailCall?.result?.success !== false;\n\nlet responseText;\nif (emailSent && aiOutput) {\n  responseText = aiOutput;\n} else if (emailSent) {\n  responseText = `I've sent the email to ${preparedData.email_address}.`;\n} else {\n  responseText = `Sorry, I couldn't send the email. Please try again.`;\n}\n\nconst duration_ms = Date.now() - preparedData.received_at;\n\nreturn [{\n  success: emailSent,\n  response_text: responseText,\n  tool_result: {\n    tool: 'gmail',\n    action: 'send',\n    recipient: preparedData.email_address,\n    subject: gmailCall?.input?.subject || 'Email from Voice Bot',\n    status: emailSent ? 'sent' : 'failed'\n  },\n  metadata: {\n    bot_id: preparedData.bot_id,\n    session_id: preparedData.session_id,\n    duration_ms: duration_ms\n  }\n}];"
+      }
+    },
+    {
+      "id": "gmail-logger",
+      "name": "Build Immutable Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [992, 240],
+      "parameters": {
+        "jsCode": "// Build immutable log data for Gmail Agent\nconst input = $('Workflow Input').first().json;\nconst preparedContext = $('Prepare AI Context').first().json;\nconst agentOutput = $('AI Agent').first().json;\nconst formattedResponse = $input.first().json;\n\n// Extract tool calls from agent\nlet toolCalls = [];\ntry {\n  if (agentOutput.intermediateSteps) {\n    toolCalls = agentOutput.intermediateSteps.map(step => ({\n      tool: step.action?.tool || 'Gmail Send',\n      input: step.action?.toolInput || {},\n      output: step.observation || null\n    }));\n  }\n} catch (e) {\n  toolCalls = [];\n}\n\n// Build immutable log entry\nconst immutableLog = {\n  transcript_exact: input.transcript || '',\n  agent_output_raw: agentOutput.output || '',\n  tool_calls: toolCalls,\n  timestamps: {\n    received_at: preparedContext.received_at,\n    processed_at: Date.now(),\n    logged_at: new Date().toISOString()\n  },\n  session_id: input.session_id,\n  bot_id: input.bot_id,\n  classifier_route: 'gmail_agent',\n  classifier_intent: 'send_email',\n  tts_result: { success: false, audio_sent: false },\n  workflow_source: 'gmail_agent',\n  error_flags: {\n    agent_error: !agentOutput.output,\n    email_error: !formattedResponse.success\n  },\n  // Gmail-specific data\n  email_recipient: input.email_address,\n  email_result: formattedResponse.tool_result\n};\n\nreturn [immutableLog];"
+      }
+    },
+    {
+      "id": "call-logging-agent",
+      "name": "Call Logging Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1050, 240],
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "8LX5tt3SkO8GNuLj", "mode": "id" }
+      }
+    },
+    {
+      "id": "output-node",
+      "name": "Return to Orchestrator",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1230, 240],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "success", "name": "success", "value": true, "type": "boolean" },
+            { "id": "needs_tts", "name": "needs_tts", "value": true, "type": "boolean" },
+            { "id": "response_text", "name": "response_text", "value": "={{ $('Format Response').item.json.response_text }}", "type": "string" },
+            { "id": "tool_result", "name": "tool_result", "value": "={{ $('Format Response').item.json.tool_result }}", "type": "object" },
+            { "id": "log_entry", "name": "log_entry", "value": "={{ $json.log_entry }}", "type": "object" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": { "main": [[{ "node": "Prepare AI Context", "type": "main", "index": 0 }]] },
+    "Prepare AI Context": { "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]] },
+    "OpenRouter Chat Model": { "ai_languageModel": [[{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]] },
+    "Gmail Send": { "ai_tool": [[{ "node": "AI Agent", "type": "ai_tool", "index": 0 }]] },
+    "AI Agent": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Build Immutable Log", "type": "main", "index": 0 }]] },
+    "Build Immutable Log": { "main": [[{ "node": "Call Logging Agent", "type": "main", "index": 0 }]] },
+    "Call Logging Agent": { "main": [[{ "node": "Return to Orchestrator", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

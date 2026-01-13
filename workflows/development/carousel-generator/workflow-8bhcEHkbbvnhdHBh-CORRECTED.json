@@ -1,0 +1,624 @@
+{
+  "name": "AI Carousel Generator - 5 Slides",
+  "nodes": [
+    {
+      "id": "form-trigger",
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [250, 300],
+      "webhookId": "carousel-form",
+      "parameters": {
+        "path": "carousel-form",
+        "formTitle": "AI Carousel Generator",
+        "formDescription": "Generate a 5-slide carousel with AI-powered imagery",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "What is the main subject/theme?",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Target Audience",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Call to Action",
+              "fieldType": "text",
+              "requiredField": false
+            },
+            {
+              "fieldLabel": "Automation Use Case",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Client Onboarding"
+                  },
+                  {
+                    "option": "Email Sequences"
+                  },
+                  {
+                    "option": "AI Content Creation"
+                  },
+                  {
+                    "option": "Business Scaling"
+                  },
+                  {
+                    "option": "AI Toolkit"
+                  },
+                  {
+                    "option": "Custom"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Image Style",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "professional-minimal"
+                  },
+                  {
+                    "option": "corporate-clean"
+                  },
+                  {
+                    "option": "tech-futuristic"
+                  },
+                  {
+                    "option": "creative-vibrant"
+                  },
+                  {
+                    "option": "elegant-sophisticated"
+                  },
+                  {
+                    "option": "modern-bold"
+                  },
+                  {
+                    "option": "natural-authentic"
+                  },
+                  {
+                    "option": "luxury-premium"
+                  },
+                  {
+                    "option": "innovative-dynamic"
+                  },
+                  {
+                    "option": "trustworthy-reliable"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "responseMode": "responseNode",
+        "options": {
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Generating your carousel... This may take 3-5 minutes."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "set-user-input",
+      "name": "Set User Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "theme",
+              "name": "carousel_theme",
+              "value": "={{ $json['What is the main subject/theme?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "audience",
+              "name": "target_audience",
+              "value": "={{ $json['Target Audience'] }}",
+              "type": "string"
+            },
+            {
+              "id": "cta",
+              "name": "call_to_action",
+              "value": "={{ $json['Call to Action'] || 'Learn More' }}",
+              "type": "string"
+            },
+            {
+              "id": "use-case",
+              "name": "use_case",
+              "value": "={{ $json['Automation Use Case'] }}",
+              "type": "string"
+            },
+            {
+              "id": "style-raw",
+              "name": "style_selection",
+              "value": "={{ $json['Image Style'] }}",
+              "type": "string"
+            },
+            {
+              "id": "style-parsed",
+              "name": "style_description",
+              "value": "={{ {\n  'professional-minimal': 'Professional minimalist aesthetic with clean lines, generous white space, subtle colors, and refined typography. Conveys competence and clarity.',\n  'corporate-clean': 'Corporate clean design with structured layouts, neutral color palette, professional imagery, and business-appropriate tone. Projects reliability.',\n  'tech-futuristic': 'Technology-forward futuristic style with sleek interfaces, neon accents, geometric patterns, and innovative visual elements. Suggests cutting-edge solutions.',\n  'creative-vibrant': 'Creative vibrant approach with bold colors, dynamic compositions, artistic elements, and energetic visual language. Expresses innovation.',\n  'elegant-sophisticated': 'Elegant sophisticated presentation with refined aesthetics, premium materials, subtle luxury cues, and tasteful design. Communicates quality.',\n  'modern-bold': 'Modern bold statement with strong typography, confident color choices, dramatic contrasts, and impactful visuals. Demands attention.',\n  'natural-authentic': 'Natural authentic feel with organic textures, warm tones, genuine imagery, and relatable visual storytelling. Builds trust.',\n  'luxury-premium': 'Luxury premium experience with high-end finishes, exclusive aesthetics, refined details, and aspirational visual language. Conveys prestige.',\n  'innovative-dynamic': 'Innovative dynamic energy with progressive design, motion-inspired elements, forward-thinking visuals, and agile compositions. Shows adaptability.',\n  'trustworthy-reliable': 'Trustworthy reliable appearance with stable compositions, consistent branding, professional photography, and credible visual tone. Establishes confidence.'\n}[$json.style_selection] }}",
+              "type": "string"
+            },
+            {
+              "id": "slides",
+              "name": "slide_count",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "dalle-style",
+              "name": "dalle_style",
+              "value": "={{ $json.style_selection.includes('natural') || $json.style_selection.includes('authentic') ? 'natural' : 'vivid' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "openai-model",
+      "name": "OpenAI GPT-4 Turbo",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [650, 200],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4-turbo",
+          "mode": "list"
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "memory-buffer",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [650, 350],
+      "parameters": {
+        "contextWindowLength": 5
+      }
+    },
+    {
+      "id": "output-parser",
+      "name": "Parse Slide Prompts",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [650, 500],
+      "parameters": {
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"carousel_title\": {\n      \"type\": \"string\",\n      \"description\": \"Catchy title for the carousel (5-8 words)\"\n    },\n    \"carousel_description\": {\n      \"type\": \"string\",\n      \"description\": \"Brief description of carousel theme (15-20 words)\"\n    },\n    \"slide_prompts\": {\n      \"type\": \"array\",\n      \"description\": \"Array of 5 detailed DALL-E 3 prompts\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"slide_number\": {\n            \"type\": \"number\",\n            \"description\": \"Slide number (1-5)\"\n          },\n          \"prompt\": {\n            \"type\": \"string\",\n            \"description\": \"Detailed visual description following SYNRG aesthetic\"\n          },\n          \"description\": {\n            \"type\": \"string\",\n            \"description\": \"Brief slide description (10-15 words)\"\n          }\n        },\n        \"required\": [\"slide_number\", \"prompt\", \"description\"]\n      },\n      \"minItems\": 5,\n      \"maxItems\": 5\n    },\n    \"tags\": {\n      \"type\": \"array\",\n      \"description\": \"3-5 relevant tags\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"carousel_title\", \"carousel_description\", \"slide_prompts\", \"tags\"]\n}"
+      }
+    },
+    {
+      "id": "ai-agent",
+      "name": "Carousel Prompt Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ \"Theme: \" + $json.carousel_theme + \"\\nTarget Audience: \" + $json.target_audience + \"\\nCall to Action: \" + $json.call_to_action + \"\\nUse Case: \" + $json.use_case + \"\\nStyle Direction: \" + $json.style_description + \"\\n\\nGenerate 5 carousel slide prompts that follow the SYNRG aesthetic guidelines, incorporate the style direction, and tell a cohesive story.\" }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a graphic design prompt writer for an automation company called SYNRG. You create prompts that design modern sleek, minimalist graphics for social media.\n\nSYNRG AESTHETIC GUIDELINES:\n\nA vertical (3:4) aspect ratio 4K resolution poster with a hyper-clean, minimalist futuristic aesthetic, styled for a modern exhibition or high-end product showcase.\n\nBackground & Composition:\n- Use a super light cold gray background (#f4f4f4 or lighter) with soft lighting gradients, creating an airy, tech-forward feeling\n- The layout should feel balanced and intentional with generous negative space, giving each visual element room to breathe\n- Optionally include barely-there geometric textures or fine digital grain in the background for subtle depth\n\nCenterpiece Object / Form:\n- Prominent in the poster, place a 3D abstract form (organic or slightly geometric)\n- Made of frosted glass or translucent resin, with a silky, smooth, softly reflective surface\n- Surface details include: subtle grainy noise, edge softness, and minor refraction effects\n- Shape options: rounded rectangle, orb, infinite triangle, arrows, graphs, gears, electronics, tools, polygonal ring, interlocked forms, or abstract clusters—use variety while staying minimal\n\nMaterial & Color Treatment:\n- IMPORTANT: Use exact colors: gradient from bright mint green (#24DE99) to pearl white (#FFFFFF)\n- Use a faint glow and soft diffusion of light along the edges, resembling ambient softbox lighting\n- Drop soft shadows that fall slightly behind and around the object—long and diffused, with faint cyan or mint hues\n\nTypography + Overlay Effects:\n- Main title (example: \"SYNRG\") should use a bold, geometric sans-serif font (like Satoshi, Monument, or Eurostile Bold)\n- Title is centered or symmetrically aligned, partially obscured by the metaball object\n- Some or none of the text is behind the frosted object and should appear Gaussian blurred, as if viewed through lightly fogged glass\n- Optional subtitle (below): include in smaller weight, spaced below the primary text—aligned center or flush left/right\n\nSTYLE DIRECTION INTEGRATION:\nThe user has specified a style direction that should influence the overall aesthetic. Adapt the SYNRG guidelines to incorporate this style while maintaining core brand identity. For example:\n- Professional-minimal: Even more restraint, ultra-clean\n- Tech-futuristic: Add tech elements, interface hints\n- Creative-vibrant: Bolder color treatments within mint-white palette\n- Elegant-sophisticated: Refined details, premium feel\n- And so on...\n\nOUTPUT REQUIREMENTS:\n- Generate carousel_title, carousel_description, 5 detailed slide_prompts following SYNRG aesthetic with style adaptation, and relevant tags\n- Each prompt should be 150-250 characters\n- Prompts should build on each other to create a narrative flow (Hook → Context → Core → Support → CTA)\n- Ensure each slide uses the exact SYNRG color palette (#24DE99 → #FFFFFF)\n- Avoid text in images (AI struggles with text rendering)\n- Consider the target audience and use case when choosing visual metaphors\n- DO NOT include 'style' field in slide_prompts - that will be added automatically"
+        }
+      }
+    },
+    {
+      "id": "split-slides",
+      "name": "Split Slide Prompts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "parameters": {
+        "fieldToSplitOut": "output.slide_prompts",
+        "include": "noOtherFields",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-slide-vars",
+      "name": "Set Slide Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1250, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "prompt",
+              "name": "prompt",
+              "value": "={{ $json.prompt }}",
+              "type": "string"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "dalle-style",
+              "name": "dalle_style",
+              "value": "={{ $('Set User Input').item.json.dalle_style }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "generate-image",
+      "name": "Generate Image - DALL-E 3",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.1,
+      "position": [1450, 300],
+      "parameters": {
+        "resource": "image",
+        "operation": "create",
+        "imageModel": "dall-e-3",
+        "prompt": "={{ $json.prompt }}",
+        "responseFormat": "binaryData",
+        "options": {
+          "quality": "hd",
+          "size": "1024x1792",
+          "style": "={{ $json.dalle_style }}"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "upload-gdrive",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1650, 300],
+      "parameters": {
+        "operation": "upload",
+        "name": {
+          "__rl": true,
+          "value": "={{ 'carousel_' + $now.format('YYYY-MM-DD_HHmmss') + '_slide_' + $json.slide_number + '.png' }}",
+          "mode": "expression"
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1v0lANQ70OY7C1d8QM5va4PaZsE83w4Ew",
+          "mode": "list"
+        },
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "set-public",
+      "name": "Set Public Permissions",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1850, 300],
+      "parameters": {
+        "operation": "share",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "permissions": {
+          "permissionsUi": {
+            "permissionsValues": [
+              {
+                "role": "reader",
+                "type": "anyone"
+              }
+            ]
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "format-slide-result",
+      "name": "Format Slide Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2050, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "slide-num",
+              "name": "slide_number",
+              "value": "={{ $('Set Slide Variables').item.json.slide_number }}",
+              "type": "number"
+            },
+            {
+              "id": "url",
+              "name": "image_url",
+              "value": "={{ 'https://drive.google.com/uc?export=view&id=' + $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "file-id",
+              "name": "file_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "filename",
+              "name": "file_name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "desc",
+              "name": "description",
+              "value": "={{ $('Set Slide Variables').item.json.description }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-slides",
+      "name": "Merge All Slides",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [2250, 300],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      }
+    },
+    {
+      "id": "generate-metadata",
+      "name": "Generate Carousel Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Generate comprehensive carousel metadata\nconst slides = $input.all();\nconst carousel_id = 'car_' + Date.now();\n\nconst agentOutput = $('Carousel Prompt Generator').item.json.output;\nconst userInput = $('Set User Input').item.json;\n\nreturn {\n  json: {\n    carousel_id: carousel_id,\n    title: agentOutput.carousel_title || 'Untitled Carousel',\n    description: agentOutput.carousel_description || '',\n    tags: agentOutput.tags || [],\n    style_selected: userInput.style_selection,\n    style_description: userInput.style_description,\n    slide_count: slides.length,\n    slides: slides.map((slide) => ({\n      slide_number: slide.json.slide_number,\n      image_url: slide.json.image_url,\n      file_id: slide.json.file_id,\n      file_name: slide.json.file_name,\n      description: slide.json.description\n    })),\n    created_at: new Date().toISOString(),\n    status: 'completed'\n  }\n};"
+      }
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond to Form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [2650, 300],
+      "parameters": {
+        "respondWith": "allEntries",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set User Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set User Input": {
+      "main": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4 Turbo": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slide Prompts": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Carousel Prompt Generator",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carousel Prompt Generator": {
+      "main": [
+        [
+          {
+            "node": "Split Slide Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Slide Prompts": {
+      "main": [
+        [
+          {
+            "node": "Set Slide Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Slide Variables": {
+      "main": [
+        [
+          {
+            "node": "Generate Image - DALL-E 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image - DALL-E 3": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Set Public Permissions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Public Permissions": {
+      "main": [
+        [
+          {
+            "node": "Format Slide Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slide Result": {
+      "main": [
+        [
+          {
+            "node": "Merge All Slides",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Slides": {
+      "main": [
+        [
+          {
+            "node": "Generate Carousel Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Carousel Metadata": {
+      "main": [
+        [
+          {
+            "node": "Respond to Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

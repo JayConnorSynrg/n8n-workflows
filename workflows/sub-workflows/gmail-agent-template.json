@@ -1,0 +1,216 @@
+{
+  "name": "Gmail Agent Sub-Workflow",
+  "meta": {
+    "instanceId": "template",
+    "templateId": "gmail-agent-v1"
+  },
+  "nodes": [
+    {
+      "id": "trigger-input",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 240],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "transcript",
+              "type": "string"
+            },
+            {
+              "name": "email_address",
+              "type": "string"
+            },
+            {
+              "name": "context",
+              "type": "object"
+            },
+            {
+              "name": "bot_id",
+              "type": "string"
+            },
+            {
+              "name": "session_id",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "prepare-context",
+      "name": "Prepare AI Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 240],
+      "parameters": {
+        "jsCode": "// Prepare context for email composition\nconst input = $input.first().json;\n\n// Build conversation summary from history\nlet conversationSummary = '';\nif (input.context?.conversation_history) {\n  const history = input.context.conversation_history;\n  const recent = history.slice(-5); // Last 5 messages\n  conversationSummary = recent.map(m => \n    `${m.role}: ${m.content}`\n  ).join('\\n');\n}\n\n// Extract key topics from transcript\nconst transcript = input.transcript || '';\nconst topics = transcript.match(/(?:about|regarding|for|concerning)\\s+([^,.!?]+)/i);\nconst mainTopic = topics ? topics[1].trim() : 'your request';\n\nreturn {\n  email_address: input.email_address,\n  transcript: transcript,\n  conversation_summary: conversationSummary,\n  main_topic: mainTopic,\n  bot_id: input.bot_id,\n  session_id: input.session_id,\n  received_at: Date.now()\n};"
+      }
+    },
+    {
+      "id": "email-composer",
+      "name": "Email Composer Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [480, 240],
+      "parameters": {
+        "promptType": "define",
+        "text": "Compose an email to: {{ $json.email_address }}\n\nUser's request: {{ $json.transcript }}\n\nConversation context:\n{{ $json.conversation_summary }}\n\nMain topic: {{ $json.main_topic }}\n\nCompose a professional, concise email. Keep it brief (2-3 short paragraphs max) since this originated from a voice conversation.",
+        "options": {
+          "systemMessage": "You are an email composition assistant for a voice bot in Microsoft Teams meetings.\n\nYour task is to compose professional emails based on voice requests.\n\nRules:\n1. Keep emails brief and professional (2-3 paragraphs max)\n2. Use a friendly but professional tone\n3. Reference the meeting context when relevant\n4. Always include a clear subject line\n5. End with a simple sign-off\n\nAfter composing, use the Gmail tool to send the email.\n\nProvide a brief verbal confirmation for the TTS response (1 sentence).",
+          "maxIterations": 3
+        }
+      }
+    },
+    {
+      "id": "chat-model",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [400, 480],
+      "parameters": {
+        "model": "openai/gpt-4o-mini",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "OPPAOWUbmkR2frSd",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "gmail-tool",
+      "name": "Gmail Send",
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.2,
+      "position": [560, 480],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toolDescription": "Use this tool to send emails. Provide the recipient email address, subject line, and message body. Always use this after composing an email."
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Wagsju9B8ofYq2Sl",
+          "name": "Jayconnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "id": "format-output",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 240],
+      "parameters": {
+        "jsCode": "// Format the response for the orchestrator\nconst agentOutput = $input.first().json;\nconst preparedData = $('Prepare AI Context').first().json;\n\n// Extract the AI's response\nconst aiOutput = agentOutput.output || agentOutput.text || '';\n\n// Check if email was sent successfully\nconst toolCalls = agentOutput.toolCalls || [];\nconst gmailCall = toolCalls.find(t => t.tool === 'Gmail Send');\nconst emailSent = gmailCall?.result?.success !== false;\n\n// Build TTS response\nlet responseText;\nif (emailSent && aiOutput) {\n  // Use AI's confirmation if available\n  responseText = aiOutput;\n} else if (emailSent) {\n  responseText = `I've sent the email to ${preparedData.email_address}.`;\n} else {\n  responseText = `Sorry, I couldn't send the email. Please try again.`;\n}\n\n// Calculate duration\nconst duration_ms = Date.now() - preparedData.received_at;\n\nreturn {\n  success: emailSent,\n  response_text: responseText,\n  tool_result: {\n    tool: 'gmail',\n    action: 'send',\n    recipient: preparedData.email_address,\n    subject: gmailCall?.input?.subject || 'Email from Voice Bot',\n    status: emailSent ? 'sent' : 'failed'\n  },\n  metadata: {\n    bot_id: preparedData.bot_id,\n    session_id: preparedData.session_id,\n    duration_ms: duration_ms\n  }\n};"
+      }
+    },
+    {
+      "id": "output-node",
+      "name": "Return to Orchestrator",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [960, 240],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Context": {
+      "main": [
+        [
+          {
+            "node": "Email Composer Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Composer Agent": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Email Composer Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Send": {
+      "ai_tool": [
+        [
+          {
+            "node": "Email Composer Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Return to Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "sub-workflow"
+    },
+    {
+      "name": "voice-bot"
+    },
+    {
+      "name": "gmail"
+    }
+  ],
+  "pinData": {},
+  "versionId": "template-v1",
+  "_comment": "Gmail Agent Sub-Workflow for Teams Voice Bot Orchestrator. Called via Execute Workflow node from main orchestrator."
+}

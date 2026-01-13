@@ -1,0 +1,13 @@
+{
+  "event": "transcript.data",
+  "bot_id": "test-bot-123",
+  "data": {
+    "is_final": false,
+    "speaker_name": "Jane Smith",
+    "words": [
+      {"text": "I", "start_time": 0.0, "end_time": 0.1},
+      {"text": "think", "start_time": 0.1, "end_time": 0.3}
+    ],
+    "confidence": 0.8
+  }
+}
