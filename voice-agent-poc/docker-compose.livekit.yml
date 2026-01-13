@@ -1,0 +1,71 @@
+version: '3.8'
+
+# LiveKit Voice Agent - Docker Compose
+# Open-source alternative to OpenAI Realtime API
+#
+# Usage:
+#   docker-compose -f docker-compose.livekit.yml up
+#
+# For production with SSL:
+#   docker-compose -f docker-compose.livekit.yml -f docker-compose.prod.yml up
+
+services:
+  # LiveKit Voice Agent (Python)
+  voice-agent:
+    build: ./livekit-agent
+    container_name: voice-agent-livekit
+    environment:
+      # API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+
+      # Provider Selection
+      - STT_PROVIDER=${STT_PROVIDER:-openai}
+      - STT_MODEL=${STT_MODEL:-whisper-1}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - TTS_PROVIDER=${TTS_PROVIDER:-openai}
+      - TTS_VOICE=${TTS_VOICE:-alloy}
+      - TTS_SPEED=${TTS_SPEED:-1.0}
+
+      # n8n Integration
+      - N8N_TOOLS_WEBHOOK=${N8N_TOOLS_WEBHOOK:-}
+      - N8N_LOGGING_WEBHOOK=${N8N_LOGGING_WEBHOOK:-}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+
+      # Server
+      - PORT=3000
+      - HEALTH_PORT=3001
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:3001/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - voice-agent-network
+
+  # Voice Agent Webpage (same client works with both backends)
+  client:
+    image: nginx:alpine
+    container_name: voice-agent-client
+    volumes:
+      - ./client:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - voice-agent
+    restart: unless-stopped
+    networks:
+      - voice-agent-network
+
+networks:
+  voice-agent-network:
+    driver: bridge

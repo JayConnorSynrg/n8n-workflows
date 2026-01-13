@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # Traefik Reverse Proxy with SSL
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@yourdomain.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    restart: unless-stopped
+    networks:
+      - voice-agent-network
+
+  # WebSocket Relay Server
+  relay-server:
+    build: ./relay-server
+    container_name: voice-agent-relay
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PORT=3000
+      - HEALTH_PORT=3001
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    labels:
+      - "traefik.enable=true"
+      # WebSocket route
+      - "traefik.http.routers.relay.rule=Host(`${RELAY_DOMAIN:-relay.yourdomain.com}`)"
+      - "traefik.http.routers.relay.entrypoints=websecure"
+      - "traefik.http.routers.relay.tls.certresolver=letsencrypt"
+      - "traefik.http.services.relay.loadbalancer.server.port=3000"
+      # Health check route
+      - "traefik.http.routers.relay-health.rule=Host(`${RELAY_DOMAIN:-relay.yourdomain.com}`) && Path(`/health`)"
+      - "traefik.http.routers.relay-health.entrypoints=websecure"
+      - "traefik.http.routers.relay-health.tls.certresolver=letsencrypt"
+    restart: unless-stopped
+    networks:
+      - voice-agent-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Voice Agent Webpage
+  client:
+    image: nginx:alpine
+    container_name: voice-agent-client
+    volumes:
+      - ./client:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.client.rule=Host(`${CLIENT_DOMAIN:-voice.yourdomain.com}`)"
+      - "traefik.http.routers.client.entrypoints=websecure"
+      - "traefik.http.routers.client.tls.certresolver=letsencrypt"
+      - "traefik.http.services.client.loadbalancer.server.port=80"
+    depends_on:
+      - relay-server
+    restart: unless-stopped
+    networks:
+      - voice-agent-network
+
+networks:
+  voice-agent-network:
+    driver: bridge
