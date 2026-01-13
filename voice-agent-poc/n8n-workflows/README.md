@@ -9,6 +9,8 @@ Enterprise voice agent workflows implementing gated execution with pre-confirmat
 | `voice-tool-send-gmail.json` | `POST /execute-gmail` | Gated email with pre-send checkpoint |
 | `voice-tool-query-vector-db.json` | `POST /query-vector-db` | Gated query + context storage |
 | `voice-tool-get-session-context.json` | `GET /get-session-context` | Fetch stored context for email drafting |
+| `voice-session-summary.json` | `POST /session-ended` | Async session summary generation |
+| `voice-agent-tools.json` | `POST /voice-tools` | Legacy tool dispatcher (Switch routing) |
 
 ## Architecture
 

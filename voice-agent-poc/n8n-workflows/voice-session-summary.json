@@ -1,0 +1,304 @@
+{
+  "name": "Voice Session Summary Generator",
+  "nodes": [
+    {
+      "id": "webhook_trigger",
+      "name": "Webhook: Session End",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [100, 300],
+      "parameters": {
+        "path": "session-ended",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "respond_accepted",
+      "name": "Respond: Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [300, 300],
+      "parameters": {
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', message: 'Summary generation started', session_id: $json.body.session_id }) }}"
+      }
+    },
+    {
+      "id": "fetch_chat_messages",
+      "name": "Postgres: Fetch Chat Messages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [500, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY message_index ASC;",
+        "queryParams": "={{ $json.body.session_id }}"
+      }
+    },
+    {
+      "id": "fetch_tool_calls",
+      "name": "Postgres: Fetch Tool Calls",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [500, 450],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM tool_calls WHERE session_id = $1 ORDER BY created_at ASC;",
+        "queryParams": "={{ $json.body.session_id }}"
+      }
+    },
+    {
+      "id": "fetch_session_analytics",
+      "name": "Postgres: Fetch Session Analytics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [500, 600],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM user_session_analytics WHERE session_id = $1 LIMIT 1;",
+        "queryParams": "={{ $json.body.session_id }}"
+      }
+    },
+    {
+      "id": "merge_data",
+      "name": "Merge: Combine Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [750, 450],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare_context",
+      "name": "Code: Prepare Summary Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [950, 450],
+      "parameters": {
+        "jsCode": "const input = $input.all();\nconst sessionId = $('Webhook: Session End').item.json.body.session_id;\nconst userEmail = $('Webhook: Session End').item.json.body.user_email || 'unknown';\n\n// Parse chat messages\nconst chatMessages = input.filter(i => i.json.role).map(i => i.json);\n\n// Parse tool calls\nconst toolCalls = input.filter(i => i.json.tool_call_id).map(i => i.json);\n\n// Parse analytics\nconst analytics = input.find(i => i.json.session_duration_seconds)?.json || {};\n\n// Calculate metrics\nconst totalMessages = chatMessages.length;\nconst userMessages = chatMessages.filter(m => m.role === 'user').length;\nconst assistantMessages = chatMessages.filter(m => m.role === 'assistant').length;\nconst toolCallsCount = toolCalls.length;\nconst successfulToolCalls = toolCalls.filter(t => t.status === 'COMPLETED').length;\nconst failedToolCalls = toolCalls.filter(t => t.status === 'FAILED' || t.status === 'CANCELLED').length;\n\n// Build conversation transcript\nconst transcript = chatMessages.map(m => {\n  const prefix = m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'AGENT' : m.role.toUpperCase();\n  return `[${prefix}]: ${m.content}`;\n}).join('\\n\\n');\n\n// Build tool call summary\nconst toolsSummary = toolCalls.map(t => {\n  return `- ${t.function_name}: ${t.status} (${t.execution_time_ms || 0}ms)`;\n}).join('\\n');\n\nreturn [{\n  json: {\n    session_id: sessionId,\n    user_email: userEmail,\n    metrics: {\n      total_messages: totalMessages,\n      user_messages: userMessages,\n      assistant_messages: assistantMessages,\n      tool_calls_count: toolCallsCount,\n      successful_tool_calls: successfulToolCalls,\n      failed_tool_calls: failedToolCalls,\n      session_duration_seconds: analytics.session_duration_seconds || 0,\n      avg_response_latency_ms: analytics.avg_response_latency_ms || 0\n    },\n    transcript: transcript,\n    tools_summary: toolsSummary,\n    tools_used: [...new Set(toolCalls.map(t => t.function_name))]\n  }\n}];"
+      }
+    },
+    {
+      "id": "generate_summary",
+      "name": "OpenAI: Generate Summary",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1150, 450],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an enterprise conversation analyst. Generate comprehensive session summaries that include:\n1. Executive Summary (2-3 sentences)\n2. Key Topics Discussed\n3. Tool Usage Analysis\n4. Decisions Made\n5. Action Items\n6. Recommendations for improvement\n\nOutput in structured JSON format with these fields:\n- executive_summary: string\n- main_topics: string[]\n- key_decisions: [{decision: string, context: string, outcome: string}]\n- action_items: [{action: string, status: string, priority: string}]\n- recommendations: [{recommendation: string, priority: string, rationale: string}]\n- conversation_flow_score: number (0-100)\n- task_completion_rate: number (0-100)\n- user_sentiment_score: number (-1 to 1)"
+            },
+            {
+              "role": "user",
+              "content": "=Analyze this voice agent session and generate a comprehensive summary:\n\n**Session ID:** {{ $json.session_id }}\n**User:** {{ $json.user_email }}\n\n**Metrics:**\n- Total Messages: {{ $json.metrics.total_messages }}\n- User Messages: {{ $json.metrics.user_messages }}\n- Assistant Messages: {{ $json.metrics.assistant_messages }}\n- Tool Calls: {{ $json.metrics.tool_calls_count }} ({{ $json.metrics.successful_tool_calls }} successful, {{ $json.metrics.failed_tool_calls }} failed)\n- Session Duration: {{ $json.metrics.session_duration_seconds }} seconds\n\n**Tools Used:**\n{{ $json.tools_summary }}\n\n**Conversation Transcript:**\n{{ $json.transcript }}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json_object",
+          "maxTokens": 2000
+        }
+      }
+    },
+    {
+      "id": "parse_response",
+      "name": "Code: Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 450],
+      "parameters": {
+        "jsCode": "const context = $('Code: Prepare Summary Context').item.json;\nconst aiResponse = JSON.parse($json.message.content);\n\n// Build detailed markdown summary\nconst detailedSummary = `# Session Summary: ${context.session_id}\n\n## Executive Summary\n${aiResponse.executive_summary}\n\n## Session Metrics\n| Metric | Value |\n|--------|-------|\n| Duration | ${context.metrics.session_duration_seconds}s |\n| Total Messages | ${context.metrics.total_messages} |\n| Tool Calls | ${context.metrics.tool_calls_count} |\n| Success Rate | ${context.metrics.successful_tool_calls}/${context.metrics.tool_calls_count} |\n\n## Topics Discussed\n${aiResponse.main_topics.map(t => '- ' + t).join('\\n')}\n\n## Key Decisions\n${aiResponse.key_decisions.map(d => `### ${d.decision}\\n- **Context:** ${d.context}\\n- **Outcome:** ${d.outcome}`).join('\\n\\n')}\n\n## Action Items\n${aiResponse.action_items.map(a => `- [ ] ${a.action} (Priority: ${a.priority})`).join('\\n')}\n\n## Recommendations\n${aiResponse.recommendations.map(r => `### ${r.recommendation}\\n- **Priority:** ${r.priority}\\n- **Rationale:** ${r.rationale}`).join('\\n\\n')}\n`;\n\nreturn [{\n  json: {\n    session_id: context.session_id,\n    user_email: context.user_email,\n    total_messages: context.metrics.total_messages,\n    user_messages: context.metrics.user_messages,\n    assistant_messages: context.metrics.assistant_messages,\n    tool_calls_count: context.metrics.tool_calls_count,\n    successful_tool_calls: context.metrics.successful_tool_calls,\n    failed_tool_calls: context.metrics.failed_tool_calls,\n    session_duration_seconds: context.metrics.session_duration_seconds,\n    avg_response_latency_ms: context.metrics.avg_response_latency_ms,\n    conversation_flow_score: aiResponse.conversation_flow_score,\n    task_completion_rate: aiResponse.task_completion_rate,\n    user_sentiment_score: aiResponse.user_sentiment_score,\n    main_topics: aiResponse.main_topics,\n    tools_used: context.tools_used,\n    key_decisions: aiResponse.key_decisions,\n    action_items: aiResponse.action_items,\n    executive_summary: aiResponse.executive_summary,\n    detailed_summary: detailedSummary,\n    recommendations: aiResponse.recommendations\n  }\n}];"
+      }
+    },
+    {
+      "id": "save_summary",
+      "name": "Postgres: Save Summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1550, 450],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO session_summaries (\n  session_id, user_email,\n  total_messages, user_messages, assistant_messages,\n  tool_calls_count, successful_tool_calls, failed_tool_calls,\n  session_duration_seconds, avg_response_latency_ms,\n  conversation_flow_score, task_completion_rate, user_sentiment_score,\n  main_topics, tools_used, key_decisions, action_items,\n  executive_summary, detailed_summary, recommendations,\n  generated_by, created_at\n) VALUES (\n  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,\n  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,\n  'n8n-workflow', NOW()\n)\nON CONFLICT (session_id) DO UPDATE SET\n  total_messages = EXCLUDED.total_messages,\n  user_messages = EXCLUDED.user_messages,\n  assistant_messages = EXCLUDED.assistant_messages,\n  tool_calls_count = EXCLUDED.tool_calls_count,\n  successful_tool_calls = EXCLUDED.successful_tool_calls,\n  failed_tool_calls = EXCLUDED.failed_tool_calls,\n  session_duration_seconds = EXCLUDED.session_duration_seconds,\n  conversation_flow_score = EXCLUDED.conversation_flow_score,\n  task_completion_rate = EXCLUDED.task_completion_rate,\n  user_sentiment_score = EXCLUDED.user_sentiment_score,\n  main_topics = EXCLUDED.main_topics,\n  tools_used = EXCLUDED.tools_used,\n  key_decisions = EXCLUDED.key_decisions,\n  action_items = EXCLUDED.action_items,\n  executive_summary = EXCLUDED.executive_summary,\n  detailed_summary = EXCLUDED.detailed_summary,\n  recommendations = EXCLUDED.recommendations,\n  updated_at = NOW()\nRETURNING id;",
+        "queryParams": "={{ $json.session_id }},{{ $json.user_email }},{{ $json.total_messages }},{{ $json.user_messages }},{{ $json.assistant_messages }},{{ $json.tool_calls_count }},{{ $json.successful_tool_calls }},{{ $json.failed_tool_calls }},{{ $json.session_duration_seconds }},{{ $json.avg_response_latency_ms }},{{ $json.conversation_flow_score }},{{ $json.task_completion_rate }},{{ $json.user_sentiment_score }},{{ JSON.stringify($json.main_topics) }},{{ JSON.stringify($json.tools_used) }},{{ JSON.stringify($json.key_decisions) }},{{ JSON.stringify($json.action_items) }},{{ $json.executive_summary }},{{ $json.detailed_summary }},{{ JSON.stringify($json.recommendations) }}"
+      }
+    },
+    {
+      "id": "notify_completion",
+      "name": "HTTP Request: Notify Relay",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1750, 450],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook: Session End').item.json.body.callback_url || '' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event",
+              "value": "summary_generated"
+            },
+            {
+              "name": "session_id",
+              "value": "={{ $('Code: Parse AI Response').item.json.session_id }}"
+            },
+            {
+              "name": "executive_summary",
+              "value": "={{ $('Code: Parse AI Response').item.json.executive_summary }}"
+            },
+            {
+              "name": "task_completion_rate",
+              "value": "={{ $('Code: Parse AI Response').item.json.task_completion_rate }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Webhook: Session End": {
+      "main": [
+        [
+          {
+            "node": "Respond: Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond: Accepted": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Fetch Chat Messages",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Postgres: Fetch Tool Calls",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Postgres: Fetch Session Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Fetch Chat Messages": {
+      "main": [
+        [
+          {
+            "node": "Merge: Combine Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Fetch Tool Calls": {
+      "main": [
+        [
+          {
+            "node": "Merge: Combine Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Postgres: Fetch Session Analytics": {
+      "main": [
+        [
+          {
+            "node": "Merge: Combine Data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge: Combine Data": {
+      "main": [
+        [
+          {
+            "node": "Code: Prepare Summary Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Prepare Summary Context": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Generate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Generate Summary": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Save Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Save Summary": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Notify Relay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  }
+}
