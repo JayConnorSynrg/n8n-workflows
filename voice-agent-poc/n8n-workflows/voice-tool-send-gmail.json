@@ -1,0 +1,278 @@
+{
+  "name": "Voice Tool: Send Gmail",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [100, 100],
+      "parameters": {
+        "path": "execute-gmail",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "generate_id",
+      "name": "Code: Generate ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 100],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nreturn [{ tool_call_id: `tc_${timestamp}_${random}` }];"
+      }
+    },
+    {
+      "id": "postgres_insert",
+      "name": "Postgres: INSERT tool_call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [500, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, tool_name, status, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *;",
+        "queryParameters": "=tc_={{ $node[\"Code: Generate ID\"].json.tool_call_id }}\nsess_={{ $json.body.session_id }}\nintent_={{ $json.body.intent_id }}\ntool_name=gmail\nstatus=EXECUTING"
+      },
+      "retryOnFail": true
+    },
+    {
+      "id": "gate1_callback",
+      "name": "HTTP Request: Gate 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [700, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callback_url }}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"status\":\"PREPARING\",\"gate\":1,\"cancellable\":true,\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
+      }
+    },
+    {
+      "id": "if_cancel_gate1",
+      "name": "IF: Check Cancel (Gate 1)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [900, 100],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.cancel }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "postgres_cancel",
+      "name": "Postgres: UPDATE CANCELLED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1100, 50],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, cancelled_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
+        "queryParameters": "=status=CANCELLED\ntc_={{ $node[\"Code: Generate ID\"].json.tool_call_id }}"
+      },
+      "retryOnFail": true
+    },
+    {
+      "id": "http_cancel_callback",
+      "name": "HTTP: Cancel Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1300, 50],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callback_url }}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"status\":\"CANCELLED\",\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
+      }
+    },
+    {
+      "id": "respond_cancelled",
+      "name": "Respond: Cancelled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1500, 50],
+      "parameters": {
+        "respondWith": "json"
+      }
+    },
+    {
+      "id": "gate2_callback",
+      "name": "HTTP Request: Gate 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [900, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callback_url }}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"status\":\"READY_TO_SEND\",\"gate\":2,\"requires_confirmation\":true,\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
+      }
+    },
+    {
+      "id": "if_cancel_gate2",
+      "name": "IF: Check Cancel (Gate 2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1100, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.cancel }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "gmail_send",
+      "name": "Gmail: Send",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [900, 350],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.body.parameters.to }}",
+        "subject": "={{ $json.body.parameters.subject }}",
+        "message": "={{ $json.body.parameters.body }}"
+      }
+    },
+    {
+      "id": "format_result",
+      "name": "Code: Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 350],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const tcId = $('Code: Generate ID').first().json.tool_call_id;\nconst gData = $('Gmail: Send').first().json;\nreturn [{\n  status: 'COMPLETED',\n  tool_call_id: tcId,\n  result: { messageId: gData.id },\n  voice_response: `Email sent successfully to ${gData.to} with subject \"${gData.subject}\"`,\n  execution_time_ms: 0\n}];"
+      }
+    },
+    {
+      "id": "postgres_update_complete",
+      "name": "Postgres: UPDATE COMPLETED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1300, 350],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, result = $2, voice_response = $3, execution_time_ms = $4, completed_at = NOW() WHERE tool_call_id = $5 RETURNING *;",
+        "queryParameters": "=status=COMPLETED\nresult={{ JSON.stringify($json.result) }}\nvoice_response={{ $json.voice_response }}\ntime_ms=0\ntc_={{ $json.tool_call_id }}"
+      },
+      "retryOnFail": true
+    },
+    {
+      "id": "gate3_callback",
+      "name": "HTTP Request: Gate 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1500, 350],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callback_url }}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"status\":\"COMPLETED\",\"gate\":3,\"tool_call_id\":\"={{ $json.tool_call_id }}\",\"result\":{{ JSON.stringify($json.result) }},\"voice_response\":\"={{ $json.voice_response }}\"}"
+      }
+    },
+    {
+      "id": "respond_success",
+      "name": "Respond to Webhook: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1700, 350],
+      "parameters": {
+        "respondWith": "json"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "Code: Generate ID", "type": "main", "index": 0}]]
+    },
+    "Code: Generate ID": {
+      "main": [[{"node": "Postgres: INSERT tool_call", "type": "main", "index": 0}]]
+    },
+    "Postgres: INSERT tool_call": {
+      "main": [[{"node": "HTTP Request: Gate 1", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 1": {
+      "main": [[{"node": "IF: Check Cancel (Gate 1)", "type": "main", "index": 0}]]
+    },
+    "IF: Check Cancel (Gate 1)": {
+      "main": [
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "HTTP Request: Gate 2", "type": "main", "index": 0}]
+      ]
+    },
+    "Postgres: UPDATE CANCELLED": {
+      "main": [[{"node": "HTTP: Cancel Callback", "type": "main", "index": 0}]]
+    },
+    "HTTP: Cancel Callback": {
+      "main": [[{"node": "Respond: Cancelled", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 2": {
+      "main": [[{"node": "IF: Check Cancel (Gate 2)", "type": "main", "index": 0}]]
+    },
+    "IF: Check Cancel (Gate 2)": {
+      "main": [
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "Gmail: Send", "type": "main", "index": 0}]
+      ]
+    },
+    "Gmail: Send": {
+      "main": [[{"node": "Code: Format Result", "type": "main", "index": 0}]]
+    },
+    "Code: Format Result": {
+      "main": [[{"node": "Postgres: UPDATE COMPLETED", "type": "main", "index": 0}]]
+    },
+    "Postgres: UPDATE COMPLETED": {
+      "main": [[{"node": "HTTP Request: Gate 3", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 3": {
+      "main": [[{"node": "Respond to Webhook: Success", "type": "main", "index": 0}]]
+    }
+  }
+}

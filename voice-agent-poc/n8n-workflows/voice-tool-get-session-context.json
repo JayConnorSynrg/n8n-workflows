@@ -1,0 +1,122 @@
+{
+  "name": "Get Session Context",
+  "nodes": [
+    {
+      "id": "webhook_get_context",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [200, 300],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "path": "get-session-context",
+        "httpMethod": "GET",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "postgres_select",
+      "name": "Postgres: SELECT",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [450, 300],
+      "retryOnFail": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT context_value FROM session_context WHERE session_id = $1 AND context_key = $2 AND expires_at > NOW() LIMIT 1;",
+        "queryParams": "={{ $json.query.session_id }},{{ $json.query.context_key }}"
+      }
+    },
+    {
+      "id": "if_check_found",
+      "name": "IF: Check Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [700, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "value1": "={{ $json.length }}",
+              "value2": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond_success",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [950, 200],
+      "parameters": {
+        "responseBody": "={{ JSON.stringify({ success: true, context: $json[0].context_value }) }}"
+      }
+    },
+    {
+      "id": "respond_not_found",
+      "name": "Respond: Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [950, 400],
+      "parameters": {
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'Context not found or expired' }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Postgres: SELECT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: SELECT": {
+      "main": [
+        [
+          {
+            "node": "IF: Check Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Check Found": {
+      "main": [
+        [
+          {
+            "node": "Respond: Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond: Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

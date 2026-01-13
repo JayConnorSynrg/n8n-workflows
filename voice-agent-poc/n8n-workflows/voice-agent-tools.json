@@ -1,0 +1,376 @@
+{
+  "name": "Voice Agent Tools",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-tools",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "webhookId": "voice-tools"
+    },
+    {
+      "id": "validate-request",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "function-exists",
+              "leftValue": "={{ $json.function }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "route-function",
+      "name": "Route by Function",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [700, 300],
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value": "schedule_meeting",
+              "outputKey": "schedule_meeting"
+            },
+            {
+              "value": "send_email",
+              "outputKey": "send_email"
+            },
+            {
+              "value": "search_contacts",
+              "outputKey": "search_contacts"
+            },
+            {
+              "value": "get_calendar_availability",
+              "outputKey": "get_availability"
+            },
+            {
+              "value": "create_task",
+              "outputKey": "create_task"
+            }
+          ],
+          "fallbackOutput": "fallback"
+        },
+        "dataType": "string",
+        "value": "={{ $json.function }}"
+      }
+    },
+    {
+      "id": "schedule-meeting",
+      "name": "Schedule Meeting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 100],
+      "parameters": {
+        "jsCode": "// Schedule Meeting Tool\n// In production, replace with actual Google Calendar or O365 node\n\nconst args = $input.first().json.args || {};\nconst context = $input.first().json.context || {};\n\n// Extract meeting details\nconst title = args.title || 'Untitled Meeting';\nconst datetime = args.datetime || new Date().toISOString();\nconst duration = args.duration_minutes || 30;\nconst attendees = args.attendees || [];\nconst description = args.description || '';\n\n// Log the request with conversation context\nconsole.log(`Scheduling: ${title} at ${datetime}`);\nconsole.log(`Context: ${context.toolCallCount} previous tool calls this session`);\n\n// Mock response - replace with actual calendar integration\nreturn {\n  success: true,\n  message: `Meeting \"${title}\" scheduled for ${new Date(datetime).toLocaleString()}`,\n  data: {\n    eventId: `evt_${Date.now()}`,\n    title,\n    datetime,\n    duration,\n    attendees,\n    description,\n    status: 'confirmed'\n  }\n};"
+      }
+    },
+    {
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 220],
+      "parameters": {
+        "jsCode": "// Send Email Tool\n// In production, replace with Gmail, O365, or SMTP node\n\nconst args = $input.first().json.args || {};\nconst context = $input.first().json.context || {};\n\nconst to = args.to || '';\nconst subject = args.subject || 'No Subject';\nconst body = args.body || '';\nconst cc = args.cc || [];\n\nconsole.log(`Sending email to: ${to}`);\nconsole.log(`Subject: ${subject}`);\n\n// Mock response - replace with actual email integration\nreturn {\n  success: true,\n  message: `Email sent to ${to} with subject \"${subject}\"`,\n  data: {\n    messageId: `msg_${Date.now()}`,\n    to,\n    subject,\n    body: body.substring(0, 100) + '...', // Truncate for response\n    cc,\n    sentAt: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "search-contacts",
+      "name": "Search Contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 340],
+      "parameters": {
+        "jsCode": "// Search Contacts Tool\n// In production, replace with CRM node (HubSpot, Salesforce, etc.)\n\nconst args = $input.first().json.args || {};\nconst query = args.query || '';\nconst limit = args.limit || 5;\n\nconsole.log(`Searching contacts for: ${query}`);\n\n// Mock response - replace with actual CRM integration\nconst mockContacts = [\n  { name: 'John Smith', email: 'john.smith@example.com', company: 'Acme Inc' },\n  { name: 'Jane Doe', email: 'jane.doe@example.com', company: 'TechCorp' },\n  { name: 'Bob Johnson', email: 'bob.j@example.com', company: 'StartupXYZ' }\n];\n\nconst results = mockContacts\n  .filter(c => c.name.toLowerCase().includes(query.toLowerCase()) || \n               c.email.toLowerCase().includes(query.toLowerCase()) ||\n               c.company.toLowerCase().includes(query.toLowerCase()))\n  .slice(0, limit);\n\nreturn {\n  success: true,\n  message: results.length > 0 \n    ? `Found ${results.length} contact(s) matching \"${query}\"` \n    : `No contacts found matching \"${query}\"`,\n  data: {\n    query,\n    count: results.length,\n    contacts: results\n  }\n};"
+      }
+    },
+    {
+      "id": "get-availability",
+      "name": "Get Calendar Availability",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 460],
+      "parameters": {
+        "jsCode": "// Get Calendar Availability Tool\n// In production, replace with actual calendar API\n\nconst args = $input.first().json.args || {};\nconst context = $input.first().json.context || {};\n\nconst date = args.date || new Date().toISOString().split('T')[0];\nconst duration = args.duration_minutes || 30;\n\nconsole.log(`Checking availability for: ${date}`);\n\n// Mock response - replace with actual calendar integration\n// Generate some mock available slots\nconst slots = [\n  { start: `${date}T09:00:00`, end: `${date}T09:30:00` },\n  { start: `${date}T11:00:00`, end: `${date}T12:00:00` },\n  { start: `${date}T14:00:00`, end: `${date}T15:00:00` },\n  { start: `${date}T16:30:00`, end: `${date}T17:30:00` }\n];\n\nreturn {\n  success: true,\n  message: `Found ${slots.length} available slots on ${date}`,\n  data: {\n    date,\n    duration,\n    availableSlots: slots,\n    timezone: 'UTC'\n  }\n};"
+      }
+    },
+    {
+      "id": "create-task",
+      "name": "Create Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 580],
+      "parameters": {
+        "jsCode": "// Create Task Tool\n// In production, replace with task management integration (Asana, Todoist, etc.)\n\nconst args = $input.first().json.args || {};\nconst context = $input.first().json.context || {};\n\nconst title = args.title || 'Untitled Task';\nconst dueDate = args.due_date || null;\nconst priority = args.priority || 'medium';\n\nconsole.log(`Creating task: ${title}`);\n\n// Check if this relates to a previous tool call (context-aware)\nlet relatedTo = null;\nif (context.previousToolCalls && context.previousToolCalls.length > 0) {\n  const lastCall = context.previousToolCalls[context.previousToolCalls.length - 1];\n  if (lastCall.name === 'schedule_meeting' && lastCall.result?.success) {\n    relatedTo = lastCall.result.data.eventId;\n    console.log(`Task related to meeting: ${relatedTo}`);\n  }\n}\n\nreturn {\n  success: true,\n  message: `Task \"${title}\" created${dueDate ? ` (due: ${dueDate})` : ''}`,\n  data: {\n    taskId: `task_${Date.now()}`,\n    title,\n    dueDate,\n    priority,\n    status: 'pending',\n    relatedTo,\n    createdAt: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "fallback-handler",
+      "name": "Unknown Function",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 700],
+      "parameters": {
+        "jsCode": "// Unknown Function Handler\nconst functionName = $input.first().json.function || 'unknown';\n\nreturn {\n  success: false,\n  error: `Unknown function: ${functionName}`,\n  message: `The function \"${functionName}\" is not recognized. Available functions: schedule_meeting, send_email, search_contacts, get_calendar_availability, create_task`\n};"
+      }
+    },
+    {
+      "id": "invalid-request",
+      "name": "Invalid Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 500],
+      "parameters": {
+        "jsCode": "// Invalid Request Handler\nreturn {\n  success: false,\n  error: 'Invalid request',\n  message: 'Request must include a \"function\" field'\n};"
+      }
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1180, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "async-logging",
+      "name": "Async Log to Logging Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1180, 500],
+      "parameters": {
+        "source": "parameter",
+        "workflowId": "={{ $env.LOGGING_WORKFLOW_ID || '8LX5tt3SkO8GNuLj' }}",
+        "mode": "each",
+        "waitForSubWorkflow": false
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Route by Function",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invalid Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Function": {
+      "main": [
+        [
+          {
+            "node": "Schedule Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Calendar Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Task",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unknown Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Meeting": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Async Log to Logging Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Async Log to Logging Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Contacts": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Async Log to Logging Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Availability": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Async Log to Logging Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Task": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Async Log to Logging Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unknown Function": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invalid Request": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "voice-agent"
+    },
+    {
+      "name": "tools"
+    }
+  ]
+}
