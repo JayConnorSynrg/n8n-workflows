@@ -1,0 +1,830 @@
+# N8N Production Workflows - Claude Code Instructions
+
+**Project Type:** n8n Workflow Automation Repository
+**Purpose:** Production-grade "Business in a Box" workflow development and evolution
+**Stage:** Active Development
+**Philosophy:** Build modular, maintainable, agentic n8n workflows with pattern learning
+
+---
+
+## Project Overview
+
+This repository manages production n8n workflows that form a complete business automation system. Claude's role is to help develop, maintain, optimize, and evolve n8n workflows while documenting successful patterns and anti-patterns.
+
+### Current Workflows
+- ✅ **Candidate Resume Processing**: Review and report generation system
+- 🚧 **AI Carousel Generator** (ID: `8bhcEHkbbvnhdHBh`): High-quality carousel creation with AI image generation
+  - Location: `workflows/development/carousel-generator/`
+  - Status: Active Development
+  - Protocol: See `.claude/WORKFLOW-DEVELOPMENT-PROTOCOL.md`
+
+### Architecture Principles
+1. **Native Nodes First**: Always prioritize n8n native nodes over Code nodes
+2. **Modular Design**: Build reusable sub-workflows with Execute Workflow nodes
+3. **Agentic Capability**: Leverage n8n's exceptional modularity for autonomous operations
+4. **Git Integration**: Version control all workflows as JSON
+5. **Pattern Evolution**: Document real successes and failures in agents-evolution.md
+6. **Local-First Development**: Create and validate workflows locally before deploying to instance
+7. **🔴 CRITICAL: Always Use Latest Node Versions** - Research and use latest typeVersions from n8n documentation for ALL nodes (see Version Management Policy below)
+8. **🔴 Pattern Library**: Consult `.claude/patterns/` directory for battle-tested rules (see Pattern Evolution System below)
+
+---
+
+## 🔴 CRITICAL: Pattern Library Directory
+
+**Location**: `.claude/patterns/`
+**Purpose**: LLM-optimized rule library derived from real workflow development
+
+### Quick Access by Category
+
+| Category | Path | When to Consult |
+|----------|------|-----------------|
+| **Critical Directives** | `patterns/critical-directives/` | ALWAYS before any node implementation |
+| **Meta-Patterns** | `patterns/meta-patterns/` | For known failure points (Anti-Memory Protocol) |
+| **Node Selection** | `patterns/node-selection/` | Choosing node types |
+| **API Integration** | `patterns/api-integration/` | External API configurations |
+| **Workflow Architecture** | `patterns/workflow-architecture/` | Loops, memory, parsers |
+| **Error Handling** | `patterns/error-handling/` | Trigger compatibility, conditionals |
+| **Performance** | `patterns/performance-optimization/` | Context discovery, efficiency |
+
+### Must-Read Patterns
+
+Before implementing these node types, READ the corresponding pattern:
+
+| Node Type | Pattern to Read |
+|-----------|-----------------|
+| OpenAI image nodes | `patterns/api-integration/openai-image-nodes.md` |
+| AI Agent nodes | `patterns/workflow-architecture/ai-agent-typeversion.md` |
+| Output Parser nodes | `patterns/workflow-architecture/output-parser-config.md` |
+| Memory Buffer nodes | `patterns/workflow-architecture/memory-session-config.md` |
+| Set nodes in loops | `patterns/workflow-architecture/loop-entry-expressions.md` |
+| IF nodes | `patterns/error-handling/if-node-conditions.md` |
+| Form Trigger nodes | `patterns/error-handling/form-webhook-compatibility.md` |
+
+### Pattern Discovery
+
+```bash
+# Read main index
+cat .claude/patterns/README.md
+
+# List all patterns
+ls -la .claude/patterns/*/*.md
+
+# Search for specific topic
+grep -r "OpenAI" .claude/patterns/
+```
+
+**See**: `.claude/patterns/README.md` for complete navigation
+
+---
+
+## 🔴 CRITICAL DIRECTIVE: Version Management Policy
+
+**Issued:** 2025-11-27 via SYNRG command
+**Scope:** Universal - applies to ALL nodes in ALL workflows
+**Priority:** Overrides all previous conservative version patterns
+
+### Mandatory Node Version Protocol
+
+**BEFORE implementing ANY node:**
+
+1. **Research Latest TypeVersion**
+   ```bash
+   # Use MCP tools to find current latest version
+   mcp__n8n-mcp__get_node_info({ nodeType: "nodes-base.{name}" })
+
+   # Or check n8n official documentation
+   # https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.{name}/
+   ```
+
+2. **Get Correct Parameters for Latest Version**
+   ```bash
+   # Get parameter structure with examples
+   mcp__n8n-mcp__get_node_essentials({
+     nodeType: "nodes-base.{name}",
+     includeExamples: true
+   })
+
+   # Validate configuration
+   mcp__n8n-mcp__validate_node_operation({
+     nodeType: "nodes-base.{name}",
+     config: { /* latest version params */ },
+     profile: "ai-friendly"
+   })
+   ```
+
+3. **Implement with Latest Version - No Exceptions**
+   - ✅ Always use latest typeVersion from documentation
+   - ✅ Debug parameter issues until latest version works
+   - ✅ Research breaking changes if upgrading existing nodes
+   - ❌ NEVER rollback to older typeVersion
+   - ❌ NEVER use working examples if they have outdated versions
+   - ❌ NEVER ignore "outdated typeVersion" warnings
+
+### Enforcement Rules
+
+**Applies to ALL node types:**
+- OpenAI nodes → latest typeVersion
+- AI Agent nodes → latest typeVersion
+- Form Trigger nodes → latest typeVersion
+- HTTP Request nodes → latest typeVersion
+- Set nodes → latest typeVersion
+- Code nodes → latest typeVersion
+- **Every other node** → latest typeVersion
+
+**When validation warnings appear:**
+- ⚠️ "Outdated typeVersion: X. Latest is Y" → **CRITICAL ERROR** - Must fix immediately
+- ✅ No warnings → Proceed
+- ❌ Ignore any documentation suggesting "working version > latest version"
+
+**If latest version breaks:**
+1. Research breaking changes in version upgrade notes
+2. Update parameter structure to match new requirements
+3. Debug until working
+4. Document migration path in agents-evolution.md
+5. **Never rollback** - fix forward only
+
+### Why This Policy Exists
+
+- **Prevents technical debt** - No accumulation of outdated node versions
+- **Ensures feature access** - Always have latest capabilities available
+- **Enforces consistency** - All workflows use current n8n standards
+- **Eliminates version drift** - No mixed versions across workflows
+
+**See:** `.claude/agents-evolution.md` (Pattern: "Always Use Latest Node Versions") for complete implementation protocol
+
+---
+
+## 🔴 CRITICAL DIRECTIVE: OpenAI Image Node Anti-Memory Protocol
+
+**Issued:** 2025-12-04 via SYNRG debug analysis
+**Scope:** All OpenAI image generation and analysis nodes
+**Priority:** MANDATORY - Overrides memory-based implementation
+
+### Background: Why This Exists
+
+Claude has a documented pattern of repeatedly misconfiguring OpenAI image nodes despite having correct configurations documented. Root cause analysis identified:
+
+1. **False Confidence Loop**: After fixing a node, Claude treats knowledge as "learned" and stops checking sources
+2. **Context Drift**: Each conversation starts fresh but Claude doesn't re-read documentation
+3. **Pattern Contamination**: Copying from adjacent parameters without verifying syntax differences
+4. **Validation Skipping**: Skipping validation when "already knowing" the answer
+
+**Result:** Same mistakes repeat across conversations despite being documented and fixed.
+
+### MANDATORY Protocol: DO NOT TRUST MEMORY
+
+**BEFORE configuring ANY OpenAI image node (`@n8n/n8n-nodes-langchain.openAi`):**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  STOP - DO NOT IMPLEMENT FROM MEMORY                        │
+│                                                             │
+│  Even if you think you know the configuration, you don't.  │
+│  Memory degrades between conversations. Documentation      │
+│  doesn't. READ THE TEMPLATES BELOW.                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Step 1: READ These Reference Templates (COPY EXACTLY)
+
+**Image Generation - GPT Image 1:**
+```json
+{
+  "resource": "image",
+  "operation": "generate",
+  "model": "gpt-image-1",
+  "prompt": "={{ $json.prompt_field }}",
+  "options": {
+    "quality": "high",
+    "size": "1024x1536"
+  }
+}
+```
+
+**Image Analysis - GPT-4o Vision:**
+```json
+{
+  "resource": "image",
+  "operation": "analyze",
+  "modelId": {
+    "__rl": true,
+    "value": "gpt-4o",
+    "mode": "list",
+    "cachedResultName": "GPT-4O"
+  },
+  "text": "={{ $json.analysis_prompt }}",
+  "inputType": "base64",
+  "binaryPropertyName": "data",
+  "simplify": true,
+  "options": {
+    "detail": "high",
+    "maxTokens": 1000
+  }
+}
+```
+
+### Step 2: VALIDATE Before Applying
+
+```javascript
+// ALWAYS run this BEFORE applying configuration
+mcp__n8n-mcp__validate_node({
+  nodeType: "@n8n/n8n-nodes-langchain.openAi",
+  config: { /* your config */ },
+  mode: "full"
+});
+```
+
+### Critical Parameter Rules (MEMORIZING THESE WILL FAIL - READ EACH TIME)
+
+| Parameter | CORRECT | WRONG | Why |
+|-----------|---------|-------|-----|
+| `binaryPropertyName` | `"data"` | `"=data"` | Static property name, NOT expression |
+| `modelId` | `{ "__rl": true, "value": "gpt-4o", "mode": "list" }` | `"gpt-4o"` | ResourceLocator format required |
+| `prompt` (generation) | `"={{ $json.field }}"` | `"$json.field"` | Expression needs `={{ }}` wrapper |
+| `text` (analysis) | `"={{ $json.field }}"` | `"$json.field"` | Expression needs `={{ }}` wrapper |
+| `model` (generation) | `"gpt-image-1"` | `"={{ 'gpt-image-1' }}"` | Static enum, not expression |
+
+### The One Mistake You Keep Making
+
+**`binaryPropertyName: "=data"`** ← WRONG (breaks binary data flow)
+**`binaryPropertyName: "data"`** ← CORRECT
+
+The `=` prefix means "evaluate as expression" in n8n. Property names are NOT expressions.
+
+### Enforcement
+
+- ❌ NEVER implement OpenAI image nodes without reading this section first
+- ❌ NEVER skip validation step
+- ❌ NEVER assume memory is correct
+- ✅ ALWAYS copy from reference templates above
+- ✅ ALWAYS validate before applying
+- ✅ ALWAYS re-read this section even if you "remember" the configuration
+
+**See:** `.claude/agents-evolution.md` (Pattern: "Expression Prefix Contamination in Binary Property Names") for full context
+
+---
+
+## Workflow Development Protocol
+
+**CRITICAL:** All workflow development follows the Local-First protocol.
+
+**See:** `.claude/WORKFLOW-DEVELOPMENT-PROTOCOL.md` for complete details
+
+### Core Rules
+
+1. **Local Development First**
+   - ✅ Create workflow JSON files in `workflows/development/[workflow-name]/`
+   - ✅ Validate locally with n8n MCP tools before deployment
+   - ✅ 100% parameter coverage (no placeholders)
+   - ❌ Never edit workflows directly in n8n UI
+   - ❌ Never deploy without local validation
+
+2. **Workflow ID Management**
+   - ✅ Only modify user-specified workflow IDs
+   - ❌ Never create new workflows without explicit permission
+   - ❌ Never modify other workflow IDs
+
+3. **Context Discovery**
+   - ✅ Use `mcp__n8n-workflows__*` (GitHub templates) for patterns and examples
+   - ❌ Do NOT use instance workflows for context
+   - Exception: Fetch specific workflow by ID when updating (with user permission)
+
+4. **Validation Requirements**
+   - ✅ JSON schema validation (0 errors)
+   - ✅ Parameter completeness (0 placeholders)
+   - ✅ Connection validation (all references valid)
+   - ✅ Documentation complete (README + CHANGELOG)
+
+5. **Deployment Process**
+   ```
+   Local JSON → Validation → Testing → Update Specific Workflow ID
+   ```
+
+### Quick Start
+
+```bash
+# 1. Create local directory
+mkdir -p workflows/development/[workflow-name]
+
+# 2. Fetch current state (if updating)
+# Get workflow by ID: 8bhcEHkbbvnhdHBh
+
+# 3. Build workflow JSON with complete parameters
+
+# 4. Validate locally
+npm run validate-workflow  # (custom script)
+
+# 5. Deploy to specific workflow ID only
+# Use mcp__n8n-mcp__n8n_update_full_workflow with user-provided ID
+```
+
+---
+
+## N8N Development Guidelines
+
+### 1. Node Selection Priority
+
+**Priority Order:**
+1. **Native n8n Nodes** (always preferred)
+   - HTTP Request, Webhook, Set, IF, Switch, Merge, Split
+   - AI nodes (OpenAI, Anthropic, Hugging Face)
+   - Database nodes (PostgreSQL, MySQL, MongoDB, Supabase)
+   - Integration nodes (Slack, Gmail, Google Sheets, etc.)
+
+2. **Community Nodes** (vetted and tested)
+   - Check n8n community for existing solutions
+   - Verify maintenance and compatibility
+
+3. **Code Nodes** (only when necessary)
+   - Use JavaScript for complex transformations native nodes can't handle
+   - Keep code minimal and well-commented
+   - Document why native nodes couldn't solve the problem
+
+**Anti-Pattern:** Using Code node for simple operations that Set/IF/Switch can handle
+**Pattern:** Chain native nodes creatively before reaching for code
+
+### 2. Workflow Structure Standards
+
+**Naming Conventions:**
+- **Production workflows**: `prod-{domain}-{function}` (e.g., `prod-hr-resume-review`)
+- **Library workflows**: `lib-{category}-{utility}` (e.g., `lib-auth-oauth-retry`)
+- **Template workflows**: `template-{pattern}` (e.g., `template-data-enrichment`)
+- **Development workflows**: `dev-{feature}` (e.g., `dev-carousel-generator`)
+
+**Workflow Organization:**
+```
+workflows/
+├── production/          # Live, customer-facing workflows
+│   ├── hr/             # HR automation workflows
+│   ├── marketing/      # Marketing workflows
+│   └── operations/     # Business operations
+├── library/            # Reusable sub-workflows
+│   ├── auth/          # Authentication utilities
+│   ├── data/          # Data transformation utilities
+│   └── notifications/ # Notification handlers
+├── templates/         # Workflow templates for common patterns
+└── development/       # WIP workflows
+```
+
+### 3. Error Handling Requirements
+
+**Every production workflow MUST include:**
+- ✅ Error Trigger workflow or error branches
+- ✅ Contextual error messages with workflow name + node name
+- ✅ Retry logic for flaky external APIs (with exponential backoff)
+- ✅ Notification on critical failures (Slack/email)
+- ✅ Structured error logging
+
+**Error Handling Pattern:**
+```
+HTTP Request Node
+├─ On Success → Continue workflow
+└─ On Error →
+    ├─ Set (capture error context)
+    ├─ IF (check if retryable)
+    │   ├─ True → Wait → Retry
+    │   └─ False → Send to Error Handler
+    └─ Error Trigger (centralized error workflow)
+```
+
+### 4. Credential Management
+
+**Rules:**
+- ✅ Use n8n credential system (never hardcode)
+- ✅ Environment-specific credentials (dev, staging, prod)
+- ✅ Document required credentials in workflow README
+- ✅ Use credential inheritance for shared APIs
+- ❌ Never commit credentials to version control
+- ❌ Never expose credentials in webhook responses
+
+### 5. Testing & Validation
+
+**Before deploying to production:**
+1. Test with sample data (use Sticky Notes with test payloads)
+2. Verify error paths trigger correctly
+3. Check rate limiting won't cause API bans
+4. Validate output data structure matches expectations
+5. Test webhook triggers with actual HTTP requests
+6. Run workflow with production-like data volume
+
+**Use Playwright for validation when:**
+- Workflow has user-facing outputs (emails, PDFs, images)
+- UI elements need visual verification
+- End-to-end testing of webhook → response flow
+
+---
+
+## MCP N8N Tools Available
+
+Claude has direct access to n8n via MCP tools. **Always use these instead of manual operations:**
+
+### Workflow Management
+- `mcp__n8n-mcp__n8n_list_workflows` - List all workflows
+- `mcp__n8n-mcp__n8n_get_workflow` - Get workflow by ID
+- `mcp__n8n-mcp__n8n_create_workflow` - Create new workflow
+- `mcp__n8n-mcp__n8n_update_full_workflow` - Full workflow update
+- `mcp__n8n-mcp__n8n_update_partial_workflow` - Incremental updates (preferred)
+- `mcp__n8n-mcp__n8n_delete_workflow` - Delete workflow
+- `mcp__n8n-mcp__n8n_validate_workflow` - Validate workflow structure
+- `mcp__n8n-mcp__n8n_autofix_workflow` - Auto-fix common issues
+
+### Node Discovery
+- `mcp__n8n-mcp__list_nodes` - List available nodes
+- `mcp__n8n-mcp__search_nodes` - Search nodes by keyword
+- `mcp__n8n-mcp__get_node_info` - Get full node documentation
+- `mcp__n8n-mcp__get_node_essentials` - Quick node reference
+- `mcp__n8n-mcp__list_ai_tools` - List AI-capable nodes (263 available)
+
+### Workflow Templates
+- `mcp__n8n-mcp__search_templates` - Find workflow templates
+- `mcp__n8n-mcp__get_template` - Get template by ID
+- `mcp__n8n-mcp__list_node_templates` - Templates using specific nodes
+
+### Execution & Monitoring
+- `mcp__n8n-mcp__n8n_trigger_webhook_workflow` - Trigger workflow via webhook
+- `mcp__n8n-mcp__n8n_list_executions` - List workflow executions
+- `mcp__n8n-mcp__n8n_get_execution` - Get execution details
+
+### Version Control
+- `mcp__n8n-mcp__n8n_workflow_versions` - Manage workflow version history
+
+**Workflow Development Pattern:**
+1. Search for relevant templates/nodes
+2. Create workflow via MCP
+3. Validate workflow structure
+4. Test execution
+5. Auto-fix any issues
+6. Document pattern in agents-evolution.md
+
+---
+
+## Pattern Evolution System
+
+### Agents Evolution Documentation
+
+**File:** `.claude/agents-evolution.md`
+
+**Rules:**
+1. **Only document actual outcomes** - no speculation
+2. **Anti-patterns**: Document mistakes that caused workflow failures
+3. **Positive patterns**: Document solutions that successfully fixed issues
+4. **Include context**: Workflow name, date, what was attempted, what worked
+
+**Documentation Format:**
+```markdown
+## [YYYY-MM-DD] Workflow: {workflow-name}
+
+### Anti-Pattern: {concise description}
+**What Happened:** {detailed description of the mistake}
+**Impact:** {what broke or didn't work}
+**Why It Failed:** {root cause analysis}
+
+### Positive Pattern: {concise description}
+**Solution:** {what actually fixed it}
+**Implementation:** {step-by-step what was done}
+**Result:** {measurable improvement or success}
+**Reusable Pattern:** {when to apply this pattern again}
+```
+
+**When to document:**
+- ✅ After successfully fixing a broken workflow
+- ✅ After discovering a better approach through trial
+- ✅ After solving a complex integration challenge
+- ❌ NOT for speculative improvements
+- ❌ NOT for untested theories
+
+---
+
+## Git Integration
+
+### Workflow Version Control
+
+**Strategy:**
+1. Export workflow JSON to `workflows/` directory structure
+2. Commit with descriptive messages: `feat(hr): add resume scoring logic`
+3. Use branches for major workflow changes
+4. Tag production releases: `v1.0.0-resume-processor`
+
+**Git Workflow:**
+```bash
+# Export workflow from n8n
+# Use MCP to get workflow JSON
+# Save to appropriate directory
+
+git add workflows/production/hr/resume-review.json
+git commit -m "feat(hr): add resume review workflow with AI scoring"
+git push origin main
+```
+
+**Hooks will validate:**
+- Workflow JSON is valid
+- Required nodes are documented
+- Credentials are not hardcoded
+
+---
+
+## Slash Commands
+
+**Available n8n-specific commands:**
+- `/n8n-build` - Interactive workflow builder with node suggestions
+- `/n8n-validate` - Validate workflow structure and connections
+- `/n8n-optimize` - Analyze and optimize workflow performance
+- `/n8n-template` - Generate workflow from template pattern
+- `/n8n-debug` - Debug workflow execution issues
+- `/n8n-evolve` - Update agents-evolution.md with new pattern
+
+**See `.claude/commands/` for full command documentation**
+
+---
+
+## Prompting Guidelines
+
+**When requesting workflow development:**
+
+**Good prompts:**
+- "Build a workflow that processes incoming webhook data, enriches with API, and sends to Slack"
+- "Add error handling with retry logic to the resume processing workflow"
+- "Optimize the carousel generator to use native Image nodes instead of Code"
+
+**Include:**
+- Clear input/output requirements
+- Expected data structure
+- Error scenarios to handle
+- Performance requirements (if applicable)
+
+**Avoid vague requests:**
+- ❌ "Make it better"
+- ❌ "Fix the errors"
+- ✅ "Add exponential backoff retry for HTTP Request node when API returns 429"
+
+---
+
+## Automated Workflow Triage
+
+**Workflow health monitoring:**
+1. Check execution success rate via MCP
+2. Identify workflows with > 10% error rate
+3. Analyze common failure patterns
+4. Suggest optimizations or fixes
+5. Document in agents-evolution.md if pattern emerges
+
+**Triage automation:**
+- Use `/n8n-triage` command to analyze all workflows
+- Generates report of workflows needing attention
+- Prioritizes by business impact and error frequency
+
+---
+
+## Pre-Modification Protocol (MANDATORY)
+
+**CRITICAL**: Before modifying ANY existing workflow, you MUST complete this protocol.
+
+**This prevents breaking working functionality and aligns with SYNRG Value-First Analysis.**
+
+### Protocol Steps
+
+**1. Fetch Current State**
+```javascript
+// Get complete workflow structure
+mcp__n8n-mcp__n8n_get_workflow({ id: "workflow-id" })
+```
+
+**2. Assess Current Value**
+
+Determine what's currently working:
+```javascript
+// Check execution success rate
+mcp__n8n-mcp__n8n_list_executions({
+  workflowId: "workflow-id",
+  limit: 50,
+  status: "success"
+})
+
+// Compare with failures
+mcp__n8n-mcp__n8n_list_executions({
+  workflowId: "workflow-id",
+  limit: 50,
+  status: "error"
+})
+```
+
+**Document**:
+- Current success rate: `{X}%`
+- Stable integrations: `{list}`
+- Working nodes: `{list}`
+- Business value delivered: `{description}`
+
+**3. Impact Assessment**
+
+Answer these questions:
+- [ ] Will this change break existing functionality?
+- [ ] Can changes be tested in isolation?
+- [ ] Is rollback possible if issues arise?
+- [ ] Are dependencies documented?
+- [ ] Have users been notified of potential changes?
+
+**4. Proceed Only If**
+
+✅ **Value preservation is guaranteed**, OR
+✅ **Improvement justifies risk** AND **user explicitly approves potential breaking changes**
+
+### This Protocol Applies To
+
+- ✅ Node parameter changes
+- ✅ Connection modifications
+- ✅ New node additions to existing workflows
+- ✅ Error handling updates
+- ✅ Performance optimizations
+- ✅ Credential changes
+- ✅ ANY modification to production workflows
+
+### Example Application
+
+**Scenario**: User requests "Update resume review workflow to use GPT-4o instead of GPT-4 Turbo"
+
+**Protocol Execution**:
+```
+1. Fetch workflow → ID: prod-hr-resume-review
+
+2. Assess current value:
+   - Success rate: 98% (196/200 recent executions)
+   - Stable integrations: OpenAI API, PostgreSQL, Slack
+   - Working nodes: All 12 nodes functioning correctly
+   - Business value: Processing 50 resumes/day with high accuracy
+
+3. Impact assessment:
+   - Break functionality? Possible (model change could affect response format)
+   - Test in isolation? Yes (can clone to dev environment)
+   - Rollback possible? Yes (workflow versioning enabled)
+   - Dependencies: OpenAI prompt format, PostgreSQL schema expects certain fields
+
+4. Decision:
+   - Current success rate is 98% (excellent)
+   - Risk: GPT-4o may format responses differently
+   - Mitigation: Test in dev first, monitor closely after deployment
+   - User approval: Required before proceeding
+
+5. Recommendation to user:
+   "Current workflow has 98% success rate. Switching to GPT-4o carries risk of
+   breaking response parsing. I recommend:
+   1. Clone to dev environment
+   2. Test with 20+ sample resumes
+   3. Compare output formats
+   4. Deploy to prod only after validation
+
+   Proceed with this approach?"
+```
+
+---
+
+## Development Workflow
+
+### New Workflow Creation Process
+
+1. **Discovery**: Search templates and existing patterns
+   ```
+   Use: mcp__n8n-mcp__search_templates
+   Use: mcp__n8n-mcp__search_nodes
+   ```
+
+2. **Design**: Plan workflow structure
+   - Draw out nodes and connections
+   - Identify reusable sub-workflows
+   - Plan error handling paths
+
+3. **Build**: Create via MCP
+   ```
+   Use: mcp__n8n-mcp__n8n_create_workflow
+   ```
+
+4. **Validate**: Check structure
+   ```
+   Use: mcp__n8n-mcp__n8n_validate_workflow
+   Use: mcp__n8n-mcp__n8n_autofix_workflow (if needed)
+   ```
+
+5. **Test**: Execute with sample data
+   ```
+   Use: mcp__n8n-mcp__n8n_trigger_webhook_workflow
+   Use: mcp__n8n-mcp__n8n_get_execution
+   ```
+
+6. **Document**: Update agents-evolution.md
+   - What worked well
+   - What challenges were encountered
+   - What patterns emerged
+
+7. **Deploy**: Move to production directory
+   - Update workflow name to `prod-*`
+   - Enable workflow
+   - Monitor executions
+
+---
+
+## Business in a Box Vision
+
+This repository aims to provide complete business automation:
+
+### Planned Workflow Categories
+
+**HR & Recruitment:**
+- ✅ Resume processing and review
+- ⏳ Candidate outreach automation
+- ⏳ Interview scheduling
+- ⏳ Onboarding workflows
+
+**Marketing:**
+- ⏳ AI carousel generation
+- ⏳ Social media scheduling
+- ⏳ Content distribution
+- ⏳ Email campaign automation
+
+**Operations:**
+- ⏳ Invoice processing
+- ⏳ Expense management
+- ⏳ Reporting automation
+- ⏳ Customer support triage
+
+**Sales:**
+- ⏳ Lead enrichment
+- ⏳ CRM synchronization
+- ⏳ Proposal generation
+- ⏳ Follow-up automation
+
+Each category should have:
+- Core workflows (prod-*)
+- Utility libraries (lib-*)
+- Templates for variation (template-*)
+- Documentation and evolution patterns
+
+---
+
+## Performance & Scalability
+
+### Optimization Guidelines
+
+**When workflows become slow:**
+1. Identify bottleneck nodes (check execution times)
+2. Consider batch processing for API calls
+3. Use webhook queues for high-volume triggers
+4. Split into smaller sub-workflows
+5. Cache frequently accessed data
+
+**Scalability patterns:**
+- Use Execute Workflow for parallel processing
+- Implement rate limiting to avoid API bans
+- Queue long-running tasks
+- Monitor execution costs (AI API calls)
+
+---
+
+## Quick Reference
+
+### Common Node Patterns
+
+**API Request with Retry:**
+```
+HTTP Request → On Error → Set (attempt counter) → IF (attempts < 3)
+  → True: Wait → Loop back to HTTP Request
+  → False: Send to error handler
+```
+
+**Data Transformation:**
+```
+Webhook → Set (normalize data) → IF (validate) → Split (batch)
+  → Process each → Merge → Response
+```
+
+**AI Processing:**
+```
+Trigger → Fetch data → OpenAI/Anthropic → Parse response
+  → Set (format) → Store/Send
+```
+
+**Multi-step Enrichment:**
+```
+Input → API 1 → Set → API 2 → Set → API 3 → Merge all → Output
+```
+
+---
+
+## Support & Resources
+
+**Official n8n Docs:** https://docs.n8n.io
+**Community Forum:** https://community.n8n.io
+**Node Library:** https://n8n.io/integrations
+**Workflow Templates:** https://n8n.io/workflows
+
+**Internal Resources:**
+- `.claude/patterns/` - **LLM-Optimized Pattern Library** (categorized, searchable)
+- `.claude/patterns/README.md` - Pattern index and navigation
+- `.claude/agents-evolution.md` - Source pattern documentation (raw)
+- `.claude/prompts/` - Prompt templates for workflow building
+- `.claude/commands/` - Custom slash commands
+
+---
+
+**Last Updated:** 2025-11-22
+**Maintained By:** Claude Code + Human Team
+**Evolution:** Continuous - document patterns as they emerge

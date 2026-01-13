@@ -1,0 +1,74 @@
+{
+  "name": "Google Docs Template Population via batchUpdate API",
+  "description": "Replace template placeholders in Google Docs using HTTP Request instead of native node for reliability",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "format-replace-requests",
+      "name": "Format Replace Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "jsCode": "// Format data for Google Docs API batchUpdate\n// Adapt sourceNode references for your workflow\nconst data = $('YourDataNode').first().json;\nconst docId = $('CopyTemplateNode').first().json.id;\n\n// Define your placeholder mappings\nconst replacements = [\n  { placeholder: '{{FIELD_1}}', value: data.field_1 || '' },\n  { placeholder: '{{FIELD_2}}', value: data.field_2 || '' },\n  { placeholder: '{{FIELD_3}}', value: data.field_3 || '' }\n  // Add more placeholders as needed\n];\n\n// Build replaceAllText requests array\nconst requests = replacements.map(r => ({\n  replaceAllText: {\n    containsText: {\n      text: r.placeholder,\n      matchCase: true\n    },\n    replaceText: r.value\n  }\n}));\n\nreturn [{\n  json: {\n    documentId: docId,\n    requests: requests\n  }\n}];"
+      }
+    },
+    {
+      "id": "update-doc-api",
+      "name": "Update Document (API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 0],
+      "parameters": {
+        "url": "=https://docs.googleapis.com/v1/documents/{{ $json.documentId }}:batchUpdate",
+        "method": "POST",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDocsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: $json.requests }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Your Google OAuth Credential"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Format Replace Requests": {
+      "main": [
+        [
+          {
+            "node": "Update Document (API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredCredentials": [
+    {
+      "type": "googleDocsOAuth2Api",
+      "scopes": [
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive"
+      ]
+    }
+  ],
+  "useCases": [
+    "Invoice generation from templates",
+    "Contract/proposal generation",
+    "Report generation with dynamic data",
+    "Mail merge operations",
+    "Any template with 3+ placeholder replacements"
+  ],
+  "nodeReferences": {
+    "dataSource": "Replace 'YourDataNode' with your data source node name",
+    "templateCopy": "Replace 'CopyTemplateNode' with your template copy node name"
+  }
+}

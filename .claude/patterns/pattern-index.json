@@ -1,0 +1,840 @@
+{
+  "version": "3.0.0",
+  "generated": "2025-12-28",
+  "description": "Programmatic index for n8n workflow patterns and node references with DVMS validity tracking. Sub-agents use this to retrieve relevant patterns and node configurations on-demand.",
+  "base_path": "/Users/jelalconnor/CODING/N8N/Workflows/.claude/patterns",
+  "node_reference_path": "/Users/jelalconnor/CODING/N8N/Workflows/.claude/node-reference",
+
+  "dvms": {
+    "version": "1.0.0",
+    "description": "Documentation Validity Management System - Ensures pattern currency and prevents contradictions",
+    "documentation": "documentation-validity-management.md",
+    "freshness_tiers": {
+      "FRESH": { "max_days": 30, "action": "PROCEED", "color": "green" },
+      "AGING": { "max_days": 60, "action": "OPTIONAL_VERIFY", "color": "yellow" },
+      "STALE": { "max_days": 90, "action": "VERIFY_BEFORE_USE", "color": "orange" },
+      "EXPIRED": { "max_days": null, "action": "MANDATORY_VERIFY", "color": "red" }
+    },
+    "deprecation_lifecycle": {
+      "sunset_days": 30,
+      "archive_days": 60,
+      "purge_days": 150
+    },
+    "audit_log": "audit/validity-log.jsonl",
+    "last_global_check": "2025-12-28",
+    "next_scheduled_check": "2025-12-29"
+  },
+
+  "categories": {
+    "critical-directives": {
+      "priority": 1,
+      "description": "MANDATORY rules that override all others",
+      "apply": "ALWAYS before any implementation"
+    },
+    "meta-patterns": {
+      "priority": 2,
+      "description": "Cross-cutting patterns about pattern application",
+      "apply": "For known recurring failure points"
+    },
+    "node-reference": {
+      "priority": 2,
+      "description": "Up-to-date node configurations from MCP",
+      "apply": "ALWAYS check before implementing nodes"
+    },
+    "node-selection": {
+      "priority": 3,
+      "description": "Choosing correct node types",
+      "apply": "When selecting which node to use"
+    },
+    "api-integration": {
+      "priority": 4,
+      "description": "External API configurations",
+      "apply": "When configuring external service nodes"
+    },
+    "workflow-architecture": {
+      "priority": 4,
+      "description": "Workflow structure patterns",
+      "apply": "When designing workflow flow"
+    },
+    "error-handling": {
+      "priority": 4,
+      "description": "Error handling patterns",
+      "apply": "When implementing error paths"
+    },
+    "performance-optimization": {
+      "priority": 5,
+      "description": "Performance patterns",
+      "apply": "When optimizing existing workflows"
+    }
+  },
+
+  "patterns": [
+    {
+      "id": "latest-versions",
+      "file": "critical-directives/latest-versions.md",
+      "title": "Always Use Latest Node Versions",
+      "priority": "CRITICAL",
+      "triggers": ["typeVersion", "node version", "version", "any node"],
+      "node_types": ["*"],
+      "summary": "ALWAYS use latest typeVersion for ALL nodes. Research with MCP before implementing.",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "anti-memory-protocol",
+      "file": "meta-patterns/anti-memory-protocol.md",
+      "title": "Anti-Memory Protocol",
+      "priority": "HIGH",
+      "triggers": ["OpenAI", "image", "known failure", "repeated error"],
+      "node_types": ["@n8n/n8n-nodes-langchain.openAi"],
+      "summary": "DO NOT trust memory for known failure points. Always re-read documentation.",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "behavioral_analysis",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "openai-image-nodes",
+      "file": "api-integration/openai-image-nodes.md",
+      "title": "OpenAI Image Node Configuration",
+      "priority": "HIGH",
+      "triggers": ["OpenAI", "image", "generate", "analyze", "GPT Image", "gpt-image-1", "vision", "binary"],
+      "node_types": ["@n8n/n8n-nodes-langchain.openAi"],
+      "summary": "Critical: binaryPropertyName must be 'data' NOT '=data'. Use modelId ResourceLocator format.",
+      "anti_patterns": ["binaryPropertyName: '=data'", "modelId: 'gpt-4o'"],
+      "correct_patterns": ["binaryPropertyName: 'data'", "modelId: { __rl: true, value: 'gpt-4o' }"],
+      "node_reference": "langchain/openai-image.md",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      },
+      "contradiction_check": {
+        "last_checked": "2025-12-28",
+        "conflicts_found": 0,
+        "resolved_conflicts": []
+      }
+    },
+    {
+      "id": "ai-agent-typeversion",
+      "file": "workflow-architecture/ai-agent-typeversion.md",
+      "title": "AI Agent TypeVersion Configuration",
+      "priority": "HIGH",
+      "triggers": ["AI Agent", "agent", "langchain", "GPT-4o"],
+      "node_types": ["@n8n/n8n-nodes-langchain.agent"],
+      "summary": "Use latest AI Agent typeVersion with correct GPT-4o model configuration.",
+      "node_reference": "langchain/agent.md",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "output-parser-config",
+      "file": "workflow-architecture/output-parser-config.md",
+      "title": "Output Parser Configuration",
+      "priority": "MEDIUM",
+      "triggers": ["output parser", "structured output", "JSON schema"],
+      "node_types": ["@n8n/n8n-nodes-langchain.outputParserStructured"],
+      "summary": "Structured output parser configuration varies by typeVersion.",
+      "node_reference": "langchain/output-parser-structured.md",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "memory-session-config",
+      "file": "workflow-architecture/memory-session-config.md",
+      "title": "Memory Buffer Session Configuration",
+      "priority": "MEDIUM",
+      "triggers": ["memory", "buffer", "session", "chat history"],
+      "node_types": ["@n8n/n8n-nodes-langchain.memoryBufferWindow"],
+      "summary": "Non-chat triggers require explicit sessionId configuration.",
+      "node_reference": "langchain/memory-buffer-window.md",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "loop-entry-expressions",
+      "file": "workflow-architecture/loop-entry-expressions.md",
+      "title": "Loop Entry Expressions",
+      "priority": "MEDIUM",
+      "triggers": ["loop", "Set node", "expression", "first item"],
+      "node_types": ["n8n-nodes-base.set"],
+      "summary": "Set nodes in loops need fallback expressions for first-item scenarios.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_testing",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "if-node-conditions",
+      "file": "error-handling/if-node-conditions.md",
+      "title": "IF Node Condition Structure",
+      "priority": "MEDIUM",
+      "triggers": ["IF", "condition", "conditional", "branch"],
+      "node_types": ["n8n-nodes-base.if"],
+      "summary": "IF node typeVersion 2.2 requires specific condition structure with conditionId.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "form-webhook-compatibility",
+      "file": "error-handling/form-webhook-compatibility.md",
+      "title": "Form vs Webhook Trigger Compatibility",
+      "priority": "MEDIUM",
+      "triggers": ["form", "webhook", "trigger", "respond"],
+      "node_types": ["n8n-nodes-base.formTrigger", "n8n-nodes-base.webhook"],
+      "summary": "Form Trigger and Webhook Trigger have different response node compatibility.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_testing",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "analyze-before-building",
+      "file": "node-selection/analyze-before-building.md",
+      "title": "Analyze Before Building",
+      "priority": "MEDIUM",
+      "triggers": ["new workflow", "build", "create"],
+      "node_types": ["*"],
+      "summary": "Always analyze working examples before building new workflows.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "best_practices",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "code-vs-native-nodes",
+      "file": "node-selection/code-vs-native-nodes.md",
+      "title": "Code vs Native Nodes",
+      "priority": "MEDIUM",
+      "triggers": ["code node", "JavaScript", "native", "Set", "IF"],
+      "node_types": ["n8n-nodes-base.code", "n8n-nodes-base.set", "n8n-nodes-base.if"],
+      "summary": "Prefer native nodes over Code nodes. Only use Code for complex transformations.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "best_practices",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "google-docs-api",
+      "file": "api-integration/google-docs-api.md",
+      "title": "Google Docs API Integration",
+      "priority": "LOW",
+      "triggers": ["Google Docs", "batchUpdate", "document"],
+      "node_types": ["n8n-nodes-base.httpRequest"],
+      "summary": "Use HTTP Request for Google Docs batchUpdate operations.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "google_api_docs",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "airtable-mapping",
+      "file": "api-integration/airtable-mapping.md",
+      "title": "Airtable Column Mapping",
+      "priority": "LOW",
+      "triggers": ["Airtable", "column", "mapping"],
+      "node_types": ["n8n-nodes-base.airtable"],
+      "summary": "Manual column mapping required for programmatic Airtable updates.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "context-discovery-protocol",
+      "file": "performance-optimization/context-discovery-protocol.md",
+      "title": "Context Discovery Protocol",
+      "priority": "LOW",
+      "triggers": ["context", "analyze", "discover", "complex workflow"],
+      "node_types": ["*"],
+      "summary": "SYNRG context-finding protocol for complex workflow analysis.",
+      "validity": {
+        "last_verified": "2025-12-27",
+        "freshness_tier": "FRESH",
+        "verified_against": "synrg_methodology",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-27"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "gmail-tool-config",
+      "file": "api-integration/gmail-tool-config.md",
+      "title": "Gmail Tool Configuration",
+      "priority": "HIGH",
+      "triggers": ["Gmail", "gmailTool", "email", "send email", "AI tool"],
+      "node_types": ["n8n-nodes-base.gmailTool", "n8n-nodes-base.gmail"],
+      "summary": "Gmail Tool REQUIRES explicit resource and operation parameters. Set resource:'message' and operation:'send' for email sending.",
+      "anti_patterns": ["missing resource parameter", "missing operation parameter"],
+      "correct_patterns": ["resource: 'message'", "operation: 'send'"],
+      "reference_workflow": "kL0AP3CkRby6OmVb",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "mcp__n8n-mcp__get_node",
+        "verification_method": "automatic",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "hybrid-logging-architecture",
+      "file": "workflow-architecture/hybrid-logging-architecture.md",
+      "title": "Hybrid Logging Architecture",
+      "priority": "HIGH",
+      "triggers": ["logging", "log", "hybrid", "immutable", "AI analysis", "sub-workflow logging"],
+      "node_types": ["n8n-nodes-base.code", "n8n-nodes-base.executeWorkflow", "@n8n/n8n-nodes-langchain.agent"],
+      "summary": "Dual-layer logging: Code node captures immutable data, Logging Agent sub-workflow adds AI analysis. Ensures resilience + intelligence.",
+      "correct_patterns": ["Build Immutable Log (Code) → Call Logging Agent (executeWorkflow) → Save to Postgres"],
+      "reference_workflow": "8LX5tt3SkO8GNuLj",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "ai-tool-connections",
+      "file": "workflow-architecture/ai-tool-connections.md",
+      "title": "AI Tool Connections for Langchain Agents",
+      "priority": "CRITICAL",
+      "triggers": ["ai_tool", "connection", "langchain", "agent", "tool connection", "memory connection", "language model connection"],
+      "node_types": ["@n8n/n8n-nodes-langchain.agent", "@n8n/n8n-nodes-langchain.toolWorkflow", "@n8n/n8n-nodes-langchain.toolThink", "@n8n/n8n-nodes-langchain.memoryPostgresChat", "@n8n/n8n-nodes-langchain.lmChatOpenRouter"],
+      "summary": "AI nodes MUST use matching port types: ai_tool→ai_tool, ai_memory→ai_memory, ai_languageModel→ai_languageModel. Using 'main' port breaks tool connections.",
+      "anti_patterns": ["TTS Tool: { main: [[{type: 'main'}]] }"],
+      "correct_patterns": ["TTS Tool: { ai_tool: [[{type: 'ai_tool'}]] }"],
+      "reference_workflow": "d3CxEaYk5mkC8sLo",
+      "validity": {
+        "last_verified": "2025-12-28",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-28"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "recall-ai-audio-output",
+      "file": "api-integration/recall-ai-audio-output.md",
+      "title": "Recall.ai Audio Output Pattern",
+      "priority": "HIGH",
+      "triggers": ["Recall.ai", "recall", "audio output", "TTS", "text-to-speech", "voice bot", "bot audio", "output_audio", "Teams bot"],
+      "node_types": ["n8n-nodes-base.httpRequest", "n8n-nodes-base.code", "@n8n/n8n-nodes-langchain.openAi"],
+      "summary": "Complete pattern for sending audio to Recall.ai bots. CRITICAL: Requires automatic_audio_output in bot creation, authentication params on HTTP nodes, this.helpers for binary conversion, and explicit node references to preserve data flow.",
+      "anti_patterns": [
+        "Missing authentication/nodeCredentialType params",
+        "$helpers.getBinaryDataBuffer (use this.helpers)",
+        "$json.audio_base64 after intermediate HTTP node",
+        "Negative status matching (!= completed)",
+        "Missing automatic_audio_output in Create Bot"
+      ],
+      "correct_patterns": [
+        "authentication: 'predefinedCredentialType'",
+        "nodeCredentialType: 'httpHeaderAuth'",
+        "this.helpers.getBinaryDataBuffer(i, 'data')",
+        "$('Convert to Base64').item.json.audio_base64",
+        "Positive status matching (= in_call OR joining OR ready)"
+      ],
+      "reference_workflow": "Rg0vyFHB3u0yPaHY",
+      "validity": {
+        "last_verified": "2025-12-30",
+        "freshness_tier": "FRESH",
+        "verified_against": "production_workflow",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-30"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "voice-bot-performance-optimization",
+      "file": "architecture/voice-bot-performance-optimization.md",
+      "title": "Voice Bot Performance Optimization Plan",
+      "priority": "HIGH",
+      "triggers": ["performance", "latency", "speed", "optimization", "voice bot", "TTS", "streaming", "response time", "Cartesia", "ElevenLabs", "Deepgram"],
+      "node_types": ["n8n-nodes-base.httpRequest", "n8n-nodes-base.code", "@n8n/n8n-nodes-langchain.agent"],
+      "summary": "Enterprise-grade performance optimization strategy for voice bots. Covers TTS provider selection (Cartesia 40-90ms, ElevenLabs 75ms, Deepgram <200ms), streaming architecture, caching strategies, and 4-phase implementation roadmap targeting sub-2s response times.",
+      "correct_patterns": [
+        "Parallel processing while AI generates",
+        "Conversation context caching (30s TTL)",
+        "Optimistic bot status handling",
+        "Sentence-level TTS pipeline",
+        "Predictive acknowledgment caching"
+      ],
+      "related_patterns": ["recall-ai-audio-output", "hybrid-logging-architecture"],
+      "reference_workflows": ["Rg0vyFHB3u0yPaHY", "d3CxEaYk5mkC8sLo"],
+      "validity": {
+        "last_verified": "2025-12-30",
+        "freshness_tier": "FRESH",
+        "verified_against": "tts_provider_research",
+        "verification_method": "manual",
+        "next_verification_due": "2026-03-30"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    }
+  ],
+
+  "node_references": {
+    "langchain": {
+      "description": "LangChain AI nodes - agent, models, memory, tools",
+      "nodes": {
+        "@n8n/n8n-nodes-langchain.agent": {
+          "file": "langchain/agent.md",
+          "typeVersion": "3",
+          "last_verified": "2025-12-27",
+          "reference_workflow": "gjYSN6xNjLw8qsA1",
+          "anti_memory": true,
+          "notes": "Use typeVersion 3 with minimal params {options:{}}, NOT 3.1 with explicit params",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.chatTrigger": {
+          "file": "langchain/chat-trigger.md",
+          "typeVersion": "1.4",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.lmChatOpenAi": {
+          "file": "langchain/lm-chat-openai.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.lmChatAnthropic": {
+          "file": "langchain/lm-chat-anthropic.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.lmChatOpenRouter": {
+          "file": "langchain/lm-chat-openrouter.md",
+          "typeVersion": "1",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.lmChatGoogleGemini": {
+          "file": "langchain/lm-chat-google-gemini.md",
+          "typeVersion": "1",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.memoryBufferWindow": {
+          "file": "langchain/memory-buffer-window.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.outputParserStructured": {
+          "file": "langchain/output-parser-structured.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.openAi": {
+          "file": "langchain/openai-image.md",
+          "typeVersion": "2",
+          "last_verified": "2025-12-27",
+          "anti_memory": true,
+          "notes": "Image generation/analysis - KNOWN FAILURE POINT",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.toolWorkflow": {
+          "file": "langchain/tool-workflow.md",
+          "typeVersion": "2.2",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.toolHttpRequest": {
+          "file": "langchain/tool-http-request.md",
+          "typeVersion": "1.1",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.toolVectorStore": {
+          "file": "langchain/tool-vector-store.md",
+          "typeVersion": "1.1",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.vectorStorePinecone": {
+          "file": "langchain/vector-store-pinecone.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        },
+        "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini": {
+          "file": "langchain/embeddings-google-gemini.md",
+          "typeVersion": "1",
+          "last_verified": "2025-12-27",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-27"
+          }
+        }
+      }
+    },
+    "base": {
+      "description": "Standard n8n nodes - core workflow building blocks",
+      "nodes": {
+        "n8n-nodes-base.gmail": {
+          "file": "base/gmail.md",
+          "typeVersion": "2.2",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.gmailTool": {
+          "file": "base/gmail-tool.md",
+          "typeVersion": "2.2",
+          "last_verified": "2025-12-28",
+          "anti_memory": true,
+          "notes": "REQUIRES explicit resource and operation parameters",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.googleDrive": {
+          "file": "base/google-drive.md",
+          "typeVersion": "3",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.microsoftTeams": {
+          "file": "base/microsoft-teams.md",
+          "typeVersion": "2",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.postgres": {
+          "file": "base/postgres.md",
+          "typeVersion": "2.6",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.code": {
+          "file": "base/code.md",
+          "typeVersion": "2",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.switch": {
+          "file": "base/switch.md",
+          "typeVersion": "3.4",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.webhook": {
+          "file": "base/webhook.md",
+          "typeVersion": "2.1",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.splitInBatches": {
+          "file": "base/split-in-batches.md",
+          "typeVersion": "3",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        },
+        "n8n-nodes-base.executeWorkflow": {
+          "file": "base/execute-workflow.md",
+          "typeVersion": "1.3",
+          "last_verified": "2025-12-28",
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-03-28"
+          }
+        }
+      }
+    }
+  },
+
+  "node_type_mappings": {
+    "@n8n/n8n-nodes-langchain.openAi": ["openai-image-nodes", "anti-memory-protocol", "latest-versions"],
+    "@n8n/n8n-nodes-langchain.agent": ["ai-tool-connections", "ai-agent-typeversion", "latest-versions"],
+    "@n8n/n8n-nodes-langchain.outputParserStructured": ["output-parser-config", "latest-versions"],
+    "@n8n/n8n-nodes-langchain.memoryBufferWindow": ["memory-session-config", "latest-versions"],
+    "@n8n/n8n-nodes-langchain.chatTrigger": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.lmChatOpenAi": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.lmChatAnthropic": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.lmChatOpenRouter": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.lmChatGoogleGemini": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.toolWorkflow": ["ai-tool-connections", "latest-versions"],
+    "@n8n/n8n-nodes-langchain.toolHttpRequest": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.toolVectorStore": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.vectorStorePinecone": ["latest-versions"],
+    "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini": ["latest-versions"],
+    "n8n-nodes-base.set": ["loop-entry-expressions", "code-vs-native-nodes", "latest-versions"],
+    "n8n-nodes-base.if": ["if-node-conditions", "code-vs-native-nodes", "latest-versions"],
+    "n8n-nodes-base.switch": ["if-node-conditions", "latest-versions"],
+    "n8n-nodes-base.formTrigger": ["form-webhook-compatibility", "latest-versions"],
+    "n8n-nodes-base.webhook": ["form-webhook-compatibility", "latest-versions"],
+    "n8n-nodes-base.code": ["code-vs-native-nodes", "latest-versions"],
+    "n8n-nodes-base.httpRequest": ["latest-versions"],
+    "n8n-nodes-base.airtable": ["airtable-mapping", "latest-versions"],
+    "n8n-nodes-base.gmailTool": ["gmail-tool-config", "latest-versions"],
+    "n8n-nodes-base.gmail": ["gmail-tool-config", "latest-versions"],
+    "n8n-nodes-base.googleDrive": ["latest-versions"],
+    "n8n-nodes-base.microsoftTeams": ["latest-versions"],
+    "n8n-nodes-base.postgres": ["latest-versions"],
+    "n8n-nodes-base.splitInBatches": ["loop-entry-expressions", "latest-versions"],
+    "n8n-nodes-base.executeWorkflow": ["latest-versions"]
+  },
+
+  "task_mappings": {
+    "debug": ["anti-memory-protocol", "latest-versions"],
+    "build": ["analyze-before-building", "code-vs-native-nodes", "latest-versions"],
+    "optimize": ["context-discovery-protocol", "code-vs-native-nodes"],
+    "fix_invalid_nodes": ["anti-memory-protocol", "latest-versions"],
+    "image_generation": ["openai-image-nodes", "anti-memory-protocol"],
+    "image_analysis": ["openai-image-nodes", "anti-memory-protocol"],
+    "ai_agent": ["ai-agent-typeversion", "memory-session-config", "output-parser-config"],
+    "error_handling": ["if-node-conditions", "form-webhook-compatibility"],
+    "chat_workflow": ["ai-agent-typeversion", "memory-session-config"],
+    "rag_pipeline": ["latest-versions"],
+    "email_agent": ["gmail-tool-config", "ai-agent-typeversion"],
+    "gmail_integration": ["gmail-tool-config", "latest-versions"],
+    "validity_check": ["documentation-validity-management"],
+    "file_management": ["latest-versions"],
+    "database_operations": ["latest-versions"],
+    "batch_processing": ["loop-entry-expressions", "latest-versions"],
+    "modular_workflows": ["latest-versions"],
+    "webhook_api": ["form-webhook-compatibility", "latest-versions"],
+    "conditional_routing": ["if-node-conditions", "latest-versions"],
+    "custom_code": ["code-vs-native-nodes", "latest-versions"],
+    "teams_integration": ["latest-versions"],
+    "logging": ["hybrid-logging-architecture", "latest-versions"],
+    "hybrid_logging": ["hybrid-logging-architecture"],
+    "voice_bot": ["recall-ai-audio-output", "voice-bot-performance-optimization", "hybrid-logging-architecture", "ai-agent-typeversion"],
+    "tts_integration": ["recall-ai-audio-output", "voice-bot-performance-optimization"],
+    "performance_optimization": ["voice-bot-performance-optimization", "context-discovery-protocol"],
+    "recall_ai": ["recall-ai-audio-output", "voice-bot-performance-optimization"]
+  },
+
+  "lookup_protocol": {
+    "description": "Protocol for looking up node configurations during build/debug with DVMS validity checks",
+    "steps": [
+      {
+        "step": 0,
+        "action": "DVMS Validity Gate",
+        "check": "pattern.validity.freshness_tier",
+        "if_expired": "Trigger MCP re-validation before proceeding",
+        "if_deprecated": "Show warning and superseded_by pattern"
+      },
+      {
+        "step": 1,
+        "action": "Check node_references for node type",
+        "path": "node_references.langchain[nodeType]",
+        "if_found": "Read reference file from node_reference_path + file"
+      },
+      {
+        "step": 2,
+        "action": "Check if anti_memory flag is set",
+        "if_true": "MANDATORY: Read reference file before implementing"
+      },
+      {
+        "step": 3,
+        "action": "Check node_type_mappings for applicable patterns",
+        "path": "node_type_mappings[nodeType]",
+        "if_found": "Read each pattern file"
+      },
+      {
+        "step": 4,
+        "action": "If no reference exists, use MCP to fetch schema",
+        "tool": "mcp__n8n-mcp__get_node",
+        "params": { "nodeType": "...", "mode": "info", "detail": "full" }
+      },
+      {
+        "step": 5,
+        "action": "Run contradiction check against existing patterns",
+        "tool": "DVMS.detectContradictions",
+        "if_conflicts": "Trigger resolution protocol before proceeding"
+      }
+    ]
+  },
+
+  "validity_protocol": {
+    "description": "DVMS validity checking protocol - runs before any pattern access",
+    "freshness_check": {
+      "calculation": "(current_date - last_verified) in days",
+      "tiers": {
+        "0-30": "FRESH - Proceed",
+        "31-60": "AGING - Optional verification",
+        "61-90": "STALE - Verify before use",
+        "91+": "EXPIRED - Mandatory verification"
+      }
+    },
+    "revalidation_trigger": {
+      "on_expired": "Delegate to n8n-mcp-delegate for current schema",
+      "on_contradiction": "Run resolution protocol",
+      "on_access": "Update last_accessed timestamp"
+    },
+    "deprecation_check": {
+      "if_deprecated": "Show warning with migration guide",
+      "if_sunset": "Strong warning, pattern archived soon",
+      "if_archived": "Block access, redirect to superseded_by"
+    }
+  }
+}
