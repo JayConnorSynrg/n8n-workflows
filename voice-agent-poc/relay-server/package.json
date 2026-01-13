@@ -1,0 +1,22 @@
+{
+  "name": "voice-agent-relay-server",
+  "version": "1.0.0",
+  "description": "WebSocket relay server bridging browser to OpenAI Realtime API",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index-enhanced.js",
+    "dev": "LOG_LEVEL=DEBUG node index-enhanced.js",
+    "start:basic": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.0",
+    "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "",
+  "license": "MIT"
+}
