@@ -118,7 +118,7 @@
         "operation": "executeQuery",
         "query": "UPDATE tool_calls SET status = $1, completed_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
         "options": {
-          "queryReplacement": "CANCELLED,={{ $('Code: Generate ID').first().json.tool_call_id }}"
+          "queryReplacement": "={{ 'CANCELLED' }}, {{ $('Code: Generate ID').first().json.tool_call_id }}"
         }
       },
       "retryOnFail": true,
@@ -334,7 +334,7 @@
       "main": [[{"node": "HTTP Request: Gate 1", "type": "main", "index": 0}]]
     },
     "HTTP Request: Gate 1": {
-      "main": [[{"node": "IF: Check Cancel (Gate 1)", "type": "main", "index": 0}]]
+      "main": [[{"node": "HTTP Request: Gate 2", "type": "main", "index": 0}]]
     },
     "IF: Check Cancel (Gate 1)": {
       "main": [
