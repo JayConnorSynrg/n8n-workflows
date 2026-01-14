@@ -1,122 +1,319 @@
 {
-  "name": "Get Session Context",
+  "name": "Voice Tool: Get Session Context",
   "nodes": [
     {
-      "id": "webhook_get_context",
+      "id": "webhook",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [200, 300],
-      "onError": "continueRegularOutput",
+      "position": [-192, 80],
       "parameters": {
         "path": "get-session-context",
-        "httpMethod": "GET",
-        "responseMode": "responseNode"
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "get-session-context-001",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "generate_id",
+      "name": "Code: Generate ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 80],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Generate tool_call_id and preserve original request from body\nconst timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nconst body = $input.first().json.body || $input.first().json || {};\nreturn [{\n  tool_call_id: `tc_${timestamp}_${random}`,\n  callback_url: body.callback_url || null,\n  session_id: body.session_id || null,\n  intent_id: body.intent_id || null,\n  context_key: body.context_key || 'last_query_results'\n}];"
       }
     },
     {
-      "id": "postgres_select",
-      "name": "Postgres: SELECT",
+      "id": "postgres_insert",
+      "name": "Postgres: INSERT tool_call",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [450, 300],
-      "retryOnFail": true,
+      "position": [208, 80],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT context_value FROM session_context WHERE session_id = $1 AND context_key = $2 AND expires_at > NOW() LIMIT 1;",
-        "queryParams": "={{ $json.query.session_id }},{{ $json.query.context_key }}"
+        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, function_name, parameters, status, callback_url, created_at) VALUES ($1, $2, $3, 'get_session_context', $4::jsonb, 'EXECUTING', $5, NOW()) RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ $json.tool_call_id }}, {{ $json.session_id }}, {{ $json.intent_id }}, {{ JSON.stringify({ context_key: $json.context_key }) }}, {{ $json.callback_url }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
       }
     },
     {
-      "id": "if_check_found",
-      "name": "IF: Check Found",
+      "id": "gate1_callback",
+      "name": "HTTP Request: Gate 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [400, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'QUERYING', gate: 1, cancellable: true, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, message: 'Retrieving session context...' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "if_cancel_gate1",
+      "name": "IF: Check Cancel (Gate 1)",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
-      "position": [700, 300],
-      "onError": "continueErrorOutput",
+      "position": [672, 96],
       "parameters": {
         "conditions": {
-          "combinator": "and",
           "options": {
             "version": 2,
             "leftValue": "",
             "caseSensitive": true,
             "typeValidation": "strict"
           },
+          "combinator": "and",
           "conditions": [
             {
-              "value1": "={{ $json.length }}",
-              "value2": 0,
+              "leftValue": "={{ $json.cancel }}",
               "operator": {
-                "type": "number",
-                "operation": "gt"
-              }
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true,
+              "id": "condition-cancel-check"
             }
           ]
+        },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "postgres_cancel",
+      "name": "Postgres: UPDATE CANCELLED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [928, 32],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, completed_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
+        "options": {
+          "queryReplacement": "CANCELLED,={{ $('Code: Generate ID').first().json.tool_call_id }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
         }
       }
     },
     {
-      "id": "respond_success",
-      "name": "Respond: Success",
+      "id": "http_cancel_callback",
+      "name": "HTTP: Cancel Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1136, 32],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code: Generate ID').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'CANCELLED', gate: 0, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, voice_response: 'Context retrieval cancelled.' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "respond_cancelled",
+      "name": "Respond: Cancelled",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [950, 200],
+      "position": [1328, 32],
       "parameters": {
-        "responseBody": "={{ JSON.stringify({ success: true, context: $json[0].context_value }) }}"
+        "respondWith": "json",
+        "options": {}
       }
     },
     {
-      "id": "respond_not_found",
-      "name": "Respond: Not Found",
+      "id": "postgres_select_context",
+      "name": "Postgres: SELECT context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [928, 224],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT context_value FROM session_context WHERE session_id = $1 AND context_key = $2 AND expires_at > NOW() LIMIT 1;",
+        "options": {
+          "queryReplacement": "{{ $('Code: Generate ID').first().json.session_id }}, {{ $('Code: Generate ID').first().json.context_key }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "id": "format_result",
+      "name": "Code: Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1136, 224],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const genData = $('Code: Generate ID').first().json;\nconst dbResult = $input.first().json;\n\n// Check if context was found\nconst hasContext = dbResult && (Array.isArray(dbResult) ? dbResult.length > 0 : dbResult.context_value !== undefined);\nconst contextValue = hasContext \n  ? (Array.isArray(dbResult) ? dbResult[0].context_value : dbResult.context_value)\n  : null;\n\nreturn [{\n  status: hasContext ? 'COMPLETED' : 'NOT_FOUND',\n  tool_call_id: genData.tool_call_id,\n  intent_id: genData.intent_id,\n  callback_url: genData.callback_url,\n  context_key: genData.context_key,\n  context_value: contextValue,\n  result: {\n    found: hasContext,\n    context_key: genData.context_key,\n    context_value: contextValue\n  },\n  voice_response: hasContext \n    ? `Retrieved context for ${genData.context_key}. Data is available.`\n    : `No context found for ${genData.context_key} or it has expired.`\n}];"
+      }
+    },
+    {
+      "id": "postgres_update_complete",
+      "name": "Postgres: UPDATE COMPLETED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1344, 224],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, result = $2::jsonb, voice_response = $3, completed_at = NOW() WHERE tool_call_id = $4 RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ $json.status }}, {{ JSON.stringify($json.result) }}, {{ $json.voice_response }}, {{ $json.tool_call_id }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "id": "gate2_callback",
+      "name": "HTTP Request: Gate 2 (Completion)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1536, 224],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $json.status, gate: 2, tool_call_id: $json.tool_call_id, intent_id: $json.intent_id, result: $json.result, context_available: $json.result.found, context_key: $json.context_key, voice_response: $json.voice_response }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "respond_success",
+      "name": "Respond to Webhook: Success",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [950, 400],
+      "position": [1744, 224],
       "parameters": {
-        "responseBody": "={{ JSON.stringify({ success: false, error: 'Context not found or expired' }) }}"
+        "respondWith": "json",
+        "options": {}
       }
     }
   ],
   "connections": {
     "Webhook": {
+      "main": [[{"node": "Code: Generate ID", "type": "main", "index": 0}]]
+    },
+    "Code: Generate ID": {
+      "main": [[{"node": "Postgres: INSERT tool_call", "type": "main", "index": 0}]]
+    },
+    "Postgres: INSERT tool_call": {
+      "main": [[{"node": "HTTP Request: Gate 1", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 1": {
+      "main": [[{"node": "IF: Check Cancel (Gate 1)", "type": "main", "index": 0}]]
+    },
+    "IF: Check Cancel (Gate 1)": {
       "main": [
-        [
-          {
-            "node": "Postgres: SELECT",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "Postgres: SELECT context", "type": "main", "index": 0}]
       ]
     },
-    "Postgres: SELECT": {
-      "main": [
-        [
-          {
-            "node": "IF: Check Found",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Postgres: UPDATE CANCELLED": {
+      "main": [[{"node": "HTTP: Cancel Callback", "type": "main", "index": 0}]]
     },
-    "IF: Check Found": {
-      "main": [
-        [
-          {
-            "node": "Respond: Success",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Respond: Not Found",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "HTTP: Cancel Callback": {
+      "main": [[{"node": "Respond: Cancelled", "type": "main", "index": 0}]]
+    },
+    "Postgres: SELECT context": {
+      "main": [[{"node": "Code: Format Result", "type": "main", "index": 0}]]
+    },
+    "Code: Format Result": {
+      "main": [[{"node": "Postgres: UPDATE COMPLETED", "type": "main", "index": 0}]]
+    },
+    "Postgres: UPDATE COMPLETED": {
+      "main": [[{"node": "HTTP Request: Gate 2 (Completion)", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 2 (Completion)": {
+      "main": [[{"node": "Respond to Webhook: Success", "type": "main", "index": 0}]]
     }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "syncedFromDeployed": "Hk1ro3MuzlDNuAFi",
+    "syncedAt": "2026-01-14T00:00:00.000Z"
   }
 }

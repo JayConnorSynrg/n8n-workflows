@@ -6,12 +6,14 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [100, 100],
+      "position": [-192, 80],
       "parameters": {
         "path": "execute-gmail",
         "httpMethod": "POST",
-        "responseMode": "responseNode"
+        "responseMode": "responseNode",
+        "options": {}
       },
+      "webhookId": "fbc7f913-cca1-48c7-a229-301429841914",
       "onError": "continueRegularOutput"
     },
     {
@@ -19,10 +21,10 @@
       "name": "Code: Generate ID",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 100],
+      "position": [0, 80],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nreturn [{ tool_call_id: `tc_${timestamp}_${random}` }];"
+        "jsCode": "// Generate tool_call_id and preserve original request from body\nconst timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nconst body = $input.first().json.body || $input.first().json || {};\nreturn [{\n  tool_call_id: `tc_${timestamp}_${random}`,\n  callback_url: body.callback_url || null,\n  session_id: body.session_id || null,\n  intent_id: body.intent_id || null,\n  parameters: body.parameters || {}\n}];"
       }
     },
     {
@@ -30,55 +32,79 @@
       "name": "Postgres: INSERT tool_call",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [500, 100],
+      "position": [208, 80],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, tool_name, status, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *;",
-        "queryParameters": "=tc_={{ $node[\"Code: Generate ID\"].json.tool_call_id }}\nsess_={{ $json.body.session_id }}\nintent_={{ $json.body.intent_id }}\ntool_name=gmail\nstatus=EXECUTING"
+        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, function_name, parameters, status, callback_url, created_at) VALUES ($1, $2, $3, 'send_email', $4::jsonb, 'EXECUTING', $5, NOW()) RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ $json.tool_call_id }}, {{ $json.session_id }}, {{ $json.intent_id }}, {{ JSON.stringify($json.parameters) }}, {{ $json.callback_url }}"
+        }
       },
-      "retryOnFail": true
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
     },
     {
       "id": "gate1_callback",
       "name": "HTTP Request: Gate 1",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [700, 100],
+      "position": [400, 80],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.body.callback_url }}",
-        "headers": {
-          "Content-Type": "application/json"
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
         },
-        "body": "{\"status\":\"PREPARING\",\"gate\":1,\"cancellable\":true,\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
-      }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'PREPARING', gate: 1, cancellable: true, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, message: 'Preparing to send email...' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "id": "if_cancel_gate1",
       "name": "IF: Check Cancel (Gate 1)",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
-      "position": [900, 100],
+      "position": [672, 96],
       "parameters": {
         "conditions": {
           "options": {
             "version": 2,
+            "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "strict",
-            "leftValue": ""
+            "typeValidation": "strict"
           },
           "combinator": "and",
           "conditions": [
             {
-              "leftValue": "={{ $json.body.cancel }}",
+              "leftValue": "={{ $json.cancel }}",
               "operator": {
                 "operation": "equals",
                 "type": "boolean"
               },
-              "rightValue": true
+              "rightValue": true,
+              "id": "condition-1768345702969-j8bxvnnd2"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "onError": "continueErrorOutput"
     },
@@ -87,37 +113,60 @@
       "name": "Postgres: UPDATE CANCELLED",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1100, 50],
+      "position": [1344, 32],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE tool_calls SET status = $1, cancelled_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
-        "queryParameters": "=status=CANCELLED\ntc_={{ $node[\"Code: Generate ID\"].json.tool_call_id }}"
+        "query": "UPDATE tool_calls SET status = $1, completed_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
+        "options": {
+          "queryReplacement": "CANCELLED,={{ $('Code: Generate ID').first().json.tool_call_id }}"
+        }
       },
-      "retryOnFail": true
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
     },
     {
       "id": "http_cancel_callback",
       "name": "HTTP: Cancel Callback",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1300, 50],
+      "position": [1552, 32],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.body.callback_url }}",
-        "headers": {
-          "Content-Type": "application/json"
+        "url": "={{ $('Code: Generate ID').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
         },
-        "body": "{\"status\":\"CANCELLED\",\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
-      }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'CANCELLED', gate: 0, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, voice_response: 'Email cancelled by user.' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "id": "respond_cancelled",
       "name": "Respond: Cancelled",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [1500, 50],
+      "position": [1744, 32],
       "parameters": {
-        "respondWith": "json"
+        "respondWith": "json",
+        "options": {}
       }
     },
     {
@@ -125,42 +174,58 @@
       "name": "HTTP Request: Gate 2",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [900, 200],
+      "position": [928, 224],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.body.callback_url }}",
-        "headers": {
-          "Content-Type": "application/json"
+        "url": "={{ $('Code: Generate ID').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
         },
-        "body": "{\"status\":\"READY_TO_SEND\",\"gate\":2,\"requires_confirmation\":true,\"tool_call_id\":\"={{ $node[\\\"Code: Generate ID\\\"].json.tool_call_id }}\"}"
-      }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'READY_TO_SEND', gate: 2, requires_confirmation: true, cancellable: true, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, message: 'Email is ready to send. Confirm to proceed.' }) }}",
+        "options": {
+          "timeout": 35000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
     },
     {
       "id": "if_cancel_gate2",
       "name": "IF: Check Cancel (Gate 2)",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
-      "position": [1100, 200],
+      "position": [1120, 160],
       "parameters": {
         "conditions": {
           "options": {
             "version": 2,
+            "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "strict",
-            "leftValue": ""
+            "typeValidation": "strict"
           },
           "combinator": "and",
           "conditions": [
             {
-              "leftValue": "={{ $json.body.cancel }}",
+              "leftValue": "={{ $json.cancel }}",
               "operator": {
                 "operation": "equals",
                 "type": "boolean"
               },
-              "rightValue": true
+              "rightValue": true,
+              "id": "condition-1768345702969-g7cgtd6ew"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "onError": "continueErrorOutput"
     },
@@ -169,13 +234,20 @@
       "name": "Gmail: Send",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
-      "position": [900, 350],
+      "position": [1392, 240],
       "parameters": {
         "resource": "message",
         "operation": "send",
-        "sendTo": "={{ $json.body.parameters.to }}",
-        "subject": "={{ $json.body.parameters.subject }}",
-        "message": "={{ $json.body.parameters.body }}"
+        "sendTo": "={{ $('Code: Generate ID').first().json.parameters.to }}",
+        "subject": "={{ $('Code: Generate ID').first().json.parameters.subject }}",
+        "message": "={{ $('Code: Generate ID').first().json.parameters.body }}"
+      },
+      "webhookId": "043db89e-b541-48ef-a776-b87611c5b41d",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Wagsju9B8ofYq2Sl",
+          "name": "Jayconnor@synrgscaling.com"
+        }
       }
     },
     {
@@ -183,10 +255,10 @@
       "name": "Code: Format Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 350],
+      "position": [1584, 240],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const tcId = $('Code: Generate ID').first().json.tool_call_id;\nconst gData = $('Gmail: Send').first().json;\nreturn [{\n  status: 'COMPLETED',\n  tool_call_id: tcId,\n  result: { messageId: gData.id },\n  voice_response: `Email sent successfully to ${gData.to} with subject \"${gData.subject}\"`,\n  execution_time_ms: 0\n}];"
+        "jsCode": "const genData = $('Code: Generate ID').first().json;\nconst gmailData = $('Gmail: Send').first().json;\nreturn [{\n  status: 'COMPLETED',\n  tool_call_id: genData.tool_call_id,\n  intent_id: genData.intent_id,\n  callback_url: genData.callback_url,\n  result: { messageId: gmailData.id, threadId: gmailData.threadId },\n  voice_response: `Email sent successfully to ${genData.parameters.to} with subject \"${genData.parameters.subject}\"`,\n  execution_time_ms: 0\n}];"
       }
     },
     {
@@ -194,37 +266,60 @@
       "name": "Postgres: UPDATE COMPLETED",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1300, 350],
+      "position": [1792, 240],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE tool_calls SET status = $1, result = $2, voice_response = $3, execution_time_ms = $4, completed_at = NOW() WHERE tool_call_id = $5 RETURNING *;",
-        "queryParameters": "=status=COMPLETED\nresult={{ JSON.stringify($json.result) }}\nvoice_response={{ $json.voice_response }}\ntime_ms=0\ntc_={{ $json.tool_call_id }}"
+        "query": "UPDATE tool_calls SET status = 'COMPLETED', result = $1::jsonb, voice_response = $2, execution_time_ms = 0, completed_at = NOW() WHERE tool_call_id = $3 RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ JSON.stringify($json.result) }}, {{ $json.voice_response }}, {{ $json.tool_call_id }}"
+        }
       },
-      "retryOnFail": true
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
     },
     {
       "id": "gate3_callback",
       "name": "HTTP Request: Gate 3",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1500, 350],
+      "position": [1984, 240],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.body.callback_url }}",
-        "headers": {
-          "Content-Type": "application/json"
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
         },
-        "body": "{\"status\":\"COMPLETED\",\"gate\":3,\"tool_call_id\":\"={{ $json.tool_call_id }}\",\"result\":{{ JSON.stringify($json.result) }},\"voice_response\":\"={{ $json.voice_response }}\"}"
-      }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'COMPLETED', gate: 3, tool_call_id: $json.tool_call_id, intent_id: $json.intent_id, result: $json.result, voice_response: $json.voice_response, execution_time_ms: $json.execution_time_ms }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "id": "respond_success",
       "name": "Respond to Webhook: Success",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [1700, 350],
+      "position": [2192, 240],
       "parameters": {
-        "respondWith": "json"
+        "respondWith": "json",
+        "options": {}
       }
     }
   ],
@@ -274,5 +369,20 @@
     "HTTP Request: Gate 3": {
       "main": [[{"node": "Respond to Webhook: Success", "type": "main", "index": 0}]]
     }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "syncedFromDeployed": "kBuTRrXTJF1EEBEs",
+    "syncedAt": "2026-01-13T00:00:00.000Z"
   }
 }

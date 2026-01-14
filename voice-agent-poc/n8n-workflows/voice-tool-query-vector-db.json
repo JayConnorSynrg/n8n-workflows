@@ -6,55 +6,58 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [250, 100],
-      "webhookId": "query-vector-db",
+      "position": [-192, 80],
       "parameters": {
         "path": "query-vector-db",
         "httpMethod": "POST",
         "responseMode": "responseNode",
         "options": {}
-      }
+      },
+      "webhookId": "query-vector-db-001",
+      "onError": "continueRegularOutput"
     },
     {
-      "id": "generate_tool_call_id",
-      "name": "Generate tool_call_id",
+      "id": "generate_id",
+      "name": "Code: Generate ID",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [450, 100],
+      "position": [0, 80],
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst tool_call_id = 'call_' + crypto.randomBytes(8).toString('hex');\nreturn [{ json: { tool_call_id } }];"
+        "language": "javaScript",
+        "jsCode": "// Generate tool_call_id and preserve original request from body\nconst timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nconst body = $input.first().json.body || $input.first().json || {};\nreturn [{\n  tool_call_id: `tc_${timestamp}_${random}`,\n  callback_url: body.callback_url || null,\n  session_id: body.session_id || null,\n  intent_id: body.intent_id || null,\n  parameters: body.parameters || {}\n}];"
       }
     },
     {
-      "id": "postgres_insert_tool_call",
+      "id": "postgres_insert",
       "name": "Postgres: INSERT tool_call",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [650, 100],
-      "credentials": {
-        "postgres": "postgres"
-      },
+      "position": [208, 80],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, tool_name, status, created_at, updated_at)\nVALUES ($1, $2, $3, $4, $5, NOW(), NOW())\nRETURNING *;",
-        "queryParams": [
-          "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}",
-          "{{ $json.body.session_id }}",
-          "{{ $json.body.intent_id }}",
-          "query_vector_db",
-          "EXECUTING"
-        ]
+        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, function_name, parameters, status, callback_url, created_at) VALUES ($1, $2, $3, 'query_vector_db', $4::jsonb, 'EXECUTING', $5, NOW()) RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ $json.tool_call_id }}, {{ $json.session_id }}, {{ $json.intent_id }}, {{ JSON.stringify($json.parameters) }}, {{ $json.callback_url }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
       }
     },
     {
-      "id": "http_gate1_callback",
-      "name": "HTTP Request: Gate 1 callback",
+      "id": "gate1_callback",
+      "name": "HTTP Request: Gate 1",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [850, 100],
+      "typeVersion": 4.3,
+      "position": [400, 80],
       "parameters": {
-        "url": "{{ $json.body.callback_url }}",
         "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
@@ -64,73 +67,78 @@
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "tool_call_id",
-              "value": "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}"
-            },
-            {
-              "name": "status",
-              "value": "QUERYING"
-            },
-            {
-              "name": "cancellable",
-              "value": "true"
-            },
-            {
-              "name": "timestamp",
-              "value": "{{ new Date().toISOString() }}"
-            }
-          ]
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'QUERYING', gate: 1, cancellable: true, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, message: 'Querying vector database...' }) }}",
+        "options": {
+          "timeout": 10000
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "id": "check_cancel_response",
-      "name": "IF: Check cancel response",
+      "id": "if_cancel_gate1",
+      "name": "IF: Check Cancel (Gate 1)",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [1050, 100],
+      "typeVersion": 2.3,
+      "position": [672, 96],
       "parameters": {
         "conditions": {
-          "string": [
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
             {
-              "value1": "{{ $json.response.cancel_requested }}",
-              "value2": "true",
-              "operation": "equals"
+              "leftValue": "={{ $json.cancel }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true,
+              "id": "condition-cancel-check"
             }
           ]
-        }
-      }
+        },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
     },
     {
-      "id": "postgres_update_cancelled",
+      "id": "postgres_cancel",
       "name": "Postgres: UPDATE CANCELLED",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [850, 300],
-      "credentials": {
-        "postgres": "postgres"
-      },
+      "position": [928, 32],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE tool_calls SET status = $1, updated_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
-        "queryParams": [
-          "CANCELLED",
-          "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}"
-        ]
+        "query": "UPDATE tool_calls SET status = $1, completed_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
+        "options": {
+          "queryReplacement": "CANCELLED,={{ $('Code: Generate ID').first().json.tool_call_id }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
       }
     },
     {
       "id": "http_cancel_callback",
-      "name": "HTTP: Cancel callback",
+      "name": "HTTP: Cancel Callback",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1050, 300],
+      "typeVersion": 4.3,
+      "position": [1136, 32],
       "parameters": {
-        "url": "{{ $json.body.callback_url }}",
         "method": "POST",
+        "url": "={{ $('Code: Generate ID').first().json.callback_url }}",
+        "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
@@ -140,53 +148,47 @@
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "tool_call_id",
-              "value": "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}"
-            },
-            {
-              "name": "status",
-              "value": "CANCELLED"
-            },
-            {
-              "name": "message",
-              "value": "Query cancelled by user"
-            }
-          ]
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'CANCELLED', gate: 0, tool_call_id: $('Code: Generate ID').first().json.tool_call_id, intent_id: $('Code: Generate ID').first().json.intent_id, voice_response: 'Vector database query cancelled.' }) }}",
+        "options": {
+          "timeout": 10000
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "id": "respond_cancelled",
       "name": "Respond: Cancelled",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [1250, 300],
+      "typeVersion": 1.5,
+      "position": [1328, 32],
       "parameters": {
-        "responseCode": 200,
-        "responseBody": "{{ { status: 'CANCELLED', tool_call_id: $node[\"generate_tool_call_id\"].json.tool_call_id } }}"
+        "respondWith": "json",
+        "options": {}
       }
     },
     {
-      "id": "code_execute_vector_query",
-      "name": "Code: Execute vector query",
+      "id": "execute_vector_query",
+      "name": "Code: Execute Vector Query",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1250, 100],
+      "position": [928, 224],
       "parameters": {
-        "jsCode": "// Mock vector database query - replace with real Pinecone/Supabase call\nconst params = $node[\"Webhook\"].json.body.parameters;\nconst mockResults = {\n  query: params.user_query,\n  structured_query: params.structured_query,\n  results: [\n    { id: \"doc_1\", content: \"Q3 Sales Report - Northwest Region showing strong growth in enterprise accounts\", score: 0.95 },\n    { id: \"doc_2\", content: \"Northwest Region Analysis - Regional expansion strategy and market penetration\", score: 0.89 }\n  ],\n  summary: \"Found 2 relevant documents matching your query about Q3 sales data for the northwest region.\",\n  metrics: {\n    total_sales: \"$4.2M\",\n    units_sold: 12450,\n    growth_rate: \"15.2%\"\n  }\n};\nreturn [{ json: mockResults }];"
+        "language": "javaScript",
+        "jsCode": "// Mock vector database query - replace with real Pinecone/Supabase call\nconst genData = $('Code: Generate ID').first().json;\nconst params = genData.parameters;\n\n// Simulate vector query results\nconst mockResults = {\n  query: params.user_query || 'default query',\n  structured_query: params.structured_query || {},\n  results: [\n    { id: 'doc_1', content: 'Q3 Sales Report - Northwest Region showing strong growth in enterprise accounts', score: 0.95 },\n    { id: 'doc_2', content: 'Northwest Region Analysis - Regional expansion strategy and market penetration', score: 0.89 }\n  ],\n  summary: 'Found 2 relevant documents matching your query about Q3 sales data for the northwest region.',\n  metrics: {\n    total_sales: '$4.2M',\n    units_sold: 12450,\n    growth_rate: '15.2%'\n  }\n};\n\nreturn [{ json: mockResults }];"
       }
     },
     {
-      "id": "code_format_results",
-      "name": "Code: Format query results",
+      "id": "format_results",
+      "name": "Code: Format Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1450, 100],
+      "position": [1136, 224],
       "parameters": {
-        "jsCode": "// Format results for storage and voice response\nconst queryData = $json;\nconst formatted = {\n  query: queryData.query,\n  structured_query: queryData.structured_query,\n  results: queryData.results,\n  summary: queryData.summary,\n  metrics: queryData.metrics,\n  formatted_response: `Query Results: ${queryData.summary} The query found information about ${queryData.metrics.total_sales} in total sales with ${queryData.metrics.units_sold} units sold, representing a ${queryData.metrics.growth_rate} growth rate.`,\n  timestamp: new Date().toISOString()\n};\nreturn [{ json: formatted }];"
+        "language": "javaScript",
+        "jsCode": "const genData = $('Code: Generate ID').first().json;\nconst queryData = $input.first().json;\n\nconst formatted = {\n  tool_call_id: genData.tool_call_id,\n  intent_id: genData.intent_id,\n  callback_url: genData.callback_url,\n  session_id: genData.session_id,\n  query: queryData.query,\n  structured_query: queryData.structured_query,\n  results: queryData.results,\n  summary: queryData.summary,\n  metrics: queryData.metrics,\n  result: {\n    query: queryData.query,\n    results_count: queryData.results.length,\n    summary: queryData.summary,\n    metrics: queryData.metrics\n  },\n  voice_response: `Query Results: ${queryData.summary} The query found information about ${queryData.metrics.total_sales} in total sales with ${queryData.metrics.units_sold} units sold, representing a ${queryData.metrics.growth_rate} growth rate.`,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: formatted }];"
       }
     },
     {
@@ -194,47 +196,53 @@
       "name": "Postgres: UPSERT session_context",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1650, 100],
-      "credentials": {
-        "postgres": "postgres"
-      },
+      "position": [1344, 224],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO session_context (session_id, context_key, context_value, expires_at)\nVALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')\nON CONFLICT (session_id, context_key) \nDO UPDATE SET context_value = $3, updated_at = NOW(), expires_at = NOW() + INTERVAL '1 hour'\nRETURNING *;",
-        "queryParams": [
-          "{{ $node[\"Webhook\"].json.body.session_id }}",
-          "last_query_results",
-          "{{ JSON.stringify($json) }}"
-        ]
+        "query": "INSERT INTO session_context (session_id, context_key, context_value, expires_at) VALUES ($1, 'last_query_results', $2::jsonb, NOW() + INTERVAL '1 hour') ON CONFLICT (session_id, context_key) DO UPDATE SET context_value = $2::jsonb, expires_at = NOW() + INTERVAL '1 hour' RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ $json.session_id }}, {{ JSON.stringify({ query: $json.query, results: $json.results, summary: $json.summary, metrics: $json.metrics }) }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
       }
     },
     {
-      "id": "postgres_update_tool_call_completed",
-      "name": "Postgres: UPDATE tool_calls COMPLETED",
+      "id": "postgres_update_complete",
+      "name": "Postgres: UPDATE COMPLETED",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1850, 100],
-      "credentials": {
-        "postgres": "postgres"
-      },
+      "position": [1552, 224],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE tool_calls SET status = $1, updated_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
-        "queryParams": [
-          "COMPLETED",
-          "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}"
-        ]
+        "query": "UPDATE tool_calls SET status = 'COMPLETED', result = $1::jsonb, voice_response = $2, completed_at = NOW() WHERE tool_call_id = $3 RETURNING *;",
+        "options": {
+          "queryReplacement": "{{ JSON.stringify($('Code: Format Results').first().json.result) }}, {{ $('Code: Format Results').first().json.voice_response }}, {{ $('Code: Format Results').first().json.tool_call_id }}"
+        }
+      },
+      "retryOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
       }
     },
     {
-      "id": "http_completion_callback",
-      "name": "HTTP Request: Completion callback",
+      "id": "gate2_callback",
+      "name": "HTTP Request: Gate 2 (Completion)",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [2050, 100],
+      "typeVersion": 4.3,
+      "position": [1744, 224],
       "parameters": {
-        "url": "{{ $node[\"Webhook\"].json.body.callback_url }}",
         "method": "POST",
+        "url": "={{ $('Code: Format Results').first().json.callback_url }}",
+        "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
@@ -244,198 +252,82 @@
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "tool_call_id",
-              "value": "{{ $node[\"generate_tool_call_id\"].json.tool_call_id }}"
-            },
-            {
-              "name": "status",
-              "value": "COMPLETED"
-            },
-            {
-              "name": "context_available",
-              "value": "true"
-            },
-            {
-              "name": "context_key",
-              "value": "last_query_results"
-            },
-            {
-              "name": "voice_response",
-              "value": "{{ $node[\"code_format_results\"].json.formatted_response }}"
-            },
-            {
-              "name": "summary",
-              "value": "{{ $node[\"code_format_results\"].json.summary }}"
-            },
-            {
-              "name": "metrics",
-              "value": "{{ $node[\"code_format_results\"].json.metrics }}"
-            }
-          ]
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'COMPLETED', gate: 2, tool_call_id: $('Code: Format Results').first().json.tool_call_id, intent_id: $('Code: Format Results').first().json.intent_id, context_available: true, context_key: 'last_query_results', result: $('Code: Format Results').first().json.result, voice_response: $('Code: Format Results').first().json.voice_response }) }}",
+        "options": {
+          "timeout": 10000
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "id": "respond_to_webhook",
-      "name": "Respond to Webhook",
+      "id": "respond_success",
+      "name": "Respond to Webhook: Success",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [2250, 100],
+      "typeVersion": 1.5,
+      "position": [1952, 224],
       "parameters": {
-        "responseCode": 200,
-        "responseBody": "{{ { status: 'SUCCESS', tool_call_id: $node[\"generate_tool_call_id\"].json.tool_call_id, context_key: 'last_query_results', voice_response: $node[\"code_format_results\"].json.formatted_response } }}"
+        "respondWith": "json",
+        "options": {}
       }
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [
-        [
-          {
-            "node": "Generate tool_call_id",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Code: Generate ID", "type": "main", "index": 0}]]
     },
-    "Generate tool_call_id": {
-      "main": [
-        [
-          {
-            "node": "Postgres: INSERT tool_call",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Code: Generate ID": {
+      "main": [[{"node": "Postgres: INSERT tool_call", "type": "main", "index": 0}]]
     },
     "Postgres: INSERT tool_call": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request: Gate 1 callback",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "HTTP Request: Gate 1", "type": "main", "index": 0}]]
     },
-    "HTTP Request: Gate 1 callback": {
-      "main": [
-        [
-          {
-            "node": "IF: Check cancel response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "HTTP Request: Gate 1": {
+      "main": [[{"node": "IF: Check Cancel (Gate 1)", "type": "main", "index": 0}]]
     },
-    "IF: Check cancel response": {
+    "IF: Check Cancel (Gate 1)": {
       "main": [
-        [
-          {
-            "node": "Postgres: UPDATE CANCELLED",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Code: Execute vector query",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "Code: Execute Vector Query", "type": "main", "index": 0}]
       ]
     },
     "Postgres: UPDATE CANCELLED": {
-      "main": [
-        [
-          {
-            "node": "HTTP: Cancel callback",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "HTTP: Cancel Callback", "type": "main", "index": 0}]]
     },
-    "HTTP: Cancel callback": {
-      "main": [
-        [
-          {
-            "node": "Respond: Cancelled",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "HTTP: Cancel Callback": {
+      "main": [[{"node": "Respond: Cancelled", "type": "main", "index": 0}]]
     },
-    "Code: Execute vector query": {
-      "main": [
-        [
-          {
-            "node": "Code: Format query results",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Code: Execute Vector Query": {
+      "main": [[{"node": "Code: Format Results", "type": "main", "index": 0}]]
     },
-    "Code: Format query results": {
-      "main": [
-        [
-          {
-            "node": "Postgres: UPSERT session_context",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Code: Format Results": {
+      "main": [[{"node": "Postgres: UPSERT session_context", "type": "main", "index": 0}]]
     },
     "Postgres: UPSERT session_context": {
-      "main": [
-        [
-          {
-            "node": "Postgres: UPDATE tool_calls COMPLETED",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Postgres: UPDATE COMPLETED", "type": "main", "index": 0}]]
     },
-    "Postgres: UPDATE tool_calls COMPLETED": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request: Completion callback",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Postgres: UPDATE COMPLETED": {
+      "main": [[{"node": "HTTP Request: Gate 2 (Completion)", "type": "main", "index": 0}]]
     },
-    "HTTP Request: Completion callback": {
-      "main": [
-        [
-          {
-            "node": "Respond to Webhook",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "HTTP Request: Gate 2 (Completion)": {
+      "main": [[{"node": "Respond to Webhook: Success", "type": "main", "index": 0}]]
     }
   },
-  "active": false,
   "settings": {
     "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
     "saveDataErrorExecution": "all",
     "saveDataSuccessExecution": "all",
     "saveManualExecutions": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "syncedFromDeployed": "uuf3Qaba5O8YsKaI",
+    "syncedAt": "2026-01-14T00:00:00.000Z"
   }
 }
