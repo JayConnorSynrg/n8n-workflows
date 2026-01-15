@@ -202,9 +202,9 @@ def main():
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
             ws_url=settings.livekit_url,
-            # Enable explicit dispatch - agent must be dispatched via API
-            # This allows pre-initializing agent before meeting participants join
-            agent_name="synrg-voice-agent",
+            # Auto-dispatch: agent automatically joins every new room
+            # For explicit dispatch (agent_name="synrg-voice-agent"),
+            # you must dispatch via API or participant token
         )
     )
 
