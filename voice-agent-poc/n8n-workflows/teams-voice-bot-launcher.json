@@ -1,0 +1,219 @@
+{
+  "name": "Teams Voice Bot - Launcher (LiveKit)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Start Voice Bot",
+        "formDescription": "Paste your Microsoft Teams meeting URL to start the AI voice bot.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Meeting URL",
+              "placeholder": "https://teams.live.com/meet/...",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Bot Name",
+              "placeholder": "AI Voice Assistant"
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "form-trigger",
+      "name": "Start Bot Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 208],
+      "webhookId": "4dbcc051-001b-4cd9-b7f1-b8533e051103"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "meeting_url",
+              "name": "meeting_url",
+              "value": "={{ $json['Meeting URL'] || $json.body?.meeting_url || $json.meeting_url || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "bot_name",
+              "name": "bot_name",
+              "value": "={{ $json['Bot Name'] || $json.body?.bot_name || $json.bot_name || 'AI Voice Assistant' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-meeting-url",
+      "name": "Set Meeting URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [256, 304]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate unique session ID and room name\nconst sessionId = 'sess_' + crypto.randomUUID().replace(/-/g, '').substring(0, 16);\nconst roomName = 'voice-bot-' + sessionId;\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    session_id: sessionId,\n    room_name: roomName\n  }\n}];"
+      },
+      "id": "generate-session-id",
+      "name": "Generate Session ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [464, 304]
+    },
+    {
+      "parameters": {
+        "jsCode": "// LiveKit Access Token Generator\n// Generates a JWT token for the Output Media webpage to join the LiveKit room\n// NOTE: Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in n8n Settings > Variables\n\nconst LIVEKIT_API_KEY = $env.LIVEKIT_API_KEY;\nconst LIVEKIT_API_SECRET = $env.LIVEKIT_API_SECRET;\n\nconst input = $input.first().json;\nconst roomName = input.room_name;\nconst identity = 'output-media-' + input.session_id;\nconst participantName = 'Voice Client';\n\n// Token expires in 24 hours\nconst now = Math.floor(Date.now() / 1000);\nconst exp = now + 86400;\n\n// LiveKit video grant - allows joining room, publishing audio, subscribing to agent\nconst videoGrant = {\n  room: roomName,\n  roomJoin: true,\n  canPublish: true,\n  canPublishData: true,\n  canSubscribe: true\n};\n\n// JWT Header\nconst header = {\n  alg: 'HS256',\n  typ: 'JWT'\n};\n\n// JWT Payload (LiveKit claims)\nconst payload = {\n  iss: LIVEKIT_API_KEY,\n  sub: identity,\n  name: participantName,\n  iat: now,\n  nbf: now,\n  exp: exp,\n  video: videoGrant,\n  metadata: JSON.stringify({ session_id: input.session_id, bot_name: input.bot_name })\n};\n\n// Base64URL encode\nfunction base64UrlEncode(obj) {\n  const str = typeof obj === 'string' ? obj : JSON.stringify(obj);\n  const base64 = Buffer.from(str).toString('base64');\n  return base64.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\n}\n\n// Create signature\nconst headerB64 = base64UrlEncode(header);\nconst payloadB64 = base64UrlEncode(payload);\nconst signatureInput = headerB64 + '.' + payloadB64;\n\nconst crypto = require('crypto');\nconst signature = crypto\n  .createHmac('sha256', LIVEKIT_API_SECRET)\n  .update(signatureInput)\n  .digest('base64')\n  .replace(/\\+/g, '-')\n  .replace(/\\//g, '_')\n  .replace(/=+$/, '');\n\nconst token = signatureInput + '.' + signature;\n\nreturn [{\n  json: {\n    ...input,\n    livekit_url: $env.LIVEKIT_URL || 'wss://synrg-voice-agent-gqv10vbf.livekit.cloud',\n    livekit_token: token,\n    client_identity: identity\n  }\n}];"
+      },
+      "id": "generate-livekit-token",
+      "name": "Generate LiveKit Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [672, 304]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://us-west-2.recall.ai/api/v1/bot/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"meeting_url\": $json.meeting_url,\n  \"bot_name\": $json.bot_name,\n  \"recording_config\": {\n    \"transcript\": {\n      \"provider\": {\n        \"recallai_streaming\": {\n          \"language_code\": \"en\",\n          \"mode\": \"prioritize_low_latency\"\n        }\n      }\n    },\n    \"realtime_endpoints\": [{\n      \"type\": \"webhook\",\n      \"url\": \"https://jayconnorexe.app.n8n.cloud/webhook/voice-bot-events\",\n      \"events\": [\"transcript.data\", \"transcript.partial_data\"]\n    }]\n  },\n  \"output_media\": {\n    \"camera\": {\n      \"kind\": \"webpage\",\n      \"config\": {\n        \"url\": \"https://synrg-voice-agent.vercel.app?livekit_url=\" + encodeURIComponent($json.livekit_url) + \"&token=\" + encodeURIComponent($json.livekit_token)\n      }\n    },\n    \"microphone\": {\n      \"kind\": \"webpage\"\n    }\n  },\n  \"status_callback_url\": \"https://jayconnorexe.app.n8n.cloud/webhook/recall-bot-events\"\n} }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "create-bot",
+      "name": "Create Recall.ai Bot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [880, 304],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "XksCwcWinBg0uQBa",
+          "name": "Recall AI header Auth - December 13th"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "bot_state",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Generate Session ID').first().json.session_id }}",
+            "bot_id": "={{ $json.id }}",
+            "state": "IDLE",
+            "bot_name": "={{ $('Set Meeting URL').first().json.bot_name }}",
+            "meeting_url": "={{ $('Set Meeting URL').first().json.meeting_url }}",
+            "created_at": "={{ $now.toISO() }}",
+            "status": "joining",
+            "room_name": "={{ $('Generate Session ID').first().json.room_name }}",
+            "last_intent": "={{ JSON.stringify({ initialized_at: $now.toISO(), bot_name: $('Set Meeting URL').first().json.bot_name, first_interaction: true, greeting_pending: true, livekit_room: $('Generate Session ID').first().json.room_name }) }}"
+          },
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "id": "init-postgres",
+      "name": "Initialize Session (Postgres)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1088, 304],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "bot_id",
+              "name": "bot_id",
+              "value": "={{ $('Create Recall.ai Bot').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "session_id",
+              "name": "session_id",
+              "value": "={{ $('Generate Session ID').first().json.session_id }}",
+              "type": "string"
+            },
+            {
+              "id": "room_name",
+              "name": "room_name",
+              "value": "={{ $('Generate Session ID').first().json.room_name }}",
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ 'Bot ' + $('Create Recall.ai Bot').first().json.id + ' is joining the meeting. LiveKit room: ' + $('Generate Session ID').first().json.room_name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1296, 304]
+    },
+    {
+      "parameters": {
+        "content": "## Bot Launcher v4.0 (LiveKit)\n\n**Architecture:** LiveKit WebRTC (replacing OpenAI Realtime relay)\n\n### Flow:\n1. Form/Webhook receives meeting URL\n2. Generate session_id and room_name\n3. **Generate LiveKit token** for Output Media client\n4. Create Recall.ai bot with LiveKit-enabled webpage\n5. Initialize PostgreSQL session state\n\n### Output Media URL:\n```\nhttps://synrg-voice-agent.vercel.app\n  ?livekit_url=wss://synrg-voice-agent-gqv10vbf.livekit.cloud\n  &token={JWT_TOKEN}\n```\n\n### LiveKit Pipeline:\n- **STT:** Deepgram Nova-3 (~150ms)\n- **LLM:** Groq LLaMA 3.1 (~200ms)\n- **TTS:** Cartesia Sonic-3 (~80ms)\n- **VAD:** Silero (~20ms)\n\n### Tool Execution:\nTools call n8n webhooks with gated execution:\n- `/webhook/execute-gmail`\n- `/webhook/query-vector-db`\n\n### Usage:\n**Option 1:** Open form URL, paste meeting link\n**Option 2:** POST /webhook/start-bot {\"meeting_url\": \"...\"}",
+        "height": 520,
+        "width": 420
+      },
+      "id": "sticky-info",
+      "name": "Usage Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-480, -80]
+    }
+  ],
+  "connections": {
+    "Start Bot Form": {
+      "main": [[{"node": "Set Meeting URL", "type": "main", "index": 0}]]
+    },
+    "Set Meeting URL": {
+      "main": [[{"node": "Generate Session ID", "type": "main", "index": 0}]]
+    },
+    "Generate Session ID": {
+      "main": [[{"node": "Generate LiveKit Token", "type": "main", "index": 0}]]
+    },
+    "Generate LiveKit Token": {
+      "main": [[{"node": "Create Recall.ai Bot", "type": "main", "index": 0}]]
+    },
+    "Create Recall.ai Bot": {
+      "main": [[{"node": "Initialize Session (Postgres)", "type": "main", "index": 0}]]
+    },
+    "Initialize Session (Postgres)": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
