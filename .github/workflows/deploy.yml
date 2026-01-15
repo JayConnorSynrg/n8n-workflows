@@ -1,30 +1,13 @@
-name: Deploy to Railway
+name: Deploy
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli@latest
-
-      - name: Deploy to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_VOICE_AGENT }}
-        run: |
-          railway link b061af36-cda8-4458-a41b-fa2695f8dd0d --environment production --service livekit-voice-agent
-          railway up --ci
+      - uses: actions/checkout@v4
+      - run: echo "Hello World"
