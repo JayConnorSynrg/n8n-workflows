@@ -1,5 +1,5 @@
 {
-  "name": "Teams Voice Bot - Launcher (LiveKit)",
+  "name": "Teams Voice Bot - Launcher v4.1 (LiveKit)",
   "nodes": [
     {
       "parameters": {
@@ -56,13 +56,99 @@
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "https://backboard.railway.app/graphql/v2",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"query\": \"query { service(id: \\\"\" + ($env.RAILWAY_SERVICE_ID || '95bb0daa-cb07-441b-a3f3-2d6762d8e18b') + \"\\\") { name deployments(first: 1) { edges { node { status } } } } }\" } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-deployment",
+      "name": "Check Voice Agent Deployment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [464, 304],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "railway-api",
+          "name": "Railway API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "deployment-status",
+              "leftValue": "={{ $json.data?.service?.deployments?.edges?.[0]?.node?.status }}",
+              "rightValue": "SUCCESS",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-status",
+      "name": "Is Agent Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [672, 304]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error",
+              "name": "error",
+              "value": "true",
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "Voice Agent is not deployed or not running. Please check Railway deployment status.",
+              "type": "string"
+            },
+            {
+              "id": "deployment_status",
+              "name": "deployment_status",
+              "value": "={{ $('Check Voice Agent Deployment').first().json.data?.service?.deployments?.edges?.[0]?.node?.status || 'UNKNOWN' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "deployment-error",
+      "name": "Deployment Error Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 504]
+    },
+    {
+      "parameters": {
         "jsCode": "// Generate unique session ID and room name\nconst sessionId = 'sess_' + crypto.randomUUID().replace(/-/g, '').substring(0, 16);\nconst roomName = 'voice-bot-' + sessionId;\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    session_id: sessionId,\n    room_name: roomName\n  }\n}];"
       },
       "id": "generate-session-id",
       "name": "Generate Session ID",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [464, 304]
+      "position": [880, 304]
     },
     {
       "parameters": {
@@ -72,7 +158,7 @@
       "name": "Generate LiveKit Token",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [672, 304]
+      "position": [1088, 304]
     },
     {
       "parameters": {
@@ -91,7 +177,7 @@
       "name": "Create Recall.ai Bot",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [880, 304],
+      "position": [1296, 304],
       "credentials": {
         "httpHeaderAuth": {
           "id": "XksCwcWinBg0uQBa",
@@ -128,7 +214,7 @@
       "name": "Initialize Session (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1088, 304],
+      "position": [1504, 304],
       "credentials": {
         "postgres": {
           "id": "NI3jbq1U8xPst3j3",
@@ -178,11 +264,11 @@
       "name": "Format Response",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1296, 304]
+      "position": [1712, 304]
     },
     {
       "parameters": {
-        "content": "## Bot Launcher v4.0 (LiveKit)\n\n**Architecture:** LiveKit WebRTC (replacing OpenAI Realtime relay)\n\n### Flow:\n1. Form/Webhook receives meeting URL\n2. Generate session_id and room_name\n3. **Generate LiveKit token** for Output Media client\n4. Create Recall.ai bot with LiveKit-enabled webpage\n5. Initialize PostgreSQL session state\n\n### Output Media URL:\n```\nhttps://synrg-voice-agent.vercel.app\n  ?livekit_url=wss://synrg-voice-agent-gqv10vbf.livekit.cloud\n  &token={JWT_TOKEN}\n```\n\n### LiveKit Pipeline:\n- **STT:** Deepgram Nova-3 (~150ms)\n- **LLM:** Groq LLaMA 3.1 (~200ms)\n- **TTS:** Cartesia Sonic-3 (~80ms)\n- **VAD:** Silero (~20ms)\n\n### Tool Execution:\nTools call n8n webhooks with gated execution:\n- `/webhook/execute-gmail`\n- `/webhook/query-vector-db`\n\n### Usage:\n**Option 1:** Open form URL, paste meeting link\n**Option 2:** POST /webhook/start-bot {\"meeting_url\": \"...\"}",
+        "content": "## Bot Launcher v4.1 (LiveKit + Deployment Check)\n\n**Architecture:** LiveKit WebRTC with Railway deployment validation\n\n### Flow:\n1. Form/Webhook receives meeting URL\n2. **Check Railway deployment status** (fail-fast if not running)\n3. Generate session_id and room_name\n4. **Generate LiveKit token** for Output Media client\n5. Create Recall.ai bot with LiveKit-enabled webpage\n6. Initialize PostgreSQL session state\n\n### Required n8n Variables:\n- `LIVEKIT_API_KEY` - LiveKit project API key\n- `LIVEKIT_API_SECRET` - LiveKit project secret\n- `LIVEKIT_URL` - LiveKit server URL\n- `RAILWAY_SERVICE_ID` - Voice agent service ID\n\n### Required Credentials:\n- **Railway API Token** (httpHeaderAuth) - For deployment check\n- **Recall AI header Auth** - For bot creation\n- **Postgres** - For session state\n\n### Usage:\n**Option 1:** Open form URL, paste meeting link\n**Option 2:** POST /webhook/start-bot {\"meeting_url\": \"...\"}",
         "height": 520,
         "width": 420
       },
@@ -198,7 +284,19 @@
       "main": [[{"node": "Set Meeting URL", "type": "main", "index": 0}]]
     },
     "Set Meeting URL": {
-      "main": [[{"node": "Generate Session ID", "type": "main", "index": 0}]]
+      "main": [[{"node": "Check Voice Agent Deployment", "type": "main", "index": 0}]]
+    },
+    "Check Voice Agent Deployment": {
+      "main": [[{"node": "Is Agent Running?", "type": "main", "index": 0}]]
+    },
+    "Is Agent Running?": {
+      "main": [
+        [{"node": "Generate Session ID", "type": "main", "index": 0}],
+        [{"node": "Deployment Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Deployment Error Response": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
     },
     "Generate Session ID": {
       "main": [[{"node": "Generate LiveKit Token", "type": "main", "index": 0}]]
