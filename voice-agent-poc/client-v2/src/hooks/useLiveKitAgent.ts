@@ -240,11 +240,50 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
           }
         })
 
-        // Monitor remote audio (agent speaking)
+        // Monitor remote audio (agent speaking) - ATTACH FOR PLAYBACK
         room.on(RoomEvent.TrackSubscribed, (track: any, _pub: any, participant: any) => {
-          if (track.kind === 'audio' && participant.isAgent) {
-            // Agent audio track subscribed
-            console.log('Agent audio track subscribed')
+          if (track.kind === 'audio') {
+            // Attach audio track to play through speakers
+            const audioElement = track.attach() as HTMLAudioElement
+            audioElement.autoplay = true
+            audioElement.id = `audio-${participant.identity}-${track.sid}`
+            document.body.appendChild(audioElement)
+            console.log('Agent audio track attached for playback:', track.sid)
+
+            // Monitor output volume from this track
+            if (participant.isAgent || participant.identity?.includes('agent')) {
+              const audioContext = new AudioContext()
+              const source = audioContext.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]))
+              const analyser = audioContext.createAnalyser()
+              analyser.fftSize = 256
+              source.connect(analyser)
+
+              const dataArray = new Uint8Array(analyser.frequencyBinCount)
+              const updateVolume = () => {
+                if (audioElement.parentElement) {
+                  analyser.getByteFrequencyData(dataArray)
+                  const average = dataArray.reduce((a, b) => a + b) / dataArray.length
+                  const normalized = Math.min(1, average / 128)
+                  setOutputVolume(normalized)
+                  requestAnimationFrame(updateVolume)
+                }
+              }
+              updateVolume()
+            }
+          }
+        })
+
+        // Clean up audio elements when tracks are unsubscribed
+        room.on(RoomEvent.TrackUnsubscribed, (track: any, _pub: any, participant: any) => {
+          if (track.kind === 'audio') {
+            // Remove the audio element from DOM
+            const audioElement = document.getElementById(`audio-${participant.identity}-${track.sid}`)
+            if (audioElement) {
+              audioElement.remove()
+              console.log('Agent audio track detached:', track.sid)
+            }
+            // Also detach from the track
+            track.detach()
           }
         })
 
@@ -263,7 +302,7 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
         options.onError?.(message)
       }
     },
-    [setSessionId, startLocalVolumeMonitoring, stopVolumeMonitoring, handleDataMessage, options]
+    [setSessionId, setAgentConnected, setOutputVolume, startLocalVolumeMonitoring, stopVolumeMonitoring, handleDataMessage, options]
   )
 
   // Disconnect from LiveKit room
