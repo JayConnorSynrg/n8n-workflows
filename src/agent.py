@@ -1,4 +1,9 @@
-"""Main LiveKit voice agent implementation."""
+"""Main LiveKit voice agent implementation.
+
+Based on LiveKit Agents 1.3.x documentation:
+- https://docs.livekit.io/agents/logic/sessions/
+- https://docs.livekit.io/agents/multimodality/audio/
+"""
 import asyncio
 import json
 import logging
@@ -9,10 +14,20 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
+    JobProcess,
     WorkerOptions,
     cli,
+    room_io,
 )
 from livekit.plugins import silero, deepgram, cartesia
+
+# Try to import turn detector (optional but recommended)
+try:
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel
+    HAS_TURN_DETECTOR = True
+except ImportError:
+    HAS_TURN_DETECTOR = False
+    MultilingualModel = None
 
 from .config import get_settings
 from .plugins.groq_llm import GroqLLM
@@ -55,19 +70,40 @@ SYSTEM_PROMPT = """You are a professional voice assistant for enterprise meeting
 """
 
 
+def prewarm(proc: JobProcess):
+    """Prewarm VAD model during server initialization for reduced first-call latency."""
+    logger.info("Prewarming VAD model...")
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=0.05,      # 50ms - faster speech detection start
+        min_silence_duration=0.55,     # 550ms - better end-of-turn detection
+        prefix_padding_duration=0.5,   # 500ms padding before speech
+        activation_threshold=0.5,      # Sensitivity (0.0-1.0)
+        sample_rate=16000,             # Silero requires 8kHz or 16kHz
+        force_cpu=True,                # Consistent CPU inference
+    )
+    logger.info("VAD model prewarmed")
+
+
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
 
     logger.info(f"Agent starting for room: {ctx.room.name}")
     tracker = LatencyTracker()
 
-    # Initialize VAD with optimized settings
-    vad = silero.VAD.load(
-        min_speech_duration=0.1,      # 100ms minimum speech
-        min_silence_duration=0.3,     # 300ms silence to end utterance
-        activation_threshold=0.5,     # Sensitivity (0.0-1.0)
-        sample_rate=16000,
-    )
+    # Use prewarmed VAD or load fresh if not available
+    if "vad" in ctx.proc.userdata:
+        vad = ctx.proc.userdata["vad"]
+        logger.info("Using prewarmed VAD")
+    else:
+        logger.warning("VAD not prewarmed, loading now (adds latency)")
+        vad = silero.VAD.load(
+            min_speech_duration=0.05,
+            min_silence_duration=0.55,
+            prefix_padding_duration=0.5,
+            activation_threshold=0.5,
+            sample_rate=16000,
+            force_cpu=True,
+        )
 
     # Initialize STT with Deepgram Nova-3
     stt = deepgram.STT(
@@ -89,6 +125,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     # Initialize TTS with Cartesia Sonic-3
+    # Using 24kHz sample rate (framework default, auto-resampled from VAD's 16kHz)
     tts = cartesia.TTS(
         model=settings.cartesia_model,
         voice=settings.cartesia_voice,
@@ -96,15 +133,27 @@ async def entrypoint(ctx: JobContext):
         sample_rate=24000,
     )
 
-    # Create agent session
-    session = AgentSession(
-        vad=vad,
-        stt=stt,
-        llm=llm_instance,
-        tts=tts,
-        # Enable aligned transcription for better frontend sync
-        use_tts_aligned_transcript=True,
-    )
+    # Create agent session with optimized settings
+    session_kwargs = {
+        "vad": vad,
+        "stt": stt,
+        "llm": llm_instance,
+        "tts": tts,
+        # Performance optimizations
+        "preemptive_generation": True,  # Start LLM before turn ends
+        # Handle background noise gracefully
+        "resume_false_interruption": True,
+        "false_interruption_timeout": 1.0,
+    }
+
+    # Add turn detection if available
+    if HAS_TURN_DETECTOR and MultilingualModel:
+        session_kwargs["turn_detection"] = MultilingualModel()
+        logger.info("Using semantic turn detection")
+    else:
+        logger.warning("Turn detector not available, using VAD-only turn detection")
+
+    session = AgentSession(**session_kwargs)
 
     # Define agent with tools
     agent = Agent(
@@ -112,60 +161,64 @@ async def entrypoint(ctx: JobContext):
         tools=[send_email_tool, query_database_tool],
     )
 
-    # Register event handlers BEFORE starting session (avoids race conditions)
-    # Using correct event names for livekit-agents 1.3.11
-    # NOTE: publish_data() is async, so we use asyncio.create_task() in sync handlers
+    # Register ASYNC event handlers BEFORE starting session
+    # Per LiveKit docs, handlers can be async and should use await for async operations
 
     @session.on("user_state_changed")
-    def on_user_state_changed(ev):
+    async def on_user_state_changed(ev):
         """User state: speaking, listening, away."""
         state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
         logger.debug(f"User state changed: {state}")
         if str(state) == "speaking":
             tracker.start("total_latency")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            ))
+            )
 
     @session.on("user_input_transcribed")
-    def on_user_input_transcribed(ev):
+    async def on_user_input_transcribed(ev):
         """Called when user speech is transcribed."""
         text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
+        is_final = getattr(ev, 'is_final', True)
         logger.info(f"User said: {text[:100] if len(text) > 100 else text}")
         # Publish user transcript to client for UI display
-        asyncio.create_task(ctx.room.local_participant.publish_data(
-            json.dumps({"type": "transcript.user", "text": text}).encode()
-        ))
+        await ctx.room.local_participant.publish_data(
+            json.dumps({
+                "type": "transcript.user",
+                "text": text,
+                "is_final": is_final
+            }).encode()
+        )
 
     @session.on("agent_state_changed")
-    def on_agent_state_changed(ev):
+    async def on_agent_state_changed(ev):
         """Agent state: initializing, idle, listening, thinking, speaking."""
         state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
         logger.debug(f"Agent state changed: {state}")
 
         state_str = str(state).lower()
         if "thinking" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"thinking"}'
-            ))
+            )
         elif "speaking" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"speaking"}'
-            ))
+            )
         elif "listening" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            ))
+            )
         elif "idle" in state_str:
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"idle"}'
-            ))
+            )
 
     @session.on("speech_created")
-    def on_speech_created(ev):
+    async def on_speech_created(ev):
         """Called when agent generates speech - capture transcript."""
         # Get the text from the event
         text = ""
@@ -176,17 +229,17 @@ async def entrypoint(ctx: JobContext):
 
         if text:
             logger.debug(f"Agent said: {text[:100] if len(text) > 100 else text}")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            await ctx.room.local_participant.publish_data(
                 json.dumps({"type": "transcript.assistant", "text": text}).encode()
-            ))
+            )
 
     @session.on("function_tools_executed")
-    def on_function_tools_executed(ev):
+    async def on_function_tools_executed(ev):
         """Called when tools finish executing."""
         logger.info(f"Tools executed: {ev}")
 
     @session.on("metrics_collected")
-    def on_metrics_collected(ev):
+    async def on_metrics_collected(ev):
         """Collect and log metrics."""
         logger.debug(f"Metrics: {ev}")
 
@@ -194,19 +247,31 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
 
-    # Start the agent session
-    await session.start(agent=agent, room=ctx.room)
+    # Start the agent session with audio configuration
+    await session.start(
+        agent=agent,
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_output=room_io.AudioOutputOptions(
+                sample_rate=24000,
+                num_channels=1,
+            ),
+        ),
+    )
     logger.info("Agent session started")
 
-    # Send initial greeting after brief delay for client to stabilize
-    await asyncio.sleep(0.5)
-    await session.say("Hello! I'm your voice assistant. How can I help you today?")
+    # Generate initial greeting with interruptions disabled
+    # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
+    await asyncio.sleep(0.3)  # Brief delay for client stabilization
+    await session.say(
+        "Hello! I'm your voice assistant. How can I help you today?",
+        allow_interruptions=False  # Don't interrupt greeting
+    )
 
     # The session manages its own lifecycle - it stays active until:
     # 1. The linked participant leaves the room
     # 2. The room is deleted
     # 3. session.close() is called explicitly
-    # No explicit wait needed - the framework handles this via ctx
 
 
 def main():
@@ -214,12 +279,11 @@ def main():
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,  # Prewarm VAD on startup
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
             ws_url=settings.livekit_url,
             # Auto-dispatch: agent automatically joins every new room
-            # For explicit dispatch (agent_name="synrg-voice-agent"),
-            # you must dispatch via API or participant token
         )
     )
 
