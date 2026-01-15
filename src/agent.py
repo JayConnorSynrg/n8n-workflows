@@ -187,9 +187,11 @@ async def entrypoint(ctx: JobContext):
     def on_function_result(result):
         logger.info(f"Tool result: {result.name} -> {str(result.result)[:100]}...")
 
-    # Keep agent running until room closes
-    await session.wait()
-    logger.info("Agent session ended")
+    # The session manages its own lifecycle - it stays active until:
+    # 1. The linked participant leaves the room
+    # 2. The room is deleted
+    # 3. session.close() is called explicitly
+    # No explicit wait needed - the framework handles this via ctx
 
 
 def main():
