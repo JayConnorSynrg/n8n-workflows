@@ -11,7 +11,6 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
-    llm,
 )
 from livekit.plugins import silero, deepgram, cartesia
 
@@ -181,11 +180,11 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"Agent said: {text[:100]}...")
 
     @session.on("function_call")
-    def on_function_call(call: llm.FunctionCall):
+    def on_function_call(call):
         logger.info(f"Tool called: {call.name} with args: {call.arguments}")
 
     @session.on("function_result")
-    def on_function_result(result: llm.FunctionResult):
+    def on_function_result(result):
         logger.info(f"Tool result: {result.name} -> {str(result.result)[:100]}...")
 
     # Keep agent running until room closes
