@@ -114,6 +114,7 @@ async def entrypoint(ctx: JobContext):
 
     # Register event handlers BEFORE starting session (avoids race conditions)
     # Using correct event names for livekit-agents 1.3.11
+    # NOTE: publish_data() is async, so we use asyncio.create_task() in sync handlers
 
     @session.on("user_state_changed")
     def on_user_state_changed(ev):
@@ -122,9 +123,9 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"User state changed: {state}")
         if str(state) == "speaking":
             tracker.start("total_latency")
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            )
+            ))
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(ev):
@@ -132,9 +133,9 @@ async def entrypoint(ctx: JobContext):
         text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
         logger.info(f"User said: {text[:100] if len(text) > 100 else text}")
         # Publish user transcript to client for UI display
-        ctx.room.local_participant.publish_data(
+        asyncio.create_task(ctx.room.local_participant.publish_data(
             json.dumps({"type": "transcript.user", "text": text}).encode()
-        )
+        ))
 
     @session.on("agent_state_changed")
     def on_agent_state_changed(ev):
@@ -144,24 +145,24 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"thinking"}'
-            )
+            ))
         elif "speaking" in state_str:
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"speaking"}'
-            )
+            ))
         elif "listening" in state_str:
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            )
+            ))
         elif "idle" in state_str:
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"idle"}'
-            )
+            ))
 
     @session.on("speech_created")
     def on_speech_created(ev):
@@ -175,9 +176,9 @@ async def entrypoint(ctx: JobContext):
 
         if text:
             logger.debug(f"Agent said: {text[:100] if len(text) > 100 else text}")
-            ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 json.dumps({"type": "transcript.assistant", "text": text}).encode()
-            )
+            ))
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
