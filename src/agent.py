@@ -112,6 +112,83 @@ async def entrypoint(ctx: JobContext):
         tools=[send_email_tool, query_database_tool],
     )
 
+    # Register event handlers BEFORE starting session (avoids race conditions)
+    # Using correct event names for livekit-agents 1.3.11
+
+    @session.on("user_state_changed")
+    def on_user_state_changed(ev):
+        """User state: speaking, listening, away."""
+        state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
+        logger.debug(f"User state changed: {state}")
+        if str(state) == "speaking":
+            tracker.start("total_latency")
+            ctx.room.local_participant.publish_data(
+                b'{"type":"agent.state","state":"listening"}'
+            )
+
+    @session.on("user_input_transcribed")
+    def on_user_input_transcribed(ev):
+        """Called when user speech is transcribed."""
+        text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
+        logger.info(f"User said: {text[:100] if len(text) > 100 else text}")
+        # Publish user transcript to client for UI display
+        ctx.room.local_participant.publish_data(
+            json.dumps({"type": "transcript.user", "text": text}).encode()
+        )
+
+    @session.on("agent_state_changed")
+    def on_agent_state_changed(ev):
+        """Agent state: initializing, idle, listening, thinking, speaking."""
+        state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
+        logger.debug(f"Agent state changed: {state}")
+
+        state_str = str(state).lower()
+        if "thinking" in state_str:
+            ctx.room.local_participant.publish_data(
+                b'{"type":"agent.state","state":"thinking"}'
+            )
+        elif "speaking" in state_str:
+            ctx.room.local_participant.publish_data(
+                b'{"type":"agent.state","state":"speaking"}'
+            )
+        elif "listening" in state_str:
+            ctx.room.local_participant.publish_data(
+                b'{"type":"agent.state","state":"listening"}'
+            )
+        elif "idle" in state_str:
+            total = tracker.end("total_latency")
+            if total:
+                logger.info(f"Total latency: {total:.0f}ms")
+            ctx.room.local_participant.publish_data(
+                b'{"type":"agent.state","state":"idle"}'
+            )
+
+    @session.on("speech_created")
+    def on_speech_created(ev):
+        """Called when agent generates speech - capture transcript."""
+        # Get the text from the event
+        text = ""
+        if hasattr(ev, 'source') and hasattr(ev.source, 'text'):
+            text = ev.source.text
+        elif hasattr(ev, 'text'):
+            text = ev.text
+
+        if text:
+            logger.debug(f"Agent said: {text[:100] if len(text) > 100 else text}")
+            ctx.room.local_participant.publish_data(
+                json.dumps({"type": "transcript.assistant", "text": text}).encode()
+            )
+
+    @session.on("function_tools_executed")
+    def on_function_tools_executed(ev):
+        """Called when tools finish executing."""
+        logger.info(f"Tools executed: {ev}")
+
+    @session.on("metrics_collected")
+    def on_metrics_collected(ev):
+        """Collect and log metrics."""
+        logger.debug(f"Metrics: {ev}")
+
     # Connect to room
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
@@ -120,72 +197,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=agent, room=ctx.room)
     logger.info("Agent session started")
 
-    # Send initial greeting to verify audio output path
-    await asyncio.sleep(1)  # Brief delay for client to stabilize
+    # Send initial greeting after brief delay for client to stabilize
+    await asyncio.sleep(0.5)
     await session.say("Hello! I'm your voice assistant. How can I help you today?")
-
-    # Event handlers for observability
-    @session.on("user_speech_started")
-    def on_user_speech_started():
-        tracker.start("total_latency")
-        tracker.start("vad_to_stt")
-        ctx.room.local_participant.publish_data(
-            b'{"type":"agent.state","state":"listening"}'
-        )
-        logger.debug("User started speaking")
-
-    @session.on("user_speech_finished")
-    def on_user_speech_finished(text: str):
-        tracker.end("vad_to_stt")
-        tracker.start("stt_to_llm")
-        logger.info(f"User said: {text[:100]}...")
-        # Publish user transcript to client for UI display
-        ctx.room.local_participant.publish_data(
-            json.dumps({"type": "transcript.user", "text": text}).encode()
-        )
-
-    @session.on("agent_thinking")
-    def on_agent_thinking():
-        tracker.end("stt_to_llm")
-        tracker.start("llm_inference")
-        ctx.room.local_participant.publish_data(
-            b'{"type":"agent.state","state":"thinking"}'
-        )
-
-    @session.on("agent_speech_started")
-    def on_agent_speech_started():
-        tracker.end("llm_inference")
-        tracker.start("tts_synthesis")
-        ctx.room.local_participant.publish_data(
-            b'{"type":"agent.state","state":"speaking"}'
-        )
-        logger.debug("Agent started speaking")
-
-    @session.on("agent_speech_finished")
-    def on_agent_speech_finished():
-        tracker.end("tts_synthesis")
-        total = tracker.end("total_latency")
-        ctx.room.local_participant.publish_data(
-            b'{"type":"agent.state","state":"idle"}'
-        )
-        logger.info(f"Total latency: {total:.0f}ms")
-
-    # Capture and publish agent transcript for UI display
-    @session.on("agent_speech_committed")
-    def on_agent_speech_committed(text: str):
-        """Called when agent produces final speech text (before TTS)."""
-        ctx.room.local_participant.publish_data(
-            json.dumps({"type": "transcript.assistant", "text": text}).encode()
-        )
-        logger.debug(f"Agent said: {text[:100]}...")
-
-    @session.on("function_call")
-    def on_function_call(call):
-        logger.info(f"Tool called: {call.name} with args: {call.arguments}")
-
-    @session.on("function_result")
-    def on_function_result(result):
-        logger.info(f"Tool result: {result.name} -> {str(result.result)[:100]}...")
 
     # The session manages its own lifecycle - it stays active until:
     # 1. The linked participant leaves the room
