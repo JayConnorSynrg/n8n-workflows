@@ -181,12 +181,12 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"Agent said: {text[:100]}...")
 
     @session.on("function_call")
-    async def on_function_call(call: llm.FunctionCall):
+    def on_function_call(call: llm.FunctionCall):
         logger.info(f"Tool called: {call.name} with args: {call.arguments}")
 
     @session.on("function_result")
-    async def on_function_result(result: llm.FunctionResult):
-        logger.info(f"Tool result: {result.name} -> {result.result[:100]}...")
+    def on_function_result(result: llm.FunctionResult):
+        logger.info(f"Tool result: {result.name} -> {str(result.result)[:100]}...")
 
     # Keep agent running until room closes
     await session.wait()
