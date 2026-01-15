@@ -223,10 +223,31 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
 
         room.on(RoomEvent.DataReceived, handleDataMessage)
 
+        // Helper to detect if participant is the voice agent
+        const isVoiceAgent = (participant: any): boolean => {
+          // Check various ways an agent can be identified:
+          // 1. isAgent flag from LiveKit
+          // 2. kind === 'agent' in metadata
+          // 3. identity matches our agent name
+          // 4. identity contains 'synrg' (our naming convention)
+          const identity = participant.identity?.toLowerCase() || ''
+          const kind = participant.kind || participant.metadata?.kind
+          return (
+            participant.isAgent === true ||
+            kind === 'agent' ||
+            identity === 'synrg-voice-agent' ||
+            identity.includes('synrg') ||
+            identity.includes('agent')
+          )
+        }
+
         room.on(RoomEvent.ParticipantConnected, (participant: any) => {
-          console.log('Participant connected:', participant.identity, participant)
-          // Check if this is the voice agent (agents have metadata or specific identity pattern)
-          if (participant.isAgent || participant.identity?.includes('agent') || participant.identity?.includes('voice')) {
+          console.log('Participant connected:', participant.identity, {
+            isAgent: participant.isAgent,
+            kind: participant.kind,
+            metadata: participant.metadata
+          })
+          if (isVoiceAgent(participant)) {
             console.log('Voice agent connected!')
             setAgentConnected(true)
           }
@@ -234,41 +255,94 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
 
         room.on(RoomEvent.ParticipantDisconnected, (participant: any) => {
           console.log('Participant disconnected:', participant.identity)
-          if (participant.isAgent || participant.identity?.includes('agent') || participant.identity?.includes('voice')) {
+          if (isVoiceAgent(participant)) {
             console.log('Voice agent disconnected!')
             setAgentConnected(false)
           }
         })
 
+        // Reuse single AudioContext for output volume monitoring
+        let outputAudioContext: AudioContext | null = null
+        let outputAnalyser: AnalyserNode | null = null
+
         // Monitor remote audio (agent speaking) - ATTACH FOR PLAYBACK
         room.on(RoomEvent.TrackSubscribed, (track: any, _pub: any, participant: any) => {
           if (track.kind === 'audio') {
+            console.log('Audio track subscribed from:', participant.identity, 'track:', track.sid)
+
             // Attach audio track to play through speakers
             const audioElement = track.attach() as HTMLAudioElement
-            audioElement.autoplay = true
             audioElement.id = `audio-${participant.identity}-${track.sid}`
+
+            // Configure for playback
+            audioElement.autoplay = true
+            audioElement.playsInline = true
+            audioElement.muted = false
+            audioElement.volume = 1.0
+
+            // Add to DOM (hidden but functional)
+            audioElement.style.display = 'none'
             document.body.appendChild(audioElement)
-            console.log('Agent audio track attached for playback:', track.sid)
 
-            // Monitor output volume from this track
-            if (participant.isAgent || participant.identity?.includes('agent')) {
-              const audioContext = new AudioContext()
-              const source = audioContext.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]))
-              const analyser = audioContext.createAnalyser()
-              analyser.fftSize = 256
-              source.connect(analyser)
-
-              const dataArray = new Uint8Array(analyser.frequencyBinCount)
-              const updateVolume = () => {
-                if (audioElement.parentElement) {
-                  analyser.getByteFrequencyData(dataArray)
-                  const average = dataArray.reduce((a, b) => a + b) / dataArray.length
-                  const normalized = Math.min(1, average / 128)
-                  setOutputVolume(normalized)
-                  requestAnimationFrame(updateVolume)
+            // Handle autoplay blocking - browsers require user interaction
+            const playAudio = async () => {
+              try {
+                await audioElement.play()
+                console.log('Audio playback started for track:', track.sid)
+              } catch (err) {
+                console.warn('Autoplay blocked, waiting for user interaction:', err)
+                // Add one-time click handler to resume audio
+                const resumeAudio = async () => {
+                  try {
+                    await audioElement.play()
+                    console.log('Audio resumed after user interaction')
+                  } catch (e) {
+                    console.error('Failed to resume audio:', e)
+                  }
+                  document.removeEventListener('click', resumeAudio)
+                  document.removeEventListener('touchstart', resumeAudio)
                 }
+                document.addEventListener('click', resumeAudio, { once: true })
+                document.addEventListener('touchstart', resumeAudio, { once: true })
               }
-              updateVolume()
+            }
+            playAudio()
+
+            // Monitor output volume from agent audio track
+            if (isVoiceAgent(participant)) {
+              try {
+                // Create or reuse AudioContext
+                if (!outputAudioContext || outputAudioContext.state === 'closed') {
+                  outputAudioContext = new AudioContext()
+                }
+
+                // Resume context if suspended (autoplay policy)
+                if (outputAudioContext.state === 'suspended') {
+                  outputAudioContext.resume()
+                }
+
+                const source = outputAudioContext.createMediaStreamSource(
+                  new MediaStream([track.mediaStreamTrack])
+                )
+                outputAnalyser = outputAudioContext.createAnalyser()
+                outputAnalyser.fftSize = 256
+                outputAnalyser.smoothingTimeConstant = 0.8
+                source.connect(outputAnalyser)
+
+                const dataArray = new Uint8Array(outputAnalyser.frequencyBinCount)
+                const updateVolume = () => {
+                  if (audioElement.parentElement && outputAnalyser) {
+                    outputAnalyser.getByteFrequencyData(dataArray)
+                    const average = dataArray.reduce((a, b) => a + b) / dataArray.length
+                    const normalized = Math.min(1, average / 128)
+                    setOutputVolume(normalized)
+                    requestAnimationFrame(updateVolume)
+                  }
+                }
+                updateVolume()
+              } catch (err) {
+                console.error('Failed to setup output volume monitoring:', err)
+              }
             }
           }
         })
@@ -292,8 +366,31 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
           autoSubscribe: true
         })
 
+        console.log('Connected to LiveKit room:', room.name)
+
+        // Check for existing participants (agent might already be in room)
+        room.remoteParticipants.forEach((participant: any) => {
+          console.log('Existing participant:', participant.identity, {
+            isAgent: participant.isAgent,
+            kind: participant.kind
+          })
+          if (isVoiceAgent(participant)) {
+            console.log('Voice agent already in room!')
+            setAgentConnected(true)
+
+            // Subscribe to existing audio tracks
+            participant.trackPublications.forEach((pub: any) => {
+              if (pub.track && pub.track.kind === 'audio') {
+                console.log('Existing audio track found:', pub.track.sid)
+                // The TrackSubscribed event should fire for these
+              }
+            })
+          }
+        })
+
         // Enable microphone for voice input
         await room.localParticipant.setMicrophoneEnabled(true)
+        console.log('Microphone enabled')
 
       } catch (err) {
         setConnectionState('disconnected')
