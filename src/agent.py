@@ -1,5 +1,6 @@
 """Main LiveKit voice agent implementation."""
 import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -120,6 +121,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=agent, room=ctx.room)
     logger.info("Agent session started")
 
+    # Send initial greeting to verify audio output path
+    await asyncio.sleep(1)  # Brief delay for client to stabilize
+    await session.say("Hello! I'm your voice assistant. How can I help you today?")
+
     # Event handlers for observability
     @session.on("user_speech_started")
     def on_user_speech_started():
@@ -135,6 +140,10 @@ async def entrypoint(ctx: JobContext):
         tracker.end("vad_to_stt")
         tracker.start("stt_to_llm")
         logger.info(f"User said: {text[:100]}...")
+        # Publish user transcript to client for UI display
+        ctx.room.local_participant.publish_data(
+            json.dumps({"type": "transcript.user", "text": text}).encode()
+        )
 
     @session.on("agent_thinking")
     def on_agent_thinking():
@@ -161,6 +170,15 @@ async def entrypoint(ctx: JobContext):
             b'{"type":"agent.state","state":"idle"}'
         )
         logger.info(f"Total latency: {total:.0f}ms")
+
+    # Capture and publish agent transcript for UI display
+    @session.on("agent_speech_committed")
+    def on_agent_speech_committed(text: str):
+        """Called when agent produces final speech text (before TTS)."""
+        ctx.room.local_participant.publish_data(
+            json.dumps({"type": "transcript.assistant", "text": text}).encode()
+        )
+        logger.debug(f"Agent said: {text[:100]}...")
 
     @session.on("function_call")
     async def on_function_call(call: llm.FunctionCall):
