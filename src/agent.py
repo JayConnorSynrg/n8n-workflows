@@ -283,7 +283,9 @@ def main():
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
             ws_url=settings.livekit_url,
-            # Auto-dispatch: agent automatically joins every new room
+            # Explicit dispatch mode: agent only joins when dispatched via AgentDispatchService
+            # This is required for the n8n launcher workflow which uses CreateDispatch API
+            agent_name="synrg-voice-agent",
         )
     )
 
