@@ -24,7 +24,7 @@ jobs:
 
       - name: Deploy to Railway
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_VOICE_AGENT }}
         run: |
           railway link b061af36-cda8-4458-a41b-fa2695f8dd0d --environment production --service livekit-voice-agent
           railway up --ci
