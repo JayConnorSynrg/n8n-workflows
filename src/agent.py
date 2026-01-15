@@ -77,7 +77,7 @@ async def entrypoint(ctx: JobContext):
         interim_results=True,
         punctuate=True,
         profanity_filter=False,
-        diarize=False,  # Single speaker for now
+        enable_diarization=False,  # Single speaker for now
     )
 
     # Initialize LLM with Groq
