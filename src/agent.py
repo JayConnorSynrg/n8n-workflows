@@ -265,9 +265,41 @@ async def entrypoint(ctx: JobContext):
     )
     logger.info("Agent session started")
 
+    # Wait for Output Media client to connect before sending greeting
+    # The webpage loads AFTER Recall.ai bot joins the meeting, so we need to wait
+    # for a participant with identity starting with 'output-media-' to appear
+    async def wait_for_client(timeout_seconds: float = 30.0) -> bool:
+        """Wait for the Output Media webpage client to connect to the room."""
+        start_time = asyncio.get_event_loop().time()
+        check_interval = 0.5  # Check every 500ms
+
+        while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
+            # Check current participants for the client
+            for participant in ctx.room.remote_participants.values():
+                identity = participant.identity.lower()
+                # Output Media client identity format: 'output-media-{session_id}'
+                if identity.startswith('output-media-'):
+                    logger.info(f"Client connected: {participant.identity}")
+                    return True
+
+            await asyncio.sleep(check_interval)
+
+        logger.warning(f"Timeout waiting for client after {timeout_seconds}s")
+        return False
+
+    logger.info("Waiting for Output Media client to connect...")
+    client_connected = await wait_for_client(timeout_seconds=30.0)
+
+    if client_connected:
+        # Give the client's Web Audio API a moment to initialize after connection
+        await asyncio.sleep(1.0)
+        logger.info("Client connected, sending greeting")
+    else:
+        # Proceed anyway but log the warning - audio may not be heard
+        logger.warning("Proceeding without confirmed client connection")
+
     # Generate initial greeting with interruptions disabled
     # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
-    await asyncio.sleep(0.3)  # Brief delay for client stabilization
     await session.say(
         "Hello! I'm your voice assistant. How can I help you today?",
         allow_interruptions=False  # Don't interrupt greeting
