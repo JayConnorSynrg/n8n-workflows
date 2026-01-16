@@ -166,64 +166,64 @@ async def entrypoint(ctx: JobContext):
         tools=[send_email_tool, query_database_tool],
     )
 
-    # Register ASYNC event handlers BEFORE starting session
-    # Per LiveKit docs, handlers can be async and should use await for async operations
+    # Register event handlers BEFORE starting session
+    # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
     @session.on("user_state_changed")
-    async def on_user_state_changed(ev):
+    def on_user_state_changed(ev):
         """User state: speaking, listening, away."""
         state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
         logger.debug(f"User state changed: {state}")
         if str(state) == "speaking":
             tracker.start("total_latency")
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            )
+            ))
 
     @session.on("user_input_transcribed")
-    async def on_user_input_transcribed(ev):
+    def on_user_input_transcribed(ev):
         """Called when user speech is transcribed."""
         text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
         is_final = getattr(ev, 'is_final', True)
         logger.info(f"User said: {text[:100] if len(text) > 100 else text}")
         # Publish user transcript to client for UI display
-        await ctx.room.local_participant.publish_data(
+        asyncio.create_task(ctx.room.local_participant.publish_data(
             json.dumps({
                 "type": "transcript.user",
                 "text": text,
                 "is_final": is_final
             }).encode()
-        )
+        ))
 
     @session.on("agent_state_changed")
-    async def on_agent_state_changed(ev):
+    def on_agent_state_changed(ev):
         """Agent state: initializing, idle, listening, thinking, speaking."""
         state = ev.new_state if hasattr(ev, 'new_state') else str(ev)
         logger.debug(f"Agent state changed: {state}")
 
         state_str = str(state).lower()
         if "thinking" in state_str:
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"thinking"}'
-            )
+            ))
         elif "speaking" in state_str:
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"speaking"}'
-            )
+            ))
         elif "listening" in state_str:
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"listening"}'
-            )
+            ))
         elif "idle" in state_str:
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 b'{"type":"agent.state","state":"idle"}'
-            )
+            ))
 
     @session.on("speech_created")
-    async def on_speech_created(ev):
+    def on_speech_created(ev):
         """Called when agent generates speech - capture transcript."""
         # Get the text from the event
         text = ""
@@ -234,17 +234,17 @@ async def entrypoint(ctx: JobContext):
 
         if text:
             logger.debug(f"Agent said: {text[:100] if len(text) > 100 else text}")
-            await ctx.room.local_participant.publish_data(
+            asyncio.create_task(ctx.room.local_participant.publish_data(
                 json.dumps({"type": "transcript.assistant", "text": text}).encode()
-            )
+            ))
 
     @session.on("function_tools_executed")
-    async def on_function_tools_executed(ev):
+    def on_function_tools_executed(ev):
         """Called when tools finish executing."""
         logger.info(f"Tools executed: {ev}")
 
     @session.on("metrics_collected")
-    async def on_metrics_collected(ev):
+    def on_metrics_collected(ev):
         """Collect and log metrics."""
         logger.debug(f"Metrics: {ev}")
 
