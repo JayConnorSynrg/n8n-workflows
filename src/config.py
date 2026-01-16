@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     cartesia_api_key: str = Field(..., alias="CARTESIA_API_KEY")
     cartesia_model: str = Field(default="sonic-3", alias="CARTESIA_MODEL")
     cartesia_voice: str = Field(
-        default="a0e99841-438c-4a64-b679-ae501e7d6091",  # Default professional voice
+        default="a167e0f3-df7e-4d52-a9c3-f949145efdab",  # Confirmed working voice
         alias="CARTESIA_VOICE"
     )
 

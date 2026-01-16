@@ -169,6 +169,17 @@ async def entrypoint(ctx: JobContext):
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
+    # Safe publish helper - handles cases where room is disconnecting
+    async def safe_publish_data(data: bytes) -> bool:
+        """Safely publish data to room, handling disconnection gracefully."""
+        try:
+            if ctx.room.local_participant:
+                await ctx.room.local_participant.publish_data(data)
+                return True
+        except Exception as e:
+            logger.debug(f"Could not publish data (room may be closing): {e}")
+        return False
+
     @session.on("user_state_changed")
     def on_user_state_changed(ev):
         """User state: speaking, listening, away."""
@@ -176,7 +187,7 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"User state changed: {state}")
         if str(state) == "speaking":
             tracker.start("total_latency")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"listening"}'
             ))
 
@@ -185,12 +196,14 @@ async def entrypoint(ctx: JobContext):
         """Called when user speech is transcribed."""
         text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
         is_final = getattr(ev, 'is_final', True)
-        logger.info(f"User said: {text[:100] if len(text) > 100 else text}")
+        # Safe text handling for logging
+        text_preview = text[:100] if text and len(text) > 100 else (text or "(empty)")
+        logger.info(f"User said: {text_preview}")
         # Publish user transcript to client for UI display
-        asyncio.create_task(ctx.room.local_participant.publish_data(
+        asyncio.create_task(safe_publish_data(
             json.dumps({
                 "type": "transcript.user",
-                "text": text,
+                "text": text or "",
                 "is_final": is_final
             }).encode()
         ))
@@ -203,38 +216,42 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}'
             ))
         elif "speaking" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"speaking"}'
             ))
         elif "listening" in state_str:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"listening"}'
             ))
         elif "idle" in state_str:
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"idle"}'
             ))
 
     @session.on("speech_created")
     def on_speech_created(ev):
         """Called when agent generates speech - capture transcript."""
-        # Get the text from the event
+        # Get the text from the event with safe attribute access
         text = ""
-        if hasattr(ev, 'source') and hasattr(ev.source, 'text'):
-            text = ev.source.text
-        elif hasattr(ev, 'text'):
-            text = ev.text
+        try:
+            if hasattr(ev, 'source') and ev.source and hasattr(ev.source, 'text'):
+                text = ev.source.text or ""
+            elif hasattr(ev, 'text'):
+                text = ev.text or ""
+        except Exception as e:
+            logger.debug(f"Could not extract speech text: {e}")
 
         if text:
-            logger.debug(f"Agent said: {text[:100] if len(text) > 100 else text}")
-            asyncio.create_task(ctx.room.local_participant.publish_data(
+            text_preview = text[:100] if len(text) > 100 else text
+            logger.debug(f"Agent said: {text_preview}")
+            asyncio.create_task(safe_publish_data(
                 json.dumps({"type": "transcript.assistant", "text": text}).encode()
             ))
 
@@ -255,17 +272,29 @@ async def entrypoint(ctx: JobContext):
     # Wait for Output Media client to connect BEFORE starting session
     # This is CRITICAL - the session must link to the client participant
     # to receive audio from them
-    async def wait_for_client(timeout_seconds: float = 60.0) -> Optional[rtc.RemoteParticipant]:
-        """Wait for the Output Media webpage client to connect to the room."""
+    # Timeout is 300s (5 min) - early arrival returns immediately, no delay
+    async def wait_for_client(timeout_seconds: float = 300.0) -> Optional[rtc.RemoteParticipant]:
+        """Wait for the Output Media webpage client to connect to the room.
+
+        Returns immediately when client connects - the timeout only applies if
+        client never arrives. Recall.ai can take 30-120s to join meetings and
+        render the webpage, so we give it plenty of time.
+        """
         start_time = asyncio.get_event_loop().time()
-        check_interval = 0.5  # Check every 500ms
+        check_interval = 0.5  # Check every 500ms for fast response when client arrives
 
         while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
             # Check current participants for the client
             for participant in ctx.room.remote_participants.values():
-                identity = participant.identity.lower()
+                # Defensive null check - participant might be in transition state
+                if participant is None:
+                    continue
+                identity = getattr(participant, 'identity', None)
+                if identity is None:
+                    continue
+                identity_lower = identity.lower()
                 # Output Media client identity format: 'output-media-{session_id}'
-                if identity.startswith('output-media-'):
+                if identity_lower.startswith('output-media-'):
                     logger.info(f"Client connected: {participant.identity}")
                     return participant
 
@@ -274,8 +303,8 @@ async def entrypoint(ctx: JobContext):
         logger.warning(f"Timeout waiting for client after {timeout_seconds}s")
         return None
 
-    logger.info("Waiting for Output Media client to connect...")
-    client_participant = await wait_for_client(timeout_seconds=60.0)
+    logger.info("Waiting for Output Media client to connect (up to 5 min)...")
+    client_participant = await wait_for_client(timeout_seconds=300.0)
 
     if client_participant:
         # Give the client's Web Audio API a moment to initialize after connection
@@ -316,25 +345,34 @@ async def entrypoint(ctx: JobContext):
         while True:
             await asyncio.sleep(5.0)  # Check every 5 seconds
 
-            # Check if room is still active
-            if ctx.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
-                logger.info("Room disconnected, exiting")
+            # Check if room is still active (defensive comparison)
+            try:
+                if ctx.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
+                    logger.info("Room disconnected, exiting")
+                    break
+            except Exception as e:
+                logger.error(f"Error checking connection state: {e}")
                 break
 
-            # Look for client participant
+            # Look for client participant with defensive null checks
+            client_found = False
             for participant in ctx.room.remote_participants.values():
-                identity = participant.identity.lower()
-                if identity.startswith('output-media-'):
-                    logger.info(f"Client connected late: {participant.identity}")
+                if participant is None:
+                    continue
+                identity = getattr(participant, 'identity', None)
+                if identity is None:
+                    continue
+                if identity.lower().startswith('output-media-'):
+                    logger.info(f"Client connected late: {identity}")
                     # Client finally connected - but we can't re-link the session
                     # The session was already started without a participant
                     # Audio from client won't be received, but at least agent stays alive
+                    client_found = True
                     break
-            else:
-                # No client yet, keep waiting
-                continue
-            # Client found, exit loop
-            break
+
+            if client_found:
+                break
+            # No client yet, keep waiting
     else:
         # Client was linked - wait for session to naturally close
         # This happens when the linked participant leaves
