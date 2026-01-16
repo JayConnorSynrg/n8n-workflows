@@ -161,6 +161,22 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(**session_kwargs)
 
+    # =========================================================================
+    # VAD DEBUG: Monitor if VAD is receiving audio frames
+    # =========================================================================
+    vad_frame_count = {"count": 0, "speech_frames": 0, "last_log_time": 0}
+
+    @session.on("audio_input")
+    def on_audio_input(ev):
+        """Debug: Monitor raw audio input frames to VAD."""
+        vad_frame_count["count"] += 1
+        # Log every 100 frames (~5 seconds at 50ms frame size)
+        import time
+        now = time.time()
+        if now - vad_frame_count["last_log_time"] > 5.0:
+            vad_frame_count["last_log_time"] = now
+            logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
+
     # Define agent with tools
     agent = Agent(
         instructions=SYSTEM_PROMPT,
@@ -298,9 +314,17 @@ async def entrypoint(ctx: JobContext):
         for pub in participant.track_publications.values():
             logger.info(f"   - Has track: {pub.kind} / {pub.source} / {pub.name}")
 
-    # Connect to room
+    # Connect to room with EXPLICIT auto_subscribe=True
+    # This ensures we subscribe to ALL remote participant tracks
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
+
+    # DEBUG: Log room configuration
+    logger.info(f"=== ROOM DEBUG ===")
+    logger.info(f"Room SID: {ctx.room.sid}")
+    logger.info(f"Room name: {ctx.room.name}")
+    logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
+    logger.info(f"Remote participants: {len(ctx.room.remote_participants)}")
 
     # Wait for Output Media client to connect BEFORE starting session
     # This is CRITICAL - the session must link to the client participant
@@ -367,6 +391,58 @@ async def entrypoint(ctx: JobContext):
         # Give the client's Web Audio API a moment to initialize after connection
         await asyncio.sleep(1.5)
         logger.info(f"Client connected: {client_participant.identity}, starting session linked to them")
+
+        # =====================================================================
+        # CRITICAL: VERIFY AUDIO SUBSCRIPTION
+        # The agent MUST be subscribed to the client's audio track for VAD/STT
+        # to receive audio frames. This is the most common failure point.
+        # =====================================================================
+        logger.info("=== AUDIO SUBSCRIPTION VERIFICATION ===")
+
+        audio_track_subscribed = False
+        for pub in client_participant.track_publications.values():
+            if pub.kind == rtc.TrackKind.KIND_AUDIO:
+                logger.info(f"Audio track publication found:")
+                logger.info(f"  - SID: {pub.sid}")
+                logger.info(f"  - Name: {pub.name}")
+                logger.info(f"  - Source: {pub.source}")
+                logger.info(f"  - Is Subscribed: {pub.subscribed}")
+                logger.info(f"  - Is Muted: {pub.muted}")
+
+                if pub.subscribed:
+                    audio_track_subscribed = True
+                    # Get the actual track
+                    track = pub.track
+                    if track:
+                        logger.info(f"  - Track kind: {track.kind}")
+                        logger.info(f"  - Track SID: {track.sid}")
+                        logger.info(f"  ✅ Audio track is subscribed and ready!")
+                    else:
+                        logger.warning(f"  ⚠️ Publication subscribed but track is None!")
+                else:
+                    # CRITICAL: Force subscription if not subscribed
+                    logger.warning(f"  ⚠️ Audio track NOT subscribed! Attempting manual subscription...")
+                    try:
+                        pub.set_subscribed(True)
+                        await asyncio.sleep(0.5)  # Give time for subscription
+                        if pub.subscribed:
+                            logger.info(f"  ✅ Manual subscription successful!")
+                            audio_track_subscribed = True
+                        else:
+                            logger.error(f"  ❌ Manual subscription FAILED!")
+                    except Exception as e:
+                        logger.error(f"  ❌ Manual subscription error: {e}")
+
+        if not audio_track_subscribed:
+            logger.warning("⚠️ NO AUDIO TRACK SUBSCRIBED - Agent will not hear client!")
+            logger.warning("   This may happen if:")
+            logger.warning("   1. Client hasn't published audio yet")
+            logger.warning("   2. Auto-subscribe failed")
+            logger.warning("   3. Track source type doesn't match expected")
+        else:
+            logger.info("✅ Audio subscription verified - agent should receive audio")
+
+        logger.info("=== END VERIFICATION ===")
     else:
         # Still start but log warning - agent won't receive audio
         logger.warning("Starting without confirmed client - audio input will not work!")
@@ -377,6 +453,12 @@ async def entrypoint(ctx: JobContext):
     participant_identity = client_participant.identity if client_participant else None
 
     try:
+        # Log what we're about to configure
+        logger.info(f"=== STARTING SESSION ===")
+        logger.info(f"  participant_identity: {participant_identity}")
+        logger.info(f"  audio_input: sample_rate=16000, num_channels=1")
+        logger.info(f"  audio_output: sample_rate=24000, num_channels=1")
+
         await session.start(
             agent=agent,
             room=ctx.room,
@@ -393,6 +475,14 @@ async def entrypoint(ctx: JobContext):
                 ),
                 # Link to specific participant's audio stream
                 participant_identity=participant_identity,
+                # CRITICAL: Accept ALL participant kinds, not just SIP/STANDARD
+                # Recall.ai Output Media may not be recognized as STANDARD
+                participant_kinds=[
+                    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+                    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+                    rtc.ParticipantKind.PARTICIPANT_KIND_INGRESS,
+                    rtc.ParticipantKind.PARTICIPANT_KIND_EGRESS,
+                ],
             ),
         )
         logger.info(f"Agent session started successfully, linked to: {participant_identity or 'first participant'}")
