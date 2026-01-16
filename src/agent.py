@@ -77,7 +77,7 @@ def prewarm(proc: JobProcess):
         min_speech_duration=0.05,      # 50ms - faster speech detection start
         min_silence_duration=0.55,     # 550ms - better end-of-turn detection
         prefix_padding_duration=0.5,   # 500ms padding before speech
-        activation_threshold=0.5,      # Sensitivity (0.0-1.0)
+        activation_threshold=0.3,      # Lower threshold (was 0.5) - better for meeting audio via Recall.ai
         sample_rate=16000,             # Silero requires 8kHz or 16kHz
         force_cpu=True,                # Consistent CPU inference
     )
@@ -100,7 +100,7 @@ async def entrypoint(ctx: JobContext):
             min_speech_duration=0.05,
             min_silence_duration=0.55,
             prefix_padding_duration=0.5,
-            activation_threshold=0.5,
+            activation_threshold=0.3,      # Lower threshold for meeting audio via Recall.ai
             sample_rate=16000,
             force_cpu=True,
         )
@@ -264,6 +264,38 @@ async def entrypoint(ctx: JobContext):
     def on_metrics_collected(ev):
         """Collect and log metrics."""
         logger.debug(f"Metrics: {ev}")
+
+    # =========================================================================
+    # AUDIO INPUT DEBUGGING - Track subscription events
+    # =========================================================================
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant):
+        """Track when we subscribe to remote audio tracks."""
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
+            logger.info(f"🎤 AUDIO TRACK SUBSCRIBED:")
+            logger.info(f"   - Track SID: {track.sid}")
+            logger.info(f"   - Track Source: {publication.source}")
+            logger.info(f"   - Participant: {participant.identity}")
+            logger.info(f"   - Track Name: {publication.name}")
+
+    @ctx.room.on("track_published")
+    def on_track_published(publication, participant):
+        """Track when remote participants publish tracks."""
+        logger.info(f"📡 TRACK PUBLISHED by {participant.identity}:")
+        logger.info(f"   - Track SID: {publication.sid}")
+        logger.info(f"   - Track Kind: {publication.kind}")
+        logger.info(f"   - Track Source: {publication.source}")
+        logger.info(f"   - Track Name: {publication.name}")
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant):
+        """Track when participants connect."""
+        logger.info(f"👤 PARTICIPANT CONNECTED: {participant.identity}")
+        logger.info(f"   - SID: {participant.sid}")
+        logger.info(f"   - Metadata: {participant.metadata}")
+        # List their current tracks
+        for pub in participant.track_publications.values():
+            logger.info(f"   - Has track: {pub.kind} / {pub.source} / {pub.name}")
 
     # Connect to room
     await ctx.connect(auto_subscribe=True)
