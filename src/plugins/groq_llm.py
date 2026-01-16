@@ -41,6 +41,7 @@ class GroqLLM(llm.LLM):
         *,
         chat_ctx: llm.ChatContext,
         tools: Optional[List[llm.FunctionTool]] = None,
+        tool_choice: Optional[str] = None,  # Added: "auto", "none", or specific tool name
         temperature: Optional[float] = None,
         n: int = 1,
         parallel_tool_calls: bool = True,
@@ -95,6 +96,9 @@ class GroqLLM(llm.LLM):
                 for tool in tools
             ]
 
+        # Determine tool_choice: use passed value, default to "auto" if tools present
+        effective_tool_choice = tool_choice if tool_choice else ("auto" if groq_tools else None)
+
         # Create streaming completion
         stream = await self._client.chat.completions.create(
             model=self.model,
@@ -104,8 +108,8 @@ class GroqLLM(llm.LLM):
             top_p=self.top_p,
             stream=True,
             tools=groq_tools,
-            tool_choice="auto" if groq_tools else None,
-            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=effective_tool_choice,
+            parallel_tool_calls=parallel_tool_calls if groq_tools else None,
         )
 
         return GroqLLMStream(stream, tools)
