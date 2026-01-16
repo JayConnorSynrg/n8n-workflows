@@ -385,12 +385,18 @@ async def entrypoint(ctx: JobContext):
                     sample_rate=24000,
                     num_channels=1,
                 ),
-                audio_input=True,  # Enable audio input from linked participant
+                # CRITICAL: Explicit AudioInputOptions for proper audio capture
+                # Sample rate 16000 matches VAD expectation (Silero requires 16kHz)
+                audio_input=room_io.AudioInputOptions(
+                    sample_rate=16000,  # Match VAD sample rate
+                    num_channels=1,
+                ),
                 # Link to specific participant's audio stream
                 participant_identity=participant_identity,
             ),
         )
         logger.info(f"Agent session started successfully, linked to: {participant_identity or 'first participant'}")
+        logger.info(f"Audio input configured: sample_rate=16000, num_channels=1")
     except Exception as e:
         logger.error(f"CRITICAL: session.start() failed: {e}")
         raise
