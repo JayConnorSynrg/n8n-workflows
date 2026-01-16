@@ -77,11 +77,11 @@ def prewarm(proc: JobProcess):
         min_speech_duration=0.05,      # 50ms - faster speech detection start
         min_silence_duration=0.55,     # 550ms - better end-of-turn detection
         prefix_padding_duration=0.5,   # 500ms padding before speech
-        activation_threshold=0.3,      # Lower threshold (was 0.5) - better for meeting audio via Recall.ai
+        activation_threshold=0.15,     # Very low threshold for Recall.ai meeting audio (was 0.3, then 0.5)
         sample_rate=16000,             # Silero requires 8kHz or 16kHz
         force_cpu=True,                # Consistent CPU inference
     )
-    logger.info("VAD model prewarmed")
+    logger.info("VAD model prewarmed with activation_threshold=0.15")
 
 
 async def entrypoint(ctx: JobContext):
@@ -100,10 +100,11 @@ async def entrypoint(ctx: JobContext):
             min_speech_duration=0.05,
             min_silence_duration=0.55,
             prefix_padding_duration=0.5,
-            activation_threshold=0.3,      # Lower threshold for meeting audio via Recall.ai
+            activation_threshold=0.15,     # Very low threshold for Recall.ai meeting audio
             sample_rate=16000,
             force_cpu=True,
         )
+        logger.info("VAD loaded with activation_threshold=0.15")
 
     # Initialize STT with Deepgram Nova-3
     stt = deepgram.STT(
