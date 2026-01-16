@@ -121,13 +121,30 @@ class GroqLLM(llm.LLM):
 
 
 class GroqLLMStream(llm.LLMStream):
-    """Streaming response from Groq."""
+    """Streaming response from Groq.
+
+    Implements async context manager protocol for LiveKit Agents 1.3.x compatibility.
+    Used as: `async with llm.chat(...) as stream: async for chunk in stream: ...`
+    """
 
     def __init__(self, stream: Any, tools: Optional[List[llm.FunctionTool]]):
         super().__init__()
         self._stream = stream
         self._tools = tools
         self._current_tool_calls = {}
+
+    async def __aenter__(self) -> "GroqLLMStream":
+        """Enter async context manager - return self for iteration."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager - cleanup if needed."""
+        # Close the underlying stream if it supports it
+        if hasattr(self._stream, 'close'):
+            await self._stream.close()
+        elif hasattr(self._stream, 'aclose'):
+            await self._stream.aclose()
+        return None
 
     async def __anext__(self) -> llm.ChatChunk:
         """Get next chunk from stream."""
