@@ -319,27 +319,35 @@ async def entrypoint(ctx: JobContext):
     # This tells the session which participant to listen to and respond to
     participant_identity = client_participant.identity if client_participant else None
 
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_output=room_io.AudioOutputOptions(
-                sample_rate=24000,
-                num_channels=1,
+    try:
+        await session.start(
+            agent=agent,
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                audio_output=room_io.AudioOutputOptions(
+                    sample_rate=24000,
+                    num_channels=1,
+                ),
+                audio_input=True,  # Enable audio input from linked participant
+                # Link to specific participant's audio stream
+                participant_identity=participant_identity,
             ),
-            audio_input=True,  # Enable audio input from linked participant
-            # Link to specific participant's audio stream
-            participant_identity=participant_identity,
-        ),
-    )
-    logger.info(f"Agent session started, linked to: {participant_identity or 'first participant'}")
+        )
+        logger.info(f"Agent session started successfully, linked to: {participant_identity or 'first participant'}")
+    except Exception as e:
+        logger.error(f"CRITICAL: session.start() failed: {e}")
+        raise
 
     # Generate initial greeting with interruptions disabled
     # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
-    await session.say(
-        "Hello! I'm your voice assistant. How can I help you today?",
-        allow_interruptions=False  # Don't interrupt greeting
-    )
+    try:
+        await session.say(
+            "Hello! I'm your voice assistant. How can I help you today?",
+            allow_interruptions=False  # Don't interrupt greeting
+        )
+        logger.info("Greeting sent successfully")
+    except Exception as e:
+        logger.error(f"CRITICAL: session.say() failed: {e}")
 
     # CRITICAL: Keep the agent alive until the room closes
     # Without this, the entrypoint returns and the agent disconnects!
