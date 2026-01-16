@@ -295,6 +295,52 @@ async def entrypoint(ctx: JobContext):
             logger.info(f"   - Participant: {participant.identity}")
             logger.info(f"   - Track Name: {publication.name}")
 
+            # CRITICAL DIAGNOSTIC: Count actual audio frames from this track
+            async def count_audio_frames():
+                """Count audio frames to verify audio is flowing."""
+                frame_count = 0
+                silent_frames = 0
+                last_log_time = asyncio.get_event_loop().time()
+
+                try:
+                    audio_stream = rtc.AudioStream(track)
+                    async for frame_event in audio_stream:
+                        frame_count += 1
+                        frame = frame_event.frame
+
+                        # Check if frame is silent (all zeros or very low)
+                        samples = frame.data
+                        if samples:
+                            # Calculate RMS of frame
+                            import struct
+                            try:
+                                # Assuming 16-bit PCM
+                                num_samples = len(samples) // 2
+                                if num_samples > 0:
+                                    values = struct.unpack(f'{num_samples}h', samples[:num_samples*2])
+                                    rms = (sum(v*v for v in values) / num_samples) ** 0.5
+                                    if rms < 100:  # Very quiet
+                                        silent_frames += 1
+                            except Exception:
+                                pass
+
+                        # Log every 5 seconds
+                        now = asyncio.get_event_loop().time()
+                        if now - last_log_time > 5.0:
+                            last_log_time = now
+                            pct_silent = (silent_frames / frame_count * 100) if frame_count > 0 else 0
+                            logger.info(f"📊 AUDIO FRAME STATS: {frame_count} total, {silent_frames} silent ({pct_silent:.1f}%)")
+                            logger.info(f"   Sample rate: {frame.sample_rate}, Channels: {frame.num_channels}")
+
+                            if pct_silent > 90:
+                                logger.warning(f"⚠️ AUDIO IS MOSTLY SILENT - Check Recall.ai audio source!")
+
+                except Exception as e:
+                    logger.error(f"Audio frame counting error: {e}")
+
+            # Start counting in background
+            asyncio.create_task(count_audio_frames())
+
     @ctx.room.on("track_published")
     def on_track_published(publication, participant):
         """Track when remote participants publish tracks."""
