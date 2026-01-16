@@ -147,9 +147,14 @@ async def entrypoint(ctx: JobContext):
     }
 
     # Add turn detection if available
+    # Note: Import may succeed but initialization can fail if model files aren't downloaded
     if HAS_TURN_DETECTOR and MultilingualModel:
-        session_kwargs["turn_detection"] = MultilingualModel()
-        logger.info("Using semantic turn detection")
+        try:
+            session_kwargs["turn_detection"] = MultilingualModel()
+            logger.info("Using semantic turn detection")
+        except RuntimeError as e:
+            logger.warning(f"Turn detector initialization failed: {e}")
+            logger.warning("Using VAD-only turn detection (run 'python -m livekit.agents download-files' to enable)")
     else:
         logger.warning("Turn detector not available, using VAD-only turn detection")
 
