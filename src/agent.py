@@ -305,38 +305,62 @@ async def entrypoint(ctx: JobContext):
     # This is CRITICAL - the session must link to the client participant
     # to receive audio from them
     # Timeout is 300s (5 min) - early arrival returns immediately, no delay
-    async def wait_for_client(timeout_seconds: float = 300.0) -> Optional[rtc.RemoteParticipant]:
-        """Wait for the Output Media webpage client to connect to the room.
+    async def wait_for_client_with_audio(timeout_seconds: float = 300.0) -> Optional[rtc.RemoteParticipant]:
+        """Wait for the Output Media webpage client to connect AND publish audio.
 
-        Returns immediately when client connects - the timeout only applies if
-        client never arrives. Recall.ai can take 30-120s to join meetings and
-        render the webpage, so we give it plenty of time.
+        CRITICAL: We must wait for the audio track to be published, not just for
+        the participant to connect. Otherwise session.start() will link to a
+        participant that hasn't published audio yet.
+
+        Returns immediately when client's audio track is detected - the timeout
+        only applies if client never arrives or never publishes audio.
         """
         start_time = asyncio.get_event_loop().time()
-        check_interval = 0.5  # Check every 500ms for fast response when client arrives
+        check_interval = 0.5  # Check every 500ms for fast response
+
+        client_participant = None
+        audio_track_found = False
 
         while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
             # Check current participants for the client
             for participant in ctx.room.remote_participants.values():
-                # Defensive null check - participant might be in transition state
                 if participant is None:
                     continue
                 identity = getattr(participant, 'identity', None)
                 if identity is None:
                     continue
                 identity_lower = identity.lower()
+
                 # Output Media client identity format: 'output-media-{session_id}'
                 if identity_lower.startswith('output-media-'):
-                    logger.info(f"Client connected: {participant.identity}")
-                    return participant
+                    if client_participant is None:
+                        logger.info(f"👤 Client found: {participant.identity}")
+                        client_participant = participant
+
+                    # Check if client has published an audio track
+                    for pub in participant.track_publications.values():
+                        if pub.kind == rtc.TrackKind.KIND_AUDIO:
+                            logger.info(f"🎤 Client audio track found!")
+                            logger.info(f"   - Track SID: {pub.sid}")
+                            logger.info(f"   - Track Name: {pub.name}")
+                            logger.info(f"   - Track Source: {pub.source}")
+                            audio_track_found = True
+                            break
+
+                    if audio_track_found:
+                        return participant
 
             await asyncio.sleep(check_interval)
+
+        if client_participant and not audio_track_found:
+            logger.warning(f"Client connected but no audio track published after {timeout_seconds}s")
+            return client_participant  # Return participant anyway, maybe track will come later
 
         logger.warning(f"Timeout waiting for client after {timeout_seconds}s")
         return None
 
-    logger.info("Waiting for Output Media client to connect (up to 5 min)...")
-    client_participant = await wait_for_client(timeout_seconds=300.0)
+    logger.info("Waiting for Output Media client to connect AND publish audio (up to 5 min)...")
+    client_participant = await wait_for_client_with_audio(timeout_seconds=300.0)
 
     if client_participant:
         # Give the client's Web Audio API a moment to initialize after connection
