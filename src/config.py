@@ -51,6 +51,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         populate_by_name = True
+        extra = "ignore"  # Allow extra env vars (Railway adds its own)
 
 
 @lru_cache
