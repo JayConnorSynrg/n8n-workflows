@@ -307,10 +307,45 @@ async def entrypoint(ctx: JobContext):
         allow_interruptions=False  # Don't interrupt greeting
     )
 
-    # The session manages its own lifecycle - it stays active until:
-    # 1. The linked participant leaves the room
-    # 2. The room is deleted
-    # 3. session.close() is called explicitly
+    # CRITICAL: Keep the agent alive until the room closes
+    # Without this, the entrypoint returns and the agent disconnects!
+    # If we started without a client, wait for one to connect
+    if not client_participant:
+        logger.info("No client yet - waiting for Output Media client to connect...")
+        # Keep checking for the client while the room is active
+        while True:
+            await asyncio.sleep(5.0)  # Check every 5 seconds
+
+            # Check if room is still active
+            if ctx.room.connection_state.name != "CONN_CONNECTED":
+                logger.info("Room disconnected, exiting")
+                break
+
+            # Look for client participant
+            for participant in ctx.room.remote_participants.values():
+                identity = participant.identity.lower()
+                if identity.startswith('output-media-'):
+                    logger.info(f"Client connected late: {participant.identity}")
+                    # Client finally connected - but we can't re-link the session
+                    # The session was already started without a participant
+                    # Audio from client won't be received, but at least agent stays alive
+                    break
+            else:
+                # No client yet, keep waiting
+                continue
+            # Client found, exit loop
+            break
+    else:
+        # Client was linked - wait for session to naturally close
+        # This happens when the linked participant leaves
+        logger.info("Session linked to client, waiting for session close...")
+
+    # Keep agent alive until room closes
+    # The room closes when all participants leave or it times out
+    while ctx.room.connection_state.name == "CONN_CONNECTED":
+        await asyncio.sleep(1.0)
+
+    logger.info("Agent session ended")
 
 
 def main():
