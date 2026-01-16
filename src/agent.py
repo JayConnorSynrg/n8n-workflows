@@ -317,7 +317,7 @@ async def entrypoint(ctx: JobContext):
             await asyncio.sleep(5.0)  # Check every 5 seconds
 
             # Check if room is still active
-            if ctx.room.connection_state.name != "CONN_CONNECTED":
+            if ctx.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
                 logger.info("Room disconnected, exiting")
                 break
 
@@ -342,7 +342,7 @@ async def entrypoint(ctx: JobContext):
 
     # Keep agent alive until room closes
     # The room closes when all participants leave or it times out
-    while ctx.room.connection_state.name == "CONN_CONNECTED":
+    while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1.0)
 
     logger.info("Agent session ended")
