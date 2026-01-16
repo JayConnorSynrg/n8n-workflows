@@ -252,23 +252,10 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
 
-    # Start the agent session with audio configuration
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_output=room_io.AudioOutputOptions(
-                sample_rate=24000,
-                num_channels=1,
-            ),
-        ),
-    )
-    logger.info("Agent session started")
-
-    # Wait for Output Media client to connect before sending greeting
-    # The webpage loads AFTER Recall.ai bot joins the meeting, so we need to wait
-    # for a participant with identity starting with 'output-media-' to appear
-    async def wait_for_client(timeout_seconds: float = 30.0) -> bool:
+    # Wait for Output Media client to connect BEFORE starting session
+    # This is CRITICAL - the session must link to the client participant
+    # to receive audio from them
+    async def wait_for_client(timeout_seconds: float = 60.0) -> Optional[rtc.RemoteParticipant]:
         """Wait for the Output Media webpage client to connect to the room."""
         start_time = asyncio.get_event_loop().time()
         check_interval = 0.5  # Check every 500ms
@@ -280,23 +267,38 @@ async def entrypoint(ctx: JobContext):
                 # Output Media client identity format: 'output-media-{session_id}'
                 if identity.startswith('output-media-'):
                     logger.info(f"Client connected: {participant.identity}")
-                    return True
+                    return participant
 
             await asyncio.sleep(check_interval)
 
         logger.warning(f"Timeout waiting for client after {timeout_seconds}s")
-        return False
+        return None
 
     logger.info("Waiting for Output Media client to connect...")
-    client_connected = await wait_for_client(timeout_seconds=30.0)
+    client_participant = await wait_for_client(timeout_seconds=60.0)
 
-    if client_connected:
+    if client_participant:
         # Give the client's Web Audio API a moment to initialize after connection
-        await asyncio.sleep(1.0)
-        logger.info("Client connected, sending greeting")
+        await asyncio.sleep(1.5)
+        logger.info(f"Client connected: {client_participant.identity}, starting session linked to them")
     else:
-        # Proceed anyway but log the warning - audio may not be heard
-        logger.warning("Proceeding without confirmed client connection")
+        # Still start but log warning - agent won't receive audio
+        logger.warning("Starting without confirmed client - audio input will not work!")
+
+    # Start the agent session with audio configuration
+    # CRITICAL: Link to the client participant so we receive their audio
+    await session.start(
+        agent=agent,
+        room=ctx.room,
+        participant=client_participant,  # Link to the webpage client
+        room_options=room_io.RoomOptions(
+            audio_output=room_io.AudioOutputOptions(
+                sample_rate=24000,
+                num_channels=1,
+            ),
+        ),
+    )
+    logger.info(f"Agent session started, linked to: {client_participant.identity if client_participant else 'no one'}")
 
     # Generate initial greeting with interruptions disabled
     # This allows the client to calibrate AEC (Acoustic Echo Cancellation)

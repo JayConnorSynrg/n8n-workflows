@@ -342,7 +342,7 @@ def test_full_launcher_simulation() -> TestResult:
 
         # Step 4: Construct output media URL (what would be sent to Recall.ai)
         output_media_url = (
-            f"https://synrg-voice-agent.vercel.app"
+            f"https://jayconnorsynrg.github.io/synrg-voice-agent-client"
             f"?livekit_url={urllib.parse.quote(LIVEKIT_URL)}"
             f"&token={urllib.parse.quote(token)}"
         )
