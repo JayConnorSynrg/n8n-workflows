@@ -77,11 +77,11 @@ def prewarm(proc: JobProcess):
         min_speech_duration=0.05,      # 50ms - faster speech detection start
         min_silence_duration=0.55,     # 550ms - better end-of-turn detection
         prefix_padding_duration=0.5,   # 500ms padding before speech
-        activation_threshold=0.15,     # Very low threshold for Recall.ai meeting audio (was 0.3, then 0.5)
+        activation_threshold=0.05,     # VERY LOW for Recall.ai processed audio (was 0.15)
         sample_rate=16000,             # Silero requires 8kHz or 16kHz
         force_cpu=True,                # Consistent CPU inference
     )
-    logger.info("VAD model prewarmed with activation_threshold=0.15")
+    logger.info("VAD model prewarmed with activation_threshold=0.05")
 
 
 async def entrypoint(ctx: JobContext):
@@ -100,11 +100,11 @@ async def entrypoint(ctx: JobContext):
             min_speech_duration=0.05,
             min_silence_duration=0.55,
             prefix_padding_duration=0.5,
-            activation_threshold=0.15,     # Very low threshold for Recall.ai meeting audio
+            activation_threshold=0.05,     # VERY LOW for Recall.ai processed audio
             sample_rate=16000,
             force_cpu=True,
         )
-        logger.info("VAD loaded with activation_threshold=0.15")
+        logger.info("VAD loaded with activation_threshold=0.05")
 
     # Initialize STT with Deepgram Nova-3
     stt = deepgram.STT(
@@ -298,8 +298,13 @@ async def entrypoint(ctx: JobContext):
             # CRITICAL DIAGNOSTIC: Count actual audio frames from this track
             async def count_audio_frames():
                 """Count audio frames to verify audio is flowing."""
+                import struct
+                import math
+
                 frame_count = 0
                 silent_frames = 0
+                max_rms = 0.0
+                rms_sum = 0.0
                 last_log_time = asyncio.get_event_loop().time()
 
                 try:
@@ -310,16 +315,19 @@ async def entrypoint(ctx: JobContext):
 
                         # Check if frame is silent (all zeros or very low)
                         samples = frame.data
+                        rms = 0.0
                         if samples:
                             # Calculate RMS of frame
-                            import struct
                             try:
                                 # Assuming 16-bit PCM
                                 num_samples = len(samples) // 2
                                 if num_samples > 0:
                                     values = struct.unpack(f'{num_samples}h', samples[:num_samples*2])
                                     rms = (sum(v*v for v in values) / num_samples) ** 0.5
-                                    if rms < 100:  # Very quiet
+                                    rms_sum += rms
+                                    if rms > max_rms:
+                                        max_rms = rms
+                                    if rms < 100:  # Very quiet (below -50dB)
                                         silent_frames += 1
                             except Exception:
                                 pass
@@ -329,11 +337,24 @@ async def entrypoint(ctx: JobContext):
                         if now - last_log_time > 5.0:
                             last_log_time = now
                             pct_silent = (silent_frames / frame_count * 100) if frame_count > 0 else 0
+                            avg_rms = rms_sum / frame_count if frame_count > 0 else 0
+
+                            # Convert to dB for meaningful interpretation
+                            # 32767 is max for 16-bit audio, so dB = 20*log10(rms/32767)
+                            max_db = 20 * math.log10(max_rms / 32767) if max_rms > 0 else -100
+                            avg_db = 20 * math.log10(avg_rms / 32767) if avg_rms > 0 else -100
+
                             logger.info(f"📊 AUDIO FRAME STATS: {frame_count} total, {silent_frames} silent ({pct_silent:.1f}%)")
                             logger.info(f"   Sample rate: {frame.sample_rate}, Channels: {frame.num_channels}")
+                            logger.info(f"   RMS: avg={avg_rms:.1f} ({avg_db:.1f}dB), max={max_rms:.1f} ({max_db:.1f}dB)")
 
-                            if pct_silent > 90:
+                            # VAD threshold 0.05 with Silero typically requires > -40dB audio
+                            if max_db < -50:
+                                logger.warning(f"⚠️ AUDIO VERY QUIET (max {max_db:.1f}dB) - VAD may not trigger!")
+                            elif pct_silent > 90:
                                 logger.warning(f"⚠️ AUDIO IS MOSTLY SILENT - Check Recall.ai audio source!")
+                            else:
+                                logger.info(f"   ✅ Audio levels look good for VAD (threshold=0.05)")
 
                 except Exception as e:
                     logger.error(f"Audio frame counting error: {e}")
