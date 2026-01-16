@@ -41,12 +41,17 @@ class GroqLLM(llm.LLM):
         *,
         chat_ctx: llm.ChatContext,
         tools: Optional[List[llm.FunctionTool]] = None,
-        tool_choice: Optional[str] = None,  # Added: "auto", "none", or specific tool name
+        tool_choice: Optional[str] = None,  # "auto", "none", or specific tool name
+        conn_options: Optional[Any] = None,  # LiveKit Agents 1.3.x connection options (ignored for Groq)
         temperature: Optional[float] = None,
         n: int = 1,
         parallel_tool_calls: bool = True,
     ) -> "GroqLLMStream":
-        """Generate a streaming chat completion."""
+        """Generate a streaming chat completion.
+
+        Note: conn_options is accepted for compatibility with LiveKit Agents 1.3.x
+        but is not used by Groq API.
+        """
 
         # Convert messages to Groq format
         messages = []
