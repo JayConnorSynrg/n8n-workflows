@@ -315,19 +315,24 @@ async def entrypoint(ctx: JobContext):
         logger.warning("Starting without confirmed client - audio input will not work!")
 
     # Start the agent session with audio configuration
-    # CRITICAL: Link to the client participant so we receive their audio
+    # CRITICAL: Link to the client participant via participant_identity in RoomOptions
+    # This tells the session which participant to listen to and respond to
+    participant_identity = client_participant.identity if client_participant else None
+
     await session.start(
         agent=agent,
         room=ctx.room,
-        participant=client_participant,  # Link to the webpage client
         room_options=room_io.RoomOptions(
             audio_output=room_io.AudioOutputOptions(
                 sample_rate=24000,
                 num_channels=1,
             ),
+            audio_input=True,  # Enable audio input from linked participant
+            # Link to specific participant's audio stream
+            participant_identity=participant_identity,
         ),
     )
-    logger.info(f"Agent session started, linked to: {client_participant.identity if client_participant else 'no one'}")
+    logger.info(f"Agent session started, linked to: {participant_identity or 'first participant'}")
 
     # Generate initial greeting with interruptions disabled
     # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
