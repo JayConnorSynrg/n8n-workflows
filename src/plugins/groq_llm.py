@@ -1,4 +1,7 @@
-"""Groq LLM integration for LiveKit Agents."""
+"""Groq LLM integration for LiveKit Agents.
+
+Compatible with LiveKit Agents 1.3.x async context manager protocol.
+"""
 import os
 from typing import AsyncIterator, Optional, List, Any
 
