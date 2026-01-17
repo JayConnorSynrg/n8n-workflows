@@ -1,5 +1,5 @@
 # Multi-stage build for smaller image
-# Force rebuild: 2026-01-17T00:02
+# Force rebuild: 2026-01-17T00:14 - Switch to official groq plugin
 FROM python:3.11-slim as builder
 
 WORKDIR /app
