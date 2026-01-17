@@ -185,14 +185,18 @@ async def entrypoint(ctx: JobContext):
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
     # Safe publish helper - handles cases where room is disconnecting
-    async def safe_publish_data(data: bytes) -> bool:
+    async def safe_publish_data(data: bytes, log_type: str = "data") -> bool:
         """Safely publish data to room, handling disconnection gracefully."""
         try:
             if ctx.room.local_participant:
                 await ctx.room.local_participant.publish_data(data)
+                # Log successful publish at INFO level for debugging
+                logger.info(f"📤 Published {log_type}: {data[:100].decode('utf-8', errors='ignore')}...")
                 return True
+            else:
+                logger.warning(f"Cannot publish {log_type}: no local_participant")
         except Exception as e:
-            logger.debug(f"Could not publish data (room may be closing): {e}")
+            logger.warning(f"Failed to publish {log_type}: {e}")
         return False
 
     @session.on("user_state_changed")
@@ -203,7 +207,8 @@ async def entrypoint(ctx: JobContext):
         if str(state) == "speaking":
             tracker.start("total_latency")
             asyncio.create_task(safe_publish_data(
-                b'{"type":"agent.state","state":"listening"}'
+                b'{"type":"agent.state","state":"listening"}',
+                log_type="agent.state"
             ))
 
     @session.on("user_input_transcribed")
@@ -220,7 +225,8 @@ async def entrypoint(ctx: JobContext):
                 "type": "transcript.user",
                 "text": text or "",
                 "is_final": is_final
-            }).encode()
+            }).encode(),
+            log_type="transcript.user"
         ))
 
     @session.on("agent_state_changed")
@@ -232,22 +238,26 @@ async def entrypoint(ctx: JobContext):
         state_str = str(state).lower()
         if "thinking" in state_str:
             asyncio.create_task(safe_publish_data(
-                b'{"type":"agent.state","state":"thinking"}'
+                b'{"type":"agent.state","state":"thinking"}',
+                log_type="agent.state"
             ))
         elif "speaking" in state_str:
             asyncio.create_task(safe_publish_data(
-                b'{"type":"agent.state","state":"speaking"}'
+                b'{"type":"agent.state","state":"speaking"}',
+                log_type="agent.state"
             ))
         elif "listening" in state_str:
             asyncio.create_task(safe_publish_data(
-                b'{"type":"agent.state","state":"listening"}'
+                b'{"type":"agent.state","state":"listening"}',
+                log_type="agent.state"
             ))
         elif "idle" in state_str:
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
             asyncio.create_task(safe_publish_data(
-                b'{"type":"agent.state","state":"idle"}'
+                b'{"type":"agent.state","state":"idle"}',
+                log_type="agent.state"
             ))
 
     @session.on("speech_created")
@@ -265,9 +275,10 @@ async def entrypoint(ctx: JobContext):
 
         if text:
             text_preview = text[:100] if len(text) > 100 else text
-            logger.debug(f"Agent said: {text_preview}")
+            logger.info(f"Agent said: {text_preview}")
             asyncio.create_task(safe_publish_data(
-                json.dumps({"type": "transcript.assistant", "text": text}).encode()
+                json.dumps({"type": "transcript.assistant", "text": text}).encode(),
+                log_type="transcript.assistant"
             ))
 
     @session.on("function_tools_executed")
