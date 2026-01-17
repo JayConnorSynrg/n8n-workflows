@@ -1,4 +1,9 @@
 .vercel
+node_modules/
+test-results/
+playwright-report/
+*.log
+.DS_Store
 
 # Environment variables
 .env

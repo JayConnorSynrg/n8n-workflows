@@ -18,11 +18,14 @@ interface ToolCall {
   timestamp: number
 }
 
+type AudioStatus = 'waiting' | 'connecting' | 'playing' | 'error'
+
 interface VoiceAgentStore {
   // Connection state
   sessionId: string | null
   botId: string | null
   agentConnected: boolean  // True when voice agent participant joins
+  audioStatus: AudioStatus  // Audio playback status for debugging
 
   // Agent state
   agentState: AgentState
@@ -37,6 +40,7 @@ interface VoiceAgentStore {
   setSessionId: (sessionId: string | null) => void
   setBotId: (botId: string | null) => void
   setAgentConnected: (connected: boolean) => void
+  setAudioStatus: (status: AudioStatus) => void
   setAgentState: (state: AgentState) => void
   setInputVolume: (volume: number) => void
   setOutputVolume: (volume: number) => void
@@ -54,6 +58,7 @@ export const useStore = create<VoiceAgentStore>((set) => ({
   sessionId: null,
   botId: null,
   agentConnected: false,
+  audioStatus: 'waiting',
   agentState: null,
   inputVolume: 0,
   outputVolume: 0,
@@ -64,6 +69,7 @@ export const useStore = create<VoiceAgentStore>((set) => ({
   setSessionId: (sessionId) => set({ sessionId }),
   setBotId: (botId) => set({ botId }),
   setAgentConnected: (agentConnected) => set({ agentConnected }),
+  setAudioStatus: (audioStatus) => set({ audioStatus }),
   setAgentState: (agentState) => set({ agentState }),
   setInputVolume: (inputVolume) => set({ inputVolume }),
   setOutputVolume: (outputVolume) => set({ outputVolume }),
@@ -109,6 +115,7 @@ export const useStore = create<VoiceAgentStore>((set) => ({
       sessionId: null,
       botId: null,
       agentConnected: false,
+      audioStatus: 'waiting',
       agentState: null,
       inputVolume: 0,
       outputVolume: 0,
