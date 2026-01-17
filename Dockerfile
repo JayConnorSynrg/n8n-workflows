@@ -1,4 +1,5 @@
 # Multi-stage build for smaller image
+# Force rebuild: 2026-01-17T00:02
 FROM python:3.11-slim as builder
 
 WORKDIR /app
