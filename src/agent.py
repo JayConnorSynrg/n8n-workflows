@@ -19,7 +19,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import silero, deepgram, cartesia
+from livekit.plugins import silero, deepgram, cartesia, groq
 
 # Try to import turn detector (optional but recommended)
 try:
@@ -30,7 +30,6 @@ except ImportError:
     MultilingualModel = None
 
 from .config import get_settings
-from .plugins.groq_llm import GroqLLM
 from .tools.email_tool import send_email_tool
 from .tools.database_tool import query_database_tool
 from .utils.logging import setup_logging
@@ -117,12 +116,11 @@ async def entrypoint(ctx: JobContext):
         enable_diarization=False,  # Single speaker for now
     )
 
-    # Initialize LLM with Groq
-    llm_instance = GroqLLM(
+    # Initialize LLM with official Groq plugin
+    llm_instance = groq.LLM(
         model=settings.groq_model,
         api_key=settings.groq_api_key,
         temperature=settings.groq_temperature,
-        max_tokens=settings.groq_max_tokens,
     )
 
     # Initialize TTS with Cartesia Sonic-3
