@@ -216,15 +216,21 @@ async def entrypoint(ctx: JobContext):
         """Called when user speech is transcribed."""
         text = ev.transcript if hasattr(ev, 'transcript') else str(ev)
         is_final = getattr(ev, 'is_final', True)
+
+        # ONLY publish FINAL transcripts to avoid duplicates
+        # Interim results are partial and will be superseded
+        if not is_final:
+            return
+
         # Safe text handling for logging
         text_preview = text[:100] if text and len(text) > 100 else (text or "(empty)")
-        logger.info(f"User said: {text_preview}")
+        logger.info(f"User said (final): {text_preview}")
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
             json.dumps({
                 "type": "transcript.user",
                 "text": text or "",
-                "is_final": is_final
+                "is_final": True
             }).encode(),
             log_type="transcript.user"
         ))
@@ -260,18 +266,37 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
 
-    @session.on("speech_created")
-    def on_speech_created(ev):
-        """Called when agent generates speech - capture transcript."""
-        # Get the text from the event with safe attribute access
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev):
+        """Called when a new item is added to conversation - captures agent responses."""
+        # Extract item from event
+        item = getattr(ev, 'item', None)
+        if not item:
+            return
+
+        # Check if this is an assistant (agent) message
+        role = getattr(item, 'role', None)
+        if role != 'assistant':
+            return  # Only publish agent responses, user transcripts handled separately
+
+        # Extract text content from the item
         text = ""
         try:
-            if hasattr(ev, 'source') and ev.source and hasattr(ev.source, 'text'):
-                text = ev.source.text or ""
-            elif hasattr(ev, 'text'):
-                text = ev.text or ""
+            # Try text_content attribute (common in conversation items)
+            if hasattr(item, 'text_content'):
+                text = item.text_content or ""
+            # Try content attribute
+            elif hasattr(item, 'content'):
+                content = item.content
+                if isinstance(content, str):
+                    text = content
+                elif hasattr(content, 'text'):
+                    text = content.text or ""
+            # Try text attribute directly
+            elif hasattr(item, 'text'):
+                text = item.text or ""
         except Exception as e:
-            logger.debug(f"Could not extract speech text: {e}")
+            logger.debug(f"Could not extract conversation item text: {e}")
 
         if text:
             text_preview = text[:100] if len(text) > 100 else text
