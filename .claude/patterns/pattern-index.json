@@ -41,6 +41,12 @@
       "description": "Up-to-date node configurations from MCP",
       "apply": "ALWAYS check before implementing nodes"
     },
+    "voice-agents": {
+      "priority": 2,
+      "description": "LiveKit voice agent integration patterns",
+      "apply": "When building voice agents with LiveKit/Groq/Recall.ai",
+      "anti_memory": true
+    },
     "node-selection": {
       "priority": 3,
       "description": "Choosing correct node types",
@@ -472,6 +478,180 @@
       "deprecation": {
         "status": "ACTIVE"
       }
+    },
+    {
+      "id": "postgres-query-replacement",
+      "file": "error-handling/postgres-query-replacement.md",
+      "title": "PostgreSQL queryReplacement Parameter Syntax",
+      "priority": "HIGH",
+      "triggers": ["postgres", "queryReplacement", "parameter", "$1", "$2", "there is no parameter", "executeQuery"],
+      "node_types": ["n8n-nodes-base.postgres"],
+      "summary": "ALL values in queryReplacement must be wrapped in {{ }} expression syntax, including static strings. Use {{ 'static' }} for constants.",
+      "anti_patterns": [
+        "CANCELLED, {{ $json.id }}",
+        "Static values without expression wrapping"
+      ],
+      "correct_patterns": [
+        "{{ 'CANCELLED' }}, {{ $json.id }}",
+        "{{ $json.field1 }}, {{ $json.field2 }}"
+      ],
+      "reference_workflow": "kBuTRrXTJF1EEBEs",
+      "validity": {
+        "last_verified": "2026-01-14",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_testing",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-14"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "gated-execution-callbacks",
+      "file": "workflow-architecture/gated-execution-callbacks.md",
+      "title": "Gated Execution with Callback-Based Flow Control",
+      "priority": "HIGH",
+      "triggers": ["gated", "gate", "callback", "interruptible", "cancel", "checkpoint", "confirmation", "voice tool", "tool execution"],
+      "node_types": ["n8n-nodes-base.httpRequest", "n8n-nodes-base.if", "n8n-nodes-base.postgres", "n8n-nodes-base.webhook"],
+      "summary": "Gated execution pattern enables interruptible tool calls with progress callbacks, cancel checkpoints, and confirmation gates before irreversible actions.",
+      "anti_patterns": [
+        "Gate 1 → Gate 2 (bypassing IF node)",
+        "Direct connection skipping cancel checks"
+      ],
+      "correct_patterns": [
+        "Gate 1 → IF Check → Gate 2 (TRUE=cancel, FALSE=continue)",
+        "IF branch 0 = TRUE (condition matched)",
+        "IF branch 1 = FALSE (continue execution)"
+      ],
+      "reference_workflow": "kBuTRrXTJF1EEBEs",
+      "related_patterns": ["postgres-query-replacement", "if-node-conditions"],
+      "validity": {
+        "last_verified": "2026-01-14",
+        "freshness_tier": "FRESH",
+        "verified_against": "workflow_testing",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-14"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "livekit-agents-1.3.x",
+      "file": "voice-agents/livekit-agents-1.3.x.md",
+      "title": "LiveKit Agents 1.3.x Integration Patterns",
+      "priority": "CRITICAL",
+      "triggers": ["livekit", "voice agent", "livekit-agents", "llm.LLM", "llm.LLMStream", "chat()"],
+      "node_types": [],
+      "summary": "CRITICAL: Use official livekit-plugins-* packages. Custom LLM implementations fail due to abstract method requirements and sync/async contract.",
+      "anti_patterns": [
+        "class GroqLLM(llm.LLM)",
+        "async def chat()",
+        "class GroqLLMStream(llm.LLMStream)"
+      ],
+      "correct_patterns": [
+        "from livekit.plugins import groq",
+        "groq.LLM(model=...)",
+        "def chat()  # sync, not async"
+      ],
+      "anti_memory": true,
+      "validity": {
+        "last_verified": "2026-01-17",
+        "freshness_tier": "FRESH",
+        "verified_against": "production_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-17"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "vad-tuning-recall-ai",
+      "file": "voice-agents/vad-tuning-recall-ai.md",
+      "title": "VAD Tuning for Recall.ai Output Media",
+      "priority": "HIGH",
+      "triggers": ["vad", "silero", "activation_threshold", "voice detection", "recall.ai", "processed audio"],
+      "node_types": [],
+      "summary": "Recall.ai processed audio requires activation_threshold=0.05 (vs default 0.5). Default thresholds fail to detect speech.",
+      "anti_patterns": [
+        "activation_threshold=0.5",
+        "activation_threshold=0.15"
+      ],
+      "correct_patterns": [
+        "activation_threshold=0.05",
+        "min_speech_duration=0.05",
+        "sample_rate=16000"
+      ],
+      "validity": {
+        "last_verified": "2026-01-17",
+        "freshness_tier": "FRESH",
+        "verified_against": "production_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-17"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "participant-detection",
+      "file": "voice-agents/participant-detection.md",
+      "title": "Participant Detection & Audio Subscription",
+      "priority": "HIGH",
+      "triggers": ["participant", "audio track", "subscription", "output-media", "client detection"],
+      "node_types": [],
+      "summary": "Wait for client audio TRACK (not just participant). Verify subscription. Link session to participant_identity.",
+      "anti_patterns": [
+        "Start session without waiting for client",
+        "Skip audio subscription verification"
+      ],
+      "correct_patterns": [
+        "wait_for_client_with_audio()",
+        "verify_audio_subscription()",
+        "participant_identity=client.identity"
+      ],
+      "validity": {
+        "last_verified": "2026-01-17",
+        "freshness_tier": "FRESH",
+        "verified_against": "production_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-17"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "id": "groq-llm-plugin",
+      "file": "voice-agents/groq-llm-plugin.md",
+      "title": "Groq LLM Plugin Integration",
+      "priority": "CRITICAL",
+      "triggers": ["groq", "groq.LLM", "llama", "livekit-plugins-groq"],
+      "node_types": [],
+      "summary": "ALWAYS use official livekit-plugins-groq. Custom implementations fail with abstract method errors.",
+      "anti_patterns": [
+        "from groq import AsyncGroq",
+        "class GroqLLM",
+        "groq>=0.9.0"
+      ],
+      "correct_patterns": [
+        "from livekit.plugins import groq",
+        "groq.LLM()",
+        "livekit-plugins-groq>=1.0.0"
+      ],
+      "anti_memory": true,
+      "validity": {
+        "last_verified": "2026-01-17",
+        "freshness_tier": "FRESH",
+        "verified_against": "production_implementation",
+        "verification_method": "manual",
+        "next_verification_due": "2026-04-17"
+      },
+      "deprecation": {
+        "status": "ACTIVE"
+      }
     }
   ],
 
@@ -738,7 +918,7 @@
     "n8n-nodes-base.gmail": ["gmail-tool-config", "latest-versions"],
     "n8n-nodes-base.googleDrive": ["latest-versions"],
     "n8n-nodes-base.microsoftTeams": ["latest-versions"],
-    "n8n-nodes-base.postgres": ["latest-versions"],
+    "n8n-nodes-base.postgres": ["postgres-query-replacement", "latest-versions"],
     "n8n-nodes-base.splitInBatches": ["loop-entry-expressions", "latest-versions"],
     "n8n-nodes-base.executeWorkflow": ["latest-versions"]
   },
@@ -770,7 +950,17 @@
     "voice_bot": ["recall-ai-audio-output", "voice-bot-performance-optimization", "hybrid-logging-architecture", "ai-agent-typeversion"],
     "tts_integration": ["recall-ai-audio-output", "voice-bot-performance-optimization"],
     "performance_optimization": ["voice-bot-performance-optimization", "context-discovery-protocol"],
-    "recall_ai": ["recall-ai-audio-output", "voice-bot-performance-optimization"]
+    "recall_ai": ["recall-ai-audio-output", "voice-bot-performance-optimization"],
+    "gated_execution": ["gated-execution-callbacks", "if-node-conditions", "postgres-query-replacement"],
+    "voice_tool": ["gated-execution-callbacks", "postgres-query-replacement", "gmail-tool-config"],
+    "interruptible_workflow": ["gated-execution-callbacks", "if-node-conditions"],
+    "postgres_queries": ["postgres-query-replacement", "latest-versions"],
+    "livekit_agent": ["livekit-agents-1.3.x", "groq-llm-plugin", "vad-tuning-recall-ai", "participant-detection"],
+    "voice_agent_python": ["livekit-agents-1.3.x", "groq-llm-plugin", "vad-tuning-recall-ai", "participant-detection"],
+    "recall_ai_integration": ["vad-tuning-recall-ai", "participant-detection", "recall-ai-audio-output"],
+    "groq_integration": ["groq-llm-plugin", "livekit-agents-1.3.x"],
+    "vad_configuration": ["vad-tuning-recall-ai"],
+    "audio_pipeline": ["vad-tuning-recall-ai", "participant-detection", "livekit-agents-1.3.x"]
   },
 
   "lookup_protocol": {

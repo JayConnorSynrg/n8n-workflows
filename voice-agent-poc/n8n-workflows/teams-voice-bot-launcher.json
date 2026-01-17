@@ -1,5 +1,5 @@
 {
-  "name": "Teams Voice Bot - Launcher v4.1 (LiveKit)",
+  "name": "Teams Voice Bot - Launcher v4.2 (Agent Pre-Init)",
   "nodes": [
     {
       "parameters": {
@@ -52,7 +52,7 @@
       "name": "Set Meeting URL",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [256, 304]
+      "position": [208, 304]
     },
     {
       "parameters": {
@@ -71,7 +71,7 @@
       "name": "Check Voice Agent Deployment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [464, 304],
+      "position": [416, 304],
       "credentials": {
         "httpHeaderAuth": {
           "id": "railway-api",
@@ -106,7 +106,7 @@
       "name": "Is Agent Running?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [672, 304]
+      "position": [624, 304]
     },
     {
       "parameters": {
@@ -138,7 +138,7 @@
       "name": "Deployment Error Response",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [880, 504]
+      "position": [832, 504]
     },
     {
       "parameters": {
@@ -148,17 +148,83 @@
       "name": "Generate Session ID",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 304]
+      "position": [832, 304]
     },
     {
       "parameters": {
-        "jsCode": "// LiveKit Access Token Generator\n// Generates a JWT token for the Output Media webpage to join the LiveKit room\n// NOTE: Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in n8n Settings > Variables\n\nconst LIVEKIT_API_KEY = $env.LIVEKIT_API_KEY;\nconst LIVEKIT_API_SECRET = $env.LIVEKIT_API_SECRET;\n\nconst input = $input.first().json;\nconst roomName = input.room_name;\nconst identity = 'output-media-' + input.session_id;\nconst participantName = 'Voice Client';\n\n// Token expires in 24 hours\nconst now = Math.floor(Date.now() / 1000);\nconst exp = now + 86400;\n\n// LiveKit video grant - allows joining room, publishing audio, subscribing to agent\nconst videoGrant = {\n  room: roomName,\n  roomJoin: true,\n  canPublish: true,\n  canPublishData: true,\n  canSubscribe: true\n};\n\n// JWT Header\nconst header = {\n  alg: 'HS256',\n  typ: 'JWT'\n};\n\n// JWT Payload (LiveKit claims)\nconst payload = {\n  iss: LIVEKIT_API_KEY,\n  sub: identity,\n  name: participantName,\n  iat: now,\n  nbf: now,\n  exp: exp,\n  video: videoGrant,\n  metadata: JSON.stringify({ session_id: input.session_id, bot_name: input.bot_name })\n};\n\n// Base64URL encode\nfunction base64UrlEncode(obj) {\n  const str = typeof obj === 'string' ? obj : JSON.stringify(obj);\n  const base64 = Buffer.from(str).toString('base64');\n  return base64.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\n}\n\n// Create signature\nconst headerB64 = base64UrlEncode(header);\nconst payloadB64 = base64UrlEncode(payload);\nconst signatureInput = headerB64 + '.' + payloadB64;\n\nconst crypto = require('crypto');\nconst signature = crypto\n  .createHmac('sha256', LIVEKIT_API_SECRET)\n  .update(signatureInput)\n  .digest('base64')\n  .replace(/\\+/g, '-')\n  .replace(/\\//g, '_')\n  .replace(/=+$/, '');\n\nconst token = signatureInput + '.' + signature;\n\nreturn [{\n  json: {\n    ...input,\n    livekit_url: $env.LIVEKIT_URL || 'wss://synrg-voice-agent-gqv10vbf.livekit.cloud',\n    livekit_token: token,\n    client_identity: identity\n  }\n}];"
+        "jsCode": "// LiveKit Access Token Generator with Agent Dispatch Grant\n// Generates JWT tokens for both client AND creates an access token for Agent Dispatch API\n// NOTE: Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in n8n Settings > Variables\n\nconst LIVEKIT_API_KEY = $env.LIVEKIT_API_KEY;\nconst LIVEKIT_API_SECRET = $env.LIVEKIT_API_SECRET;\nconst LIVEKIT_URL = $env.LIVEKIT_URL || 'wss://synrg-voice-agent-gqv10vbf.livekit.cloud';\n\nconst input = $input.first().json;\nconst roomName = input.room_name;\nconst clientIdentity = 'output-media-' + input.session_id;\nconst participantName = 'Voice Client';\n\n// Token expires in 24 hours\nconst now = Math.floor(Date.now() / 1000);\nconst exp = now + 86400;\n\n// Video grant for client (Output Media webpage)\nconst clientVideoGrant = {\n  room: roomName,\n  roomJoin: true,\n  canPublish: true,\n  canPublishData: true,\n  canSubscribe: true\n};\n\n// Admin grant for room creation and agent dispatch\nconst adminGrant = {\n  roomCreate: true,\n  roomList: true,\n  roomAdmin: true,\n  room: roomName\n};\n\n// Base64URL encode helper\nfunction base64UrlEncode(obj) {\n  const str = typeof obj === 'string' ? obj : JSON.stringify(obj);\n  const base64 = Buffer.from(str).toString('base64');\n  return base64.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\n}\n\n// JWT signing helper\nfunction signJWT(header, payload, secret) {\n  const crypto = require('crypto');\n  const headerB64 = base64UrlEncode(header);\n  const payloadB64 = base64UrlEncode(payload);\n  const signatureInput = headerB64 + '.' + payloadB64;\n  const signature = crypto\n    .createHmac('sha256', secret)\n    .update(signatureInput)\n    .digest('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=+$/, '');\n  return signatureInput + '.' + signature;\n}\n\nconst header = { alg: 'HS256', typ: 'JWT' };\n\n// Client token (for Output Media webpage)\nconst clientPayload = {\n  iss: LIVEKIT_API_KEY,\n  sub: clientIdentity,\n  name: participantName,\n  iat: now,\n  nbf: now,\n  exp: exp,\n  video: clientVideoGrant,\n  metadata: JSON.stringify({ session_id: input.session_id, bot_name: input.bot_name })\n};\nconst clientToken = signJWT(header, clientPayload, LIVEKIT_API_SECRET);\n\n// Admin token (for room creation and agent dispatch API)\nconst adminPayload = {\n  iss: LIVEKIT_API_KEY,\n  sub: 'n8n-launcher',\n  iat: now,\n  nbf: now,\n  exp: now + 300, // 5 minute expiry for admin operations\n  video: adminGrant\n};\nconst adminToken = signJWT(header, adminPayload, LIVEKIT_API_SECRET);\n\n// Extract HTTP API URL from WebSocket URL\nconst httpUrl = LIVEKIT_URL.replace('wss://', 'https://').replace('/ws', '');\n\nreturn [{\n  json: {\n    ...input,\n    livekit_url: LIVEKIT_URL,\n    livekit_http_url: httpUrl,\n    livekit_token: clientToken,\n    livekit_admin_token: adminToken,\n    client_identity: clientIdentity\n  }\n}];"
       },
       "id": "generate-livekit-token",
-      "name": "Generate LiveKit Token",
+      "name": "Generate LiveKit Tokens",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1088, 304]
+      "position": [1040, 304]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.livekit_http_url + '/twirp/livekit.RoomService/CreateRoom' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.livekit_admin_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"name\": $json.room_name, \"empty_timeout\": 300, \"max_participants\": 10 } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "create-room",
+      "name": "Create LiveKit Room",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1248, 304]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Generate LiveKit Tokens').first().json.livekit_http_url + '/twirp/livekit.AgentDispatchService/CreateDispatch' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Generate LiveKit Tokens').first().json.livekit_admin_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"agent_name\": \"synrg-voice-agent\", \"room\": $('Generate LiveKit Tokens').first().json.room_name, \"metadata\": JSON.stringify({ session_id: $('Generate LiveKit Tokens').first().json.session_id, bot_name: $('Generate LiveKit Tokens').first().json.bot_name, dispatched_at: new Date().toISOString() }) } }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "dispatch-agent",
+      "name": "Dispatch Agent to Room",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1456, 304]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wait for agent to join the room (poll room participants)\n// This ensures the agent is ready before the Recall.ai bot joins the meeting\n\nconst LIVEKIT_URL = $('Generate LiveKit Tokens').first().json.livekit_http_url;\nconst ADMIN_TOKEN = $('Generate LiveKit Tokens').first().json.livekit_admin_token;\nconst ROOM_NAME = $('Generate LiveKit Tokens').first().json.room_name;\n\nconst MAX_ATTEMPTS = 10;  // 10 attempts\nconst POLL_INTERVAL = 1000;  // 1 second between polls\n\nconst sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));\n\nfor (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n  // Query room participants\n  const response = await fetch(`${LIVEKIT_URL}/twirp/livekit.RoomService/ListParticipants`, {\n    method: 'POST',\n    headers: {\n      'Authorization': `Bearer ${ADMIN_TOKEN}`,\n      'Content-Type': 'application/json'\n    },\n    body: JSON.stringify({ room: ROOM_NAME })\n  });\n  \n  const data = await response.json();\n  const participants = data.participants || [];\n  \n  // Check if any participant is the agent (identity contains 'agent' or has agent metadata)\n  const agentPresent = participants.some(p => \n    p.identity?.includes('agent') || \n    p.name?.includes('agent') ||\n    p.metadata?.includes('synrg-voice-agent')\n  );\n  \n  if (agentPresent) {\n    return [{\n      json: {\n        ...$input.first().json,\n        agent_ready: true,\n        agent_check_attempts: attempt,\n        participants: participants.map(p => ({ identity: p.identity, name: p.name }))\n      }\n    }];\n  }\n  \n  // Wait before next poll (except on last attempt)\n  if (attempt < MAX_ATTEMPTS) {\n    await sleep(POLL_INTERVAL);\n  }\n}\n\n// Agent did not join in time - return with warning but continue\n// (The agent may still join when the client connects)\nreturn [{\n  json: {\n    ...$input.first().json,\n    agent_ready: false,\n    agent_check_attempts: MAX_ATTEMPTS,\n    warning: 'Agent dispatch sent but agent not detected in room yet. Proceeding anyway.'\n  }\n}];"
+      },
+      "id": "wait-agent-ready",
+      "name": "Wait for Agent Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1664, 304]
     },
     {
       "parameters": {
@@ -168,7 +234,7 @@
         "nodeCredentialType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ {\n  \"meeting_url\": $json.meeting_url,\n  \"bot_name\": $json.bot_name,\n  \"recording_config\": {\n    \"transcript\": {\n      \"provider\": {\n        \"recallai_streaming\": {\n          \"language_code\": \"en\",\n          \"mode\": \"prioritize_low_latency\"\n        }\n      }\n    },\n    \"realtime_endpoints\": [{\n      \"type\": \"webhook\",\n      \"url\": \"https://jayconnorexe.app.n8n.cloud/webhook/voice-bot-events\",\n      \"events\": [\"transcript.data\", \"transcript.partial_data\"]\n    }]\n  },\n  \"output_media\": {\n    \"camera\": {\n      \"kind\": \"webpage\",\n      \"config\": {\n        \"url\": \"https://synrg-voice-agent.vercel.app?livekit_url=\" + encodeURIComponent($json.livekit_url) + \"&token=\" + encodeURIComponent($json.livekit_token)\n      }\n    },\n    \"microphone\": {\n      \"kind\": \"webpage\"\n    }\n  },\n  \"status_callback_url\": \"https://jayconnorexe.app.n8n.cloud/webhook/recall-bot-events\"\n} }}",
+        "jsonBody": "={{ {\n  \"meeting_url\": $('Set Meeting URL').first().json.meeting_url,\n  \"bot_name\": $('Set Meeting URL').first().json.bot_name,\n  \"recording_config\": {\n    \"transcript\": {\n      \"provider\": {\n        \"recallai_streaming\": {\n          \"language_code\": \"en\",\n          \"mode\": \"prioritize_low_latency\"\n        }\n      }\n    },\n    \"realtime_endpoints\": [{\n      \"type\": \"webhook\",\n      \"url\": \"https://jayconnorexe.app.n8n.cloud/webhook/voice-bot-events\",\n      \"events\": [\"transcript.data\", \"transcript.partial_data\"]\n    }]\n  },\n  \"output_media\": {\n    \"camera\": {\n      \"kind\": \"webpage\",\n      \"config\": {\n        \"url\": \"https://voice-agent-client-production.up.railway.app/?livekit_url=\" + encodeURIComponent($('Generate LiveKit Tokens').first().json.livekit_url) + \"&token=\" + encodeURIComponent($('Generate LiveKit Tokens').first().json.livekit_token),\n        \"video_start_delay_ms\": 3000\n      }\n    },\n    \"microphone\": {\n      \"kind\": \"webpage\",\n      \"config\": {\n        \"audio_start_delay_ms\": 2000\n      }\n    }\n  },\n  \"status_callback_url\": \"https://jayconnorexe.app.n8n.cloud/webhook/recall-bot-events\"\n} }}",
         "options": {
           "timeout": 30000
         }
@@ -177,7 +243,7 @@
       "name": "Create Recall.ai Bot",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1296, 304],
+      "position": [1872, 304],
       "credentials": {
         "httpHeaderAuth": {
           "id": "XksCwcWinBg0uQBa",
@@ -204,7 +270,7 @@
             "created_at": "={{ $now.toISO() }}",
             "status": "joining",
             "room_name": "={{ $('Generate Session ID').first().json.room_name }}",
-            "last_intent": "={{ JSON.stringify({ initialized_at: $now.toISO(), bot_name: $('Set Meeting URL').first().json.bot_name, first_interaction: true, greeting_pending: true, livekit_room: $('Generate Session ID').first().json.room_name }) }}"
+            "last_intent": "={{ JSON.stringify({ initialized_at: $now.toISO(), bot_name: $('Set Meeting URL').first().json.bot_name, first_interaction: true, greeting_pending: true, livekit_room: $('Generate Session ID').first().json.room_name, agent_pre_init: $('Wait for Agent Ready').first().json.agent_ready }) }}"
           },
           "matchingColumns": []
         },
@@ -214,7 +280,7 @@
       "name": "Initialize Session (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1504, 304],
+      "position": [2080, 304],
       "credentials": {
         "postgres": {
           "id": "NI3jbq1U8xPst3j3",
@@ -251,9 +317,15 @@
               "type": "string"
             },
             {
+              "id": "agent_ready",
+              "name": "agent_ready",
+              "value": "={{ $('Wait for Agent Ready').first().json.agent_ready }}",
+              "type": "boolean"
+            },
+            {
               "id": "message",
               "name": "message",
-              "value": "={{ 'Bot ' + $('Create Recall.ai Bot').first().json.id + ' is joining the meeting. LiveKit room: ' + $('Generate Session ID').first().json.room_name }}",
+              "value": "={{ $('Wait for Agent Ready').first().json.agent_ready ? 'Bot ' + $('Create Recall.ai Bot').first().json.id + ' is joining with agent ready. Room: ' + $('Generate Session ID').first().json.room_name : 'Bot ' + $('Create Recall.ai Bot').first().json.id + ' is joining. Agent may still be initializing. Room: ' + $('Generate Session ID').first().json.room_name }}",
               "type": "string"
             }
           ]
@@ -264,19 +336,19 @@
       "name": "Format Response",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1712, 304]
+      "position": [2288, 304]
     },
     {
       "parameters": {
-        "content": "## Bot Launcher v4.1 (LiveKit + Deployment Check)\n\n**Architecture:** LiveKit WebRTC with Railway deployment validation\n\n### Flow:\n1. Form/Webhook receives meeting URL\n2. **Check Railway deployment status** (fail-fast if not running)\n3. Generate session_id and room_name\n4. **Generate LiveKit token** for Output Media client\n5. Create Recall.ai bot with LiveKit-enabled webpage\n6. Initialize PostgreSQL session state\n\n### Required n8n Variables:\n- `LIVEKIT_API_KEY` - LiveKit project API key\n- `LIVEKIT_API_SECRET` - LiveKit project secret\n- `LIVEKIT_URL` - LiveKit server URL\n- `RAILWAY_SERVICE_ID` - Voice agent service ID\n\n### Required Credentials:\n- **Railway API Token** (httpHeaderAuth) - For deployment check\n- **Recall AI header Auth** - For bot creation\n- **Postgres** - For session state\n\n### Usage:\n**Option 1:** Open form URL, paste meeting link\n**Option 2:** POST /webhook/start-bot {\"meeting_url\": \"...\"}",
-        "height": 520,
+        "content": "## Bot Launcher v4.2 (Agent Pre-Initialization)\n\n**Architecture:** LiveKit with explicit agent dispatch before bot joins\n\n### Pre-Init Flow (NEW):\n1. Form/Webhook receives meeting URL\n2. Check Railway deployment status\n3. Generate session_id and room_name\n4. Generate LiveKit tokens (client + admin)\n5. **Create LiveKit room explicitly**\n6. **Dispatch agent to room** (explicit dispatch API)\n7. **Poll for agent readiness** (up to 10 seconds)\n8. Create Recall.ai bot (agent already in room)\n9. Initialize PostgreSQL session state\n\n### Why Pre-Init?\nPreviously, the agent only joined AFTER the Output Media\nwebpage connected. This caused 6-8 seconds of delay\nwhere the user saw the bot but had no audio.\n\nWith pre-init, the agent is ALREADY in the room waiting\nwhen the bot joins the meeting.\n\n### Required n8n Variables:\n- `LIVEKIT_API_KEY`\n- `LIVEKIT_API_SECRET`\n- `LIVEKIT_URL`\n- `RAILWAY_SERVICE_ID`\n\n### Agent Name:\nThe voice agent must be registered with:\n`agent_name=\"synrg-voice-agent\"`",
+        "height": 680,
         "width": 420
       },
       "id": "sticky-info",
       "name": "Usage Instructions",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-480, -80]
+      "position": [-480, -140]
     }
   ],
   "connections": {
@@ -299,9 +371,18 @@
       "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
     },
     "Generate Session ID": {
-      "main": [[{"node": "Generate LiveKit Token", "type": "main", "index": 0}]]
+      "main": [[{"node": "Generate LiveKit Tokens", "type": "main", "index": 0}]]
     },
-    "Generate LiveKit Token": {
+    "Generate LiveKit Tokens": {
+      "main": [[{"node": "Create LiveKit Room", "type": "main", "index": 0}]]
+    },
+    "Create LiveKit Room": {
+      "main": [[{"node": "Dispatch Agent to Room", "type": "main", "index": 0}]]
+    },
+    "Dispatch Agent to Room": {
+      "main": [[{"node": "Wait for Agent Ready", "type": "main", "index": 0}]]
+    },
+    "Wait for Agent Ready": {
       "main": [[{"node": "Create Recall.ai Bot", "type": "main", "index": 0}]]
     },
     "Create Recall.ai Bot": {
