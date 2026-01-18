@@ -1,0 +1,297 @@
+{
+  "name": "Database Schema Migration - Agent Context Enhancement",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [250, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "migrate-agent-context-schema",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson"
+      }
+    },
+    {
+      "id": "execute-ddl-1",
+      "name": "Create Session Context Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [450, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 1. SESSION CONTEXT TABLE (active session data)\nCREATE TABLE IF NOT EXISTS agent_session_context (\n  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n  session_id varchar(100) NOT NULL,\n  context_key varchar(100) NOT NULL,\n  context_value jsonb NOT NULL DEFAULT '{}',\n  created_at timestamptz DEFAULT now(),\n  updated_at timestamptz DEFAULT now(),\n  expires_at timestamptz,\n  UNIQUE(session_id, context_key)\n);\n\nCREATE INDEX IF NOT EXISTS idx_agent_session_context_session \n  ON agent_session_context(session_id, context_key);\n\nCREATE INDEX IF NOT EXISTS idx_agent_session_context_expires \n  ON agent_session_context(expires_at) \n  WHERE expires_at IS NOT NULL;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-2",
+      "name": "Create Global Knowledge Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [650, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 2. GLOBAL KNOWLEDGE TABLE (cross-session accessible)\nCREATE TABLE IF NOT EXISTS agent_global_knowledge (\n  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n  knowledge_key varchar(255) NOT NULL,\n  knowledge_value jsonb NOT NULL,\n  source_type varchar(50) NOT NULL DEFAULT 'tool_call',\n  source_session_id varchar(100),\n  source_tool_call_id varchar(100),\n  confidence_score decimal(3,2) DEFAULT 1.0,\n  access_count integer DEFAULT 0,\n  last_accessed_at timestamptz,\n  created_at timestamptz DEFAULT now(),\n  updated_at timestamptz DEFAULT now(),\n  UNIQUE(knowledge_key)\n);\n\nCREATE INDEX IF NOT EXISTS idx_agent_global_knowledge_key \n  ON agent_global_knowledge(knowledge_key);\n\nCREATE INDEX IF NOT EXISTS idx_agent_global_knowledge_source \n  ON agent_global_knowledge(source_session_id);"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-3",
+      "name": "Create Session Archive Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [850, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 3. SESSION ARCHIVE TABLE (closed session history - globally accessible)\nCREATE TABLE IF NOT EXISTS agent_session_archive (\n  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n  session_id varchar(100) NOT NULL,\n  session_summary jsonb NOT NULL DEFAULT '{}',\n  tool_calls_snapshot jsonb NOT NULL DEFAULT '[]',\n  context_snapshot jsonb NOT NULL DEFAULT '{}',\n  total_tool_calls integer DEFAULT 0,\n  total_duration_ms integer,\n  session_started_at timestamptz,\n  session_ended_at timestamptz DEFAULT now(),\n  archived_at timestamptz DEFAULT now(),\n  searchable_content text,\n  UNIQUE(session_id)\n);\n\nCREATE INDEX IF NOT EXISTS idx_agent_session_archive_session \n  ON agent_session_archive(session_id);\n\nCREATE INDEX IF NOT EXISTS idx_agent_session_archive_date \n  ON agent_session_archive(session_ended_at DESC);\n\nCREATE INDEX IF NOT EXISTS idx_agent_session_archive_search \n  ON agent_session_archive USING gin(to_tsvector('english', searchable_content));"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-4",
+      "name": "Alter Tool Calls Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1050, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 4. Add parent_tool_call_id to tool_calls for chaining\nALTER TABLE tool_calls \n  ADD COLUMN IF NOT EXISTS parent_tool_call_id varchar(100);\n\nALTER TABLE tool_calls \n  ADD COLUMN IF NOT EXISTS promote_to_global boolean DEFAULT false;\n\nCREATE INDEX IF NOT EXISTS idx_tool_calls_parent \n  ON tool_calls(parent_tool_call_id) \n  WHERE parent_tool_call_id IS NOT NULL;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-5",
+      "name": "Create Unified Context View",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1250, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 5. UNIFIED CONTEXT VIEW (agent access point)\nCREATE OR REPLACE VIEW v_agent_full_context AS\nSELECT \n  tc.session_id,\n  tc.tool_call_id,\n  tc.function_name,\n  tc.status,\n  tc.parameters,\n  tc.result,\n  tc.voice_response,\n  tc.created_at,\n  tc.parent_tool_call_id,\n  tc.promote_to_global,\n  (SELECT jsonb_object_agg(asc1.context_key, asc1.context_value) \n   FROM agent_session_context asc1 \n   WHERE asc1.session_id = tc.session_id\n     AND (asc1.expires_at IS NULL OR asc1.expires_at > now())\n  ) as session_context,\n  (SELECT jsonb_agg(jsonb_build_object(\n     'tool_call_id', prev.tool_call_id,\n     'function_name', prev.function_name,\n     'status', prev.status,\n     'result', prev.result,\n     'voice_response', prev.voice_response\n   ) ORDER BY prev.created_at DESC)\n   FROM tool_calls prev \n   WHERE prev.session_id = tc.session_id \n     AND prev.created_at < tc.created_at\n     AND prev.status = 'COMPLETED'\n   LIMIT 10\n  ) as previous_session_calls\nFROM tool_calls tc;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-6",
+      "name": "Create Global Knowledge View",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1450, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 6. VIEW FOR GLOBAL KNOWLEDGE ACCESS\nCREATE OR REPLACE VIEW v_agent_global_context AS\nSELECT \n  gk.knowledge_key,\n  gk.knowledge_value,\n  gk.source_type,\n  gk.source_session_id,\n  gk.confidence_score,\n  gk.access_count,\n  gk.created_at,\n  gk.updated_at,\n  (SELECT sa.session_summary \n   FROM agent_session_archive sa \n   WHERE sa.session_id = gk.source_session_id\n  ) as source_session_summary\nFROM agent_global_knowledge gk\nORDER BY gk.confidence_score DESC, gk.access_count DESC;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-7",
+      "name": "Create Archive Session Function",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1650, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 7. FUNCTION: Archive a completed session and promote to global\nCREATE OR REPLACE FUNCTION archive_session(p_session_id varchar(100))\nRETURNS jsonb AS $$\nDECLARE\n  v_tool_calls jsonb;\n  v_context jsonb;\n  v_summary jsonb;\n  v_total_calls integer;\n  v_first_call timestamptz;\n  v_last_call timestamptz;\n  v_searchable text;\n  v_result jsonb;\nBEGIN\n  SELECT \n    jsonb_agg(jsonb_build_object(\n      'tool_call_id', tool_call_id,\n      'function_name', function_name,\n      'parameters', parameters,\n      'status', status,\n      'result', result,\n      'voice_response', voice_response,\n      'created_at', created_at\n    ) ORDER BY created_at),\n    COUNT(*),\n    MIN(created_at),\n    MAX(completed_at)\n  INTO v_tool_calls, v_total_calls, v_first_call, v_last_call\n  FROM tool_calls \n  WHERE session_id = p_session_id;\n\n  SELECT jsonb_object_agg(context_key, context_value)\n  INTO v_context\n  FROM agent_session_context\n  WHERE session_id = p_session_id;\n\n  SELECT jsonb_build_object(\n    'functions_used', (SELECT jsonb_agg(DISTINCT function_name) FROM tool_calls WHERE session_id = p_session_id),\n    'statuses', (SELECT jsonb_object_agg(status, cnt) FROM (SELECT status, COUNT(*) as cnt FROM tool_calls WHERE session_id = p_session_id GROUP BY status) s),\n    'total_duration_ms', EXTRACT(EPOCH FROM (v_last_call - v_first_call)) * 1000\n  ) INTO v_summary;\n\n  SELECT string_agg(\n    COALESCE(voice_response, '') || ' ' || \n    COALESCE(result::text, '') || ' ' || \n    COALESCE(parameters::text, ''), \n    ' '\n  )\n  INTO v_searchable\n  FROM tool_calls \n  WHERE session_id = p_session_id;\n\n  INSERT INTO agent_session_archive (\n    session_id, session_summary, tool_calls_snapshot, context_snapshot,\n    total_tool_calls, session_started_at, session_ended_at, searchable_content\n  ) VALUES (\n    p_session_id, v_summary, COALESCE(v_tool_calls, '[]'::jsonb), \n    COALESCE(v_context, '{}'::jsonb), v_total_calls, v_first_call, v_last_call, v_searchable\n  )\n  ON CONFLICT (session_id) DO UPDATE SET\n    session_summary = EXCLUDED.session_summary,\n    tool_calls_snapshot = EXCLUDED.tool_calls_snapshot,\n    context_snapshot = EXCLUDED.context_snapshot,\n    total_tool_calls = EXCLUDED.total_tool_calls,\n    session_ended_at = EXCLUDED.session_ended_at,\n    searchable_content = EXCLUDED.searchable_content,\n    archived_at = now();\n\n  INSERT INTO agent_global_knowledge (knowledge_key, knowledge_value, source_type, source_session_id, source_tool_call_id)\n  SELECT \n    'session.' || p_session_id || '.tool.' || tool_call_id,\n    jsonb_build_object(\n      'function_name', function_name,\n      'result', result,\n      'voice_response', voice_response\n    ),\n    'tool_call',\n    p_session_id,\n    tool_call_id\n  FROM tool_calls\n  WHERE session_id = p_session_id \n    AND promote_to_global = true\n    AND status = 'COMPLETED'\n  ON CONFLICT (knowledge_key) DO UPDATE SET\n    knowledge_value = EXCLUDED.knowledge_value,\n    updated_at = now();\n\n  v_result := jsonb_build_object(\n    'success', true,\n    'session_id', p_session_id,\n    'archived_tool_calls', v_total_calls,\n    'promoted_to_global', (SELECT COUNT(*) FROM tool_calls WHERE session_id = p_session_id AND promote_to_global = true)\n  );\n\n  RETURN v_result;\nEND;\n$$ LANGUAGE plpgsql;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "execute-ddl-8",
+      "name": "Create Search Function",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1850, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- 8. FUNCTION: Search archived sessions\nCREATE OR REPLACE FUNCTION search_session_history(p_search_query text, p_limit integer DEFAULT 10)\nRETURNS TABLE (\n  session_id varchar(100),\n  session_summary jsonb,\n  relevance real,\n  session_ended_at timestamptz\n) AS $$\nBEGIN\n  RETURN QUERY\n  SELECT \n    sa.session_id,\n    sa.session_summary,\n    ts_rank(to_tsvector('english', sa.searchable_content), plainto_tsquery('english', p_search_query)) as relevance,\n    sa.session_ended_at\n  FROM agent_session_archive sa\n  WHERE to_tsvector('english', sa.searchable_content) @@ plainto_tsquery('english', p_search_query)\n  ORDER BY relevance DESC\n  LIMIT p_limit;\nEND;\n$$ LANGUAGE plpgsql;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "build-summary",
+      "name": "Build Migration Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 200],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const results = [];\nconst errors = [];\n\nfor (const item of $input.all()) {\n  const nodeName = item.json.$node?.name || 'Unknown';\n  const query = item.json.$node?.parameters?.query;\n  \n  if (item.json.error) {\n    errors.push({\n      node: nodeName,\n      error: item.json.error,\n      query: query?.substring(0, 100) + '...'\n    });\n  } else {\n    results.push({\n      node: nodeName,\n      success: true,\n      rowCount: item.json.length || 0\n    });\n  }\n}\n\nconst summary = {\n  migration_status: errors.length === 0 ? 'SUCCESS' : 'PARTIAL_FAILURE',\n  total_steps: $input.all().length,\n  successful_steps: results.length,\n  failed_steps: errors.length,\n  timestamp: new Date().toISOString(),\n  results: results,\n  errors: errors.length > 0 ? errors : undefined,\n  schema_components_created: [\n    'agent_session_context table',\n    'agent_global_knowledge table',\n    'agent_session_archive table',\n    'tool_calls table alterations',\n    'v_agent_full_context view',\n    'v_agent_global_context view',\n    'archive_session() function',\n    'search_session_history() function'\n  ]\n};\n\nreturn [summary];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Create Session Context Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Session Context Table": {
+      "main": [
+        [
+          {
+            "node": "Create Global Knowledge Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Global Knowledge Table": {
+      "main": [
+        [
+          {
+            "node": "Create Session Archive Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Session Archive Table": {
+      "main": [
+        [
+          {
+            "node": "Alter Tool Calls Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alter Tool Calls Table": {
+      "main": [
+        [
+          {
+            "node": "Create Unified Context View",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Unified Context View": {
+      "main": [
+        [
+          {
+            "node": "Create Global Knowledge View",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Global Knowledge View": {
+      "main": [
+        [
+          {
+            "node": "Create Archive Session Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Archive Session Function": {
+      "main": [
+        [
+          {
+            "node": "Create Search Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Search Function": {
+      "main": [
+        [
+          {
+            "node": "Build Migration Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true
+  }
+}
