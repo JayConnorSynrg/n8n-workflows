@@ -83,6 +83,52 @@ Wrap **every value** in expression syntax, including static strings.
 
 ---
 
+## Anti-Pattern: Comma-Separated Values Breaking on Text Content
+
+### What Happened (Google Drive Document Repository - 2026-01-17)
+
+When inserting documents with comma-separated queryReplacement format:
+
+```json
+// WRONG - Breaks when extracted_text contains commas
+{
+  "options": {
+    "queryReplacement": "={{ $json.drive_file_id }}, {{ $json.drive_folder_id }}, {{ $json.file_name }}, {{ $json.mime_type }}, {{ $json.file_size_bytes }}, {{ $json.web_view_link }}, {{ $json.extracted_text }}, {{ $json.text_length }}, {{ $json.extraction_method }}, {{ $json.drive_modified_time }}, {{ $json.extraction_status }}"
+  }
+}
+```
+
+### Impact
+
+- PostgreSQL INSERT failed when `extracted_text` field contained commas
+- Parameters were incorrectly split at commas within string content
+- Database writes failed unpredictably based on content
+
+### Why It Failed
+
+- Comma-separated format is ambiguous when values contain commas
+- n8n parser splits on commas, creating incorrect parameter count
+- String content commas were interpreted as parameter delimiters
+
+### Solution: Use Array Format
+
+```json
+// CORRECT - Array format handles commas in content
+{
+  "options": {
+    "queryReplacement": "={{ [$json.drive_file_id, $json.drive_folder_id, $json.file_name, $json.mime_type, $json.file_size_bytes, $json.web_view_link, $json.extracted_text, $json.text_length, $json.extraction_method, $json.drive_modified_time, $json.extraction_status] }}"
+  }
+}
+```
+
+### Result
+
+- Array format properly handles values with commas
+- Each array element becomes one parameter
+- No ambiguity in parameter parsing
+
+---
+
 ## queryReplacement Syntax Rules
 
 | Value Type | Syntax | Example |
@@ -91,17 +137,19 @@ Wrap **every value** in expression syntax, including static strings.
 | Dynamic field | `{{ $json.field }}` | `{{ $json.tool_call_id }}` |
 | Node reference | `{{ $('NodeName').first().json.field }}` | `{{ $('Code: Generate ID').first().json.tool_call_id }}` |
 | JSON stringify | `{{ JSON.stringify($json.obj) }}` | `{{ JSON.stringify($json.parameters) }}` |
+| Array format (recommended) | `={{ [val1, val2, ...] }}` | `={{ [$json.id, $json.name] }}` |
 
 ---
 
 ## PostgreSQL queryReplacement Checklist
 
-- [ ] ALL values wrapped in `{{ }}` expression syntax
+- [ ] Use **array format** for multi-parameter queries (prevents comma-in-content issues)
+- [ ] ALL values wrapped in `{{ }}` expression syntax (if using comma-separated format)
 - [ ] Static strings use single quotes inside: `{{ 'static' }}`
-- [ ] Values separated by `, ` (comma-space)
-- [ ] Number of expressions matches number of `$N` placeholders in query
+- [ ] Number of parameters matches number of `$N` placeholders in query
 - [ ] JSON fields for JSONB columns use `JSON.stringify()`
 - [ ] Node references use full path: `$('NodeName').first().json.field`
+- [ ] **CRITICAL**: If any value might contain commas → ALWAYS use array format
 
 ---
 
