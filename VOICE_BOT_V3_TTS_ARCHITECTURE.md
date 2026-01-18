@@ -270,8 +270,8 @@ for (const audio of successfulAudio) {
 
 #### 3. Credentials/Constants (Hardcoded - SECURITY RISK)
 ```javascript
-const OPENAI_API_KEY = 'OPENAI_API_KEY_REDACTED';
-const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';
+const OPENAI_API_KEY = 'OPENAI_API_KEY_FROM_ENV';
+const RECALL_API_KEY = 'RECALL_API_KEY_FROM_ENV';
 ```
 
 **⚠️ CRITICAL SECURITY ISSUE:** API keys hardcoded in workflow

@@ -109,8 +109,8 @@ tts_summary (metrics)
 **1. Hardcoded API Keys (SECURITY)**
 ```javascript
 // In Parallel TTS & Send:
-const OPENAI_API_KEY = 'sk-proj-LD1tK6N4KWlJzP3TtTfz8gPjelsFOqbK0lqEsk9tBVdLk9gsRFB0...';
-const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';
+const OPENAI_API_KEY = 'OPENAI_API_KEY_FROM_ENV';
+const RECALL_API_KEY = 'RECALL_API_KEY_FROM_ENV';
 ```
 
 **Fix:** Move to n8n Environment Variables

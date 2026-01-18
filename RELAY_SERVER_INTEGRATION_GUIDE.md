@@ -283,7 +283,7 @@ API keys are **hardcoded** in the Parallel TTS & Send node:
 
 ```javascript
 const OPENAI_API_KEY = 'sk-proj-...';
-const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';
+const RECALL_API_KEY = 'RECALL_API_KEY_FROM_ENV';
 ```
 
 ### Required Migration
@@ -292,7 +292,7 @@ Move keys to **n8n Environment Variables**:
 
 ```
 N8N_OPENAI_API_KEY=sk-proj-...
-N8N_RECALL_API_KEY=4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43
+N8N_RECALL_API_KEY=RECALL_API_KEY_FROM_ENV
 ```
 
 Or use **n8n Credentials Manager**:

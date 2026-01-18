@@ -30,7 +30,7 @@
 **Current Issue:** Keys hardcoded in Parallel TTS & Send node
 ```javascript
 const OPENAI_API_KEY = 'sk-proj-...';  // ⚠️ UNSAFE
-const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';  // ⚠️ UNSAFE
+const RECALL_API_KEY = 'RECALL_API_KEY_FROM_ENV';  // ⚠️ UNSAFE
 ```
 
 **Steps:**
@@ -39,7 +39,7 @@ const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';  // ⚠️ UN
    ```bash
    # Add to n8n .env or deployment config:
    N8N_OPENAI_API_KEY=sk-proj-...
-   N8N_RECALL_API_KEY=4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43
+   N8N_RECALL_API_KEY=RECALL_API_KEY_FROM_ENV
    ```
 
 2. **Update Parallel TTS & Send Node**

@@ -304,8 +304,8 @@ return [{
 ### API Keys (SECURITY ISSUE - Move to environment variables)
 
 ```javascript
-const OPENAI_API_KEY = 'OPENAI_API_KEY_REDACTED';
-const RECALL_API_KEY = '4f12c2c033fc1f0fe1e4ca2fcd0aad92b547ff43';
+const OPENAI_API_KEY = 'process.env.OPENAI_API_KEY';
+const RECALL_API_KEY = 'RECALL_API_KEY_FROM_ENV';
 ```
 
 ### Migration Required
