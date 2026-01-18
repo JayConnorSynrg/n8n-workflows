@@ -32,6 +32,9 @@ except ImportError:
 from .config import get_settings
 from .tools.email_tool import send_email_tool
 from .tools.database_tool import query_database_tool
+from .tools.vector_store_tool import store_knowledge_tool
+from .tools.google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool
+from .tools.agent_context_tool import query_context_tool, get_session_summary_tool
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 
@@ -44,18 +47,48 @@ SYSTEM_PROMPT = """You are a professional voice assistant for enterprise meeting
 
 ## CORE BEHAVIORS
 - Be concise and direct - keep responses under 2 sentences when possible
-- Always confirm before executing actions (sending emails, creating tasks)
+- Always confirm before executing actions (sending emails, storing data)
 - Announce completion of all actions
 - Use natural conversational pacing
 
 ## AVAILABLE TOOLS
+
+### Communication
 1. send_email: Send emails via Gmail
    - Requires: to, subject, body
-   - Always confirm recipient and subject before sending
+   - ALWAYS confirm recipient and subject before sending
 
-2. query_database: Search the knowledge base
-   - Use for looking up information
+### Knowledge Base
+2. query_database: Search the vector knowledge base
+   - Use for semantic search of stored information
    - Summarize results conversationally
+
+3. store_knowledge: Save information to knowledge base
+   - Use to remember facts, notes, or important data
+   - Confirm content before storing
+
+### Documents
+4. search_documents: Search Google Drive documents
+   - Find files by name or content
+   - Returns titles and snippets
+
+5. get_document: Retrieve full document content
+   - Requires file_id from search results
+   - Use after searching to get details
+
+6. list_drive_files: List available Drive files
+   - Shows what documents are accessible
+
+### Context & History
+7. query_context: Query session history and system data
+   - session_context: Current session data
+   - tool_history: Past tool calls
+   - global_context: Cross-session data
+   - search_history: Search past interactions
+   - custom_query: Ask any question about the data
+
+8. get_session_summary: Get summary of current session
+   - What tools were used, what context exists
 
 ## RESPONSE GUIDELINES
 - Speak naturally, not like reading text
@@ -178,7 +211,20 @@ async def entrypoint(ctx: JobContext):
     # Define agent with tools
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=[send_email_tool, query_database_tool],
+        tools=[
+            # Communication
+            send_email_tool,
+            # Knowledge Base
+            query_database_tool,
+            store_knowledge_tool,
+            # Documents
+            search_documents_tool,
+            get_document_tool,
+            list_drive_files_tool,
+            # Context & History
+            query_context_tool,
+            get_session_summary_tool,
+        ],
     )
 
     # Register event handlers BEFORE starting session
