@@ -1,0 +1,444 @@
+name: Comprehensive Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan every Monday at 2am UTC
+    - cron: '0 2 * * MON'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - secrets
+          - dependencies
+          - sast
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+  pull-requests: write
+
+env:
+  N8N_WEBHOOK_URL: ${{ secrets.N8N_SECURITY_WEBHOOK_URL }}
+
+jobs:
+  # ============================================
+  # SECRET SCANNING
+  # ============================================
+  secret-scanning:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'secrets' || github.event.inputs.scan_type == ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scan
+        id: trufflehog
+        uses: trufflesecurity/trufflehog@main
+        continue-on-error: true
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified --json
+
+      - name: Gitleaks Scan
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Secret Scan Report
+        if: always()
+        id: report
+        run: |
+          cat > secret-scan-report.json << 'EOF'
+          {
+            "scan_type": "secrets",
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "triggered_by": "${{ github.event_name }}",
+            "trufflehog_status": "${{ steps.trufflehog.outcome }}",
+            "gitleaks_status": "${{ steps.gitleaks.outcome }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "severity": "${{ steps.trufflehog.outcome == 'failure' && 'CRITICAL' || steps.gitleaks.outcome == 'failure' && 'HIGH' || 'NONE' }}"
+          }
+          EOF
+
+      - name: Upload Secret Scan Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secret-scan-report
+          path: secret-scan-report.json
+          retention-days: 90
+
+      - name: Send to n8n Webhook
+        if: always() && env.N8N_WEBHOOK_URL != ''
+        run: |
+          curl -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: security_scan" \
+            -d @secret-scan-report.json || true
+
+      - name: Create Issue on Secret Detection
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 CRITICAL: Secret Detected in Repository',
+              body: `## Secret Detection Alert
+
+              **Severity:** CRITICAL
+              **Branch:** ${{ github.ref_name }}
+              **Commit:** ${{ github.sha }}
+              **Run:** [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+              ### Immediate Actions Required:
+              1. Identify the exposed secret
+              2. Rotate the credential immediately
+              3. Review git history for exposure duration
+              4. Update .gitignore if necessary
+
+              ### Tools Used:
+              - TruffleHog: ${{ steps.trufflehog.outcome }}
+              - Gitleaks: ${{ steps.gitleaks.outcome }}
+              `,
+              labels: ['security', 'critical', 'secret-exposure']
+            });
+
+  # ============================================
+  # DEPENDENCY VULNERABILITY SCANNING
+  # ============================================
+  dependency-scanning:
+    name: Dependency Vulnerabilities
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'dependencies' || github.event.inputs.scan_type == ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: npm audit
+        id: npm-audit
+        continue-on-error: true
+        run: |
+          # Find all package.json files and run audit
+          find . -name "package.json" -not -path "*/node_modules/*" -exec dirname {} \; | while read dir; do
+            echo "Auditing $dir"
+            cd "$dir"
+            npm audit --json > npm-audit-report.json 2>/dev/null || true
+            cd - > /dev/null
+          done
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        id: codeql
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+      - name: Generate Dependency Report
+        if: always()
+        run: |
+          cat > dependency-scan-report.json << EOF
+          {
+            "scan_type": "dependencies",
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "triggered_by": "${{ github.event_name }}",
+            "npm_audit_status": "${{ steps.npm-audit.outcome }}",
+            "codeql_status": "${{ steps.codeql.outcome }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "severity": "${{ steps.npm-audit.outcome == 'failure' && 'HIGH' || 'LOW' }}"
+          }
+          EOF
+
+      - name: Upload Dependency Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-report
+          path: dependency-scan-report.json
+          retention-days: 90
+
+      - name: Send to n8n Webhook
+        if: always() && env.N8N_WEBHOOK_URL != ''
+        run: |
+          curl -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: security_scan" \
+            -d @dependency-scan-report.json || true
+
+  # ============================================
+  # SAST SCANNING
+  # ============================================
+  sast-scanning:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'sast' || github.event.inputs.scan_type == ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        id: semgrep
+        uses: semgrep/semgrep-action@v1
+        continue-on-error: true
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+          generateSarif: true
+
+      - name: Upload SARIF to GitHub
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Generate SAST Report
+        if: always()
+        run: |
+          FINDINGS_COUNT=$(grep -c '"level"' semgrep.sarif 2>/dev/null || echo "0")
+          cat > sast-scan-report.json << EOF
+          {
+            "scan_type": "sast",
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "triggered_by": "${{ github.event_name }}",
+            "semgrep_status": "${{ steps.semgrep.outcome }}",
+            "findings_count": $FINDINGS_COUNT,
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "severity": "${{ steps.semgrep.outcome == 'failure' && 'MEDIUM' || 'LOW' }}"
+          }
+          EOF
+
+      - name: Upload SAST Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-scan-report
+          path: sast-scan-report.json
+          retention-days: 90
+
+      - name: Send to n8n Webhook
+        if: always() && env.N8N_WEBHOOK_URL != ''
+        run: |
+          curl -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: security_scan" \
+            -d @sast-scan-report.json || true
+
+  # ============================================
+  # INFRASTRUCTURE SCANNING
+  # ============================================
+  infrastructure-scanning:
+    name: Infrastructure & Config
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy IaC Scan
+        id: trivy
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          skip-dirs: 'node_modules,venv,.git'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      - name: Check for Sensitive Files
+        id: sensitive-files
+        run: |
+          # Check for sensitive file patterns
+          SENSITIVE_PATTERNS=".env .mcp.json credentials.json secrets.yaml .npmrc .pypirc"
+          FOUND_FILES=""
+
+          for pattern in $SENSITIVE_PATTERNS; do
+            if find . -name "$pattern" -not -path "*/node_modules/*" | grep -q .; then
+              FOUND_FILES="$FOUND_FILES $pattern"
+            fi
+          done
+
+          if [ -n "$FOUND_FILES" ]; then
+            echo "found_sensitive=true" >> $GITHUB_OUTPUT
+            echo "sensitive_files=$FOUND_FILES" >> $GITHUB_OUTPUT
+          else
+            echo "found_sensitive=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Infrastructure Report
+        if: always()
+        run: |
+          cat > infra-scan-report.json << EOF
+          {
+            "scan_type": "infrastructure",
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "triggered_by": "${{ github.event_name }}",
+            "trivy_status": "${{ steps.trivy.outcome }}",
+            "sensitive_files_found": ${{ steps.sensitive-files.outputs.found_sensitive }},
+            "sensitive_files": "${{ steps.sensitive-files.outputs.sensitive_files || 'none' }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "severity": "${{ steps.trivy.outcome == 'failure' && 'HIGH' || steps.sensitive-files.outputs.found_sensitive == 'true' && 'MEDIUM' || 'LOW' }}"
+          }
+          EOF
+
+      - name: Upload Infrastructure Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-scan-report
+          path: infra-scan-report.json
+          retention-days: 90
+
+      - name: Send to n8n Webhook
+        if: always() && env.N8N_WEBHOOK_URL != ''
+        run: |
+          curl -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: security_scan" \
+            -d @infra-scan-report.json || true
+
+  # ============================================
+  # AGGREGATE AND REPORT
+  # ============================================
+  aggregate-results:
+    name: Aggregate Security Results
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, dependency-scanning, sast-scanning, infrastructure-scanning]
+    if: always()
+
+    steps:
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports/
+
+      - name: Generate Comprehensive Report
+        id: comprehensive
+        run: |
+          # Combine all reports
+          cat > comprehensive-security-report.json << EOF
+          {
+            "report_type": "comprehensive_security_scan",
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "triggered_by": "${{ github.event_name }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "scan_results": {
+              "secrets": "${{ needs.secret-scanning.result }}",
+              "dependencies": "${{ needs.dependency-scanning.result }}",
+              "sast": "${{ needs.sast-scanning.result }}",
+              "infrastructure": "${{ needs.infrastructure-scanning.result }}"
+            },
+            "overall_status": "${{ contains(needs.*.result, 'failure') && 'FAILED' || 'PASSED' }}",
+            "overall_severity": "${{ needs.secret-scanning.result == 'failure' && 'CRITICAL' || needs.dependency-scanning.result == 'failure' && 'HIGH' || needs.sast-scanning.result == 'failure' && 'MEDIUM' || 'LOW' }}"
+          }
+          EOF
+
+          cat comprehensive-security-report.json
+
+      - name: Upload Comprehensive Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprehensive-security-report
+          path: comprehensive-security-report.json
+          retention-days: 90
+
+      - name: Send Comprehensive Report to n8n
+        if: env.N8N_WEBHOOK_URL != ''
+        run: |
+          curl -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: comprehensive_security_scan" \
+            -d @comprehensive-security-report.json || true
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ contains(needs.*.result, 'failure') && 'FAILED' || 'PASSED' }}';
+            const icon = status === 'PASSED' ? '✅' : '🚨';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${icon} Security Scan Results
+
+              | Scan Type | Status |
+              |-----------|--------|
+              | Secrets | ${{ needs.secret-scanning.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+              | Dependencies | ${{ needs.dependency-scanning.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+              | SAST | ${{ needs.sast-scanning.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+              | Infrastructure | ${{ needs.infrastructure-scanning.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+
+              **Overall Status:** ${icon} ${status}
+
+              [View Full Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+              `
+            });
+
+      - name: Fail if Critical Issues
+        if: needs.secret-scanning.result == 'failure'
+        run: |
+          echo "::error::Critical security issue detected - secrets found in repository"
+          exit 1
