@@ -73,8 +73,40 @@ Task({
 
 ---
 
+## Credentials Registry (MANDATORY)
+
+**ALWAYS confirm credentials before workflow creation/modification.**
+
+### Active Credentials
+
+| Service | Credential Name | Credential ID | Status |
+|---------|-----------------|---------------|--------|
+| **Google Drive** | JayConnor@synrgscaling.com | `TBD - needs creation` | PRIMARY |
+| **PostgreSQL** | MICROSOFT TEAMS AGENT DATABASE | `NI3jbq1U8xPst3j3` | Active |
+| **OpenAI** | OpenAi account | `6BIzzQu5jAD5jKlH` | Active |
+| **Gmail** | Gmail account 2 | `kHDxu9JVLxm6iyMo` | Active |
+| **Google Sheets** | Google Sheets account | `fzaSSwZ4tI357WUU` | Active |
+| **Google Docs** | Google Docs account | `iNIP35ChYNUUqOCh` | Active |
+
+### Deprecated Credentials (DO NOT USE)
+
+| Service | Credential Name | Credential ID | Reason |
+|---------|-----------------|---------------|--------|
+| Google Drive | Autopayplusworkflows@gmail.com | `jlnNh8eZIxWdsvDS` | Legacy, OAuth disabled |
+
+### Pre-Deployment Gate
+
+Before ANY workflow creation:
+1. List required services
+2. Match to credentials above
+3. If credential missing or uncertain → **ASK USER**
+4. Present credential plan for approval
+
+---
+
 ## Current Workflows
 - **AI Carousel Generator** - ID: `8bhcEHkbbvnhdHBh`
+- **Google Drive Document Repository** - ID: `IamjzfFxjHviJvJg` (needs credential update)
 
 ## Skills Available
 
