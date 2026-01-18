@@ -1,0 +1,10 @@
+{
+  "session_id": "test-session-001",
+  "callback_url": "https://jayconnorexe.app.n8n.cloud/webhook/callback-noop",
+  "content": "The vacation policy states that employees receive 15 days of paid leave annually. Requests must be submitted at least 2 weeks in advance through the HR portal. Unused vacation days can be carried over up to 5 days to the following year.",
+  "metadata": {
+    "source": "hr_policy_manual",
+    "category": "policies",
+    "added_by": "voice_agent"
+  }
+}
