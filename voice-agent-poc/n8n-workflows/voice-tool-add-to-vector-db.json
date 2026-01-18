@@ -1,0 +1,432 @@
+{
+  "name": "Voice Tool: Add to Vector DB",
+  "nodes": [
+    {
+      "id": "webhook-add-to-vector-db",
+      "name": "Webhook: Add to Vector DB",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "parameters": {
+        "path": "add-to-vector-db",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-generate-ids",
+      "name": "Code: Generate IDs and Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const timestamp = Date.now().toString(36);\nconst random = Math.random().toString(36).substr(2, 9);\nconst body = $input.first().json.body || $input.first().json || {};\nconst content = body.content || '';\nconst metadata = body.metadata || {};\n\n// Validate content\nif (!content || content.trim().length === 0) {\n  throw new Error('Content is required');\n}\n\nreturn [{\n  tool_call_id: `tc_add_${timestamp}_${random}`,\n  callback_url: body.callback_url || null,\n  session_id: body.session_id || null,\n  intent_id: body.intent_id || null,\n  content: content,\n  content_length: content.length,\n  metadata: {\n    source: metadata.source || 'voice_conversation',\n    category: metadata.category || 'general',\n    added_by: metadata.added_by || 'voice_agent',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "postgres-insert-tool-call",
+      "name": "Postgres: INSERT tool_call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [680, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tool_calls (tool_call_id, session_id, intent_id, function_name, parameters, status, callback_url, created_at) VALUES ($1, $2, $3, 'add_to_vector_db', $4::jsonb, 'EXECUTING', $5, NOW()) RETURNING *;",
+        "options": {
+          "queryReplacement": "={{ $json.tool_call_id }}, {{ $json.session_id }}, {{ $json.intent_id }}, {{ JSON.stringify({ content: $json.content, metadata: $json.metadata }) }}, {{ $json.callback_url }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "id": "http-gate1",
+      "name": "HTTP Request: Gate 1 (Preparing)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [900, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code: Generate IDs and Validate').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'PREPARING', gate: 1, cancellable: true, tool_call_id: $('Code: Generate IDs and Validate').first().json.tool_call_id, intent_id: $('Code: Generate IDs and Validate').first().json.intent_id, message: 'I\\'ll add this information to the knowledge base. ' + $('Code: Generate IDs and Validate').first().json.content_length + ' characters to store.' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "if-check-cancel-gate1",
+      "name": "IF: Check Cancel (Gate 1)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1120, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.cancel }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true,
+              "id": "gate1-cancel-check"
+            }
+          ]
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "postgres-cancelled",
+      "name": "Postgres: UPDATE CANCELLED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1340, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, completed_at = NOW() WHERE tool_call_id = $2 RETURNING *;",
+        "options": {
+          "queryReplacement": "={{ 'CANCELLED' }}, {{ $('Code: Generate IDs and Validate').first().json.tool_call_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "id": "http-cancel-callback",
+      "name": "HTTP: Cancel Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1560, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code: Generate IDs and Validate').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'CANCELLED', tool_call_id: $('Code: Generate IDs and Validate').first().json.tool_call_id, intent_id: $('Code: Generate IDs and Validate').first().json.intent_id, voice_response: 'Cancelled adding content to knowledge base.' }) }}"
+      }
+    },
+    {
+      "id": "respond-cancelled",
+      "name": "Respond: Cancelled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1780, 180],
+      "parameters": {
+        "respondWith": "json",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-prepare-document",
+      "name": "Code: Prepare Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 420],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Prepare content as a document for the data loader\nconst genData = $('Code: Generate IDs and Validate').first().json;\nreturn [{\n  json: {\n    text: genData.content,\n    metadata: genData.metadata\n  }\n}];"
+      }
+    },
+    {
+      "id": "http-gate2",
+      "name": "HTTP Request: Gate 2 (Confirmation Required)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1560, 420],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code: Generate IDs and Validate').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'READY_TO_STORE', gate: 2, requires_confirmation: true, cancellable: true, tool_call_id: $('Code: Generate IDs and Validate').first().json.tool_call_id, intent_id: $('Code: Generate IDs and Validate').first().json.intent_id, message: 'Ready to store ' + $('Code: Generate IDs and Validate').first().json.content_length + ' characters under category \\'' + $('Code: Generate IDs and Validate').first().json.metadata.category + '\\'. Confirm to proceed?' }) }}",
+        "options": {
+          "timeout": 35000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "if-check-cancel-gate2",
+      "name": "IF: Check Cancel (Gate 2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1780, 420],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.cancel }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true,
+              "id": "gate2-cancel-check"
+            }
+          ]
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "default-data-loader",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [2000, 540],
+      "parameters": {
+        "dataType": "json",
+        "jsonMode": "allInputData"
+      }
+    },
+    {
+      "id": "text-splitter",
+      "name": "Recursive Character Text Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [2220, 540],
+      "parameters": {
+        "chunkSize": 1000,
+        "chunkOverlap": 100
+      }
+    },
+    {
+      "id": "embeddings-gemini",
+      "name": "Embeddings Google Gemini",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [2440, 540],
+      "parameters": {
+        "modelName": "models/text-embedding-004"
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "mVh9oGzTvuTD7mxB",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "id": "pinecone-insert",
+      "name": "Pinecone Vector Store (Insert)",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1.3,
+      "position": [2660, 540],
+      "parameters": {
+        "mode": "insert",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "resume-review-autopayplus",
+          "mode": "id"
+        }
+      },
+      "credentials": {
+        "pineconeApi": {
+          "id": "GAblF7Hlg8tSKQlW",
+          "name": "PineconeApi account 2"
+        }
+      }
+    },
+    {
+      "id": "code-format-result",
+      "name": "Code: Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 540],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const genData = $('Code: Generate IDs and Validate').first().json;\nconst insertResult = $input.all();\nconst chunksStored = insertResult.length || 1;\n\nreturn [{\n  status: 'COMPLETED',\n  tool_call_id: genData.tool_call_id,\n  intent_id: genData.intent_id,\n  callback_url: genData.callback_url,\n  result: {\n    chunks_stored: chunksStored,\n    content_length: genData.content_length,\n    category: genData.metadata.category\n  },\n  voice_response: `Successfully stored ${chunksStored} chunk${chunksStored > 1 ? 's' : ''} in the knowledge base under the ${genData.metadata.category} category.`,\n  execution_time_ms: 0\n}];"
+      }
+    },
+    {
+      "id": "postgres-completed",
+      "name": "Postgres: UPDATE COMPLETED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [3100, 540],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls SET status = $1, result = $2::jsonb, completed_at = NOW() WHERE tool_call_id = $3 RETURNING *;",
+        "options": {
+          "queryReplacement": "={{ 'COMPLETED' }}, {{ JSON.stringify($json.result) }}, {{ $json.tool_call_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "id": "http-gate3",
+      "name": "HTTP Request: Gate 3 (Completion)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [3320, 540],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code: Format Result').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'COMPLETED', gate: 3, tool_call_id: $('Code: Format Result').first().json.tool_call_id, intent_id: $('Code: Format Result').first().json.intent_id, result: $('Code: Format Result').first().json.result, voice_response: $('Code: Format Result').first().json.voice_response }) }}"
+      }
+    },
+    {
+      "id": "respond-success",
+      "name": "Respond to Webhook: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [3540, 540],
+      "parameters": {
+        "respondWith": "json",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: Add to Vector DB": {
+      "main": [[{"node": "Code: Generate IDs and Validate", "type": "main", "index": 0}]]
+    },
+    "Code: Generate IDs and Validate": {
+      "main": [[{"node": "Postgres: INSERT tool_call", "type": "main", "index": 0}]]
+    },
+    "Postgres: INSERT tool_call": {
+      "main": [[{"node": "HTTP Request: Gate 1 (Preparing)", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 1 (Preparing)": {
+      "main": [[{"node": "IF: Check Cancel (Gate 1)", "type": "main", "index": 0}]]
+    },
+    "IF: Check Cancel (Gate 1)": {
+      "main": [
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "Code: Prepare Document", "type": "main", "index": 0}]
+      ]
+    },
+    "Postgres: UPDATE CANCELLED": {
+      "main": [[{"node": "HTTP: Cancel Callback", "type": "main", "index": 0}]]
+    },
+    "HTTP: Cancel Callback": {
+      "main": [[{"node": "Respond: Cancelled", "type": "main", "index": 0}]]
+    },
+    "Code: Prepare Document": {
+      "main": [[{"node": "HTTP Request: Gate 2 (Confirmation Required)", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 2 (Confirmation Required)": {
+      "main": [[{"node": "IF: Check Cancel (Gate 2)", "type": "main", "index": 0}]]
+    },
+    "IF: Check Cancel (Gate 2)": {
+      "main": [
+        [{"node": "Postgres: UPDATE CANCELLED", "type": "main", "index": 0}],
+        [{"node": "Default Data Loader", "type": "main", "index": 0}]
+      ]
+    },
+    "Default Data Loader": {
+      "main": [[{"node": "Recursive Character Text Splitter", "type": "main", "index": 0}]]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_document": [[{"node": "Default Data Loader", "type": "ai_document", "index": 0}]]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [[{"node": "Pinecone Vector Store (Insert)", "type": "ai_embedding", "index": 0}]]
+    },
+    "Pinecone Vector Store (Insert)": {
+      "main": [[{"node": "Code: Format Result", "type": "main", "index": 0}]]
+    },
+    "Code: Format Result": {
+      "main": [[{"node": "Postgres: UPDATE COMPLETED", "type": "main", "index": 0}]]
+    },
+    "Postgres: UPDATE COMPLETED": {
+      "main": [[{"node": "HTTP Request: Gate 3 (Completion)", "type": "main", "index": 0}]]
+    },
+    "HTTP Request: Gate 3 (Completion)": {
+      "main": [[{"node": "Respond to Webhook: Success", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "syncedFromDeployed": "jKMw735r3nAN6O7u",
+    "syncedAt": "2026-01-17T00:00:00.000Z"
+  }
+}
