@@ -1,22 +1,398 @@
-# Environment files with secrets
+# ==============================================================================
+# ENTERPRISE SECURITY .gitignore - LiveKit Voice Agent
+# ==============================================================================
+# SOC 2 / GDPR / HIPAA Compliance for Biometric & Company Data
+# Last Updated: 2026-01-18
+# ==============================================================================
+
+# ==============================================================================
+# CRITICAL: Credentials & Secrets (ZERO TOLERANCE)
+# ==============================================================================
+
+# MCP Configuration Files (EXPOSED IN AUDIT - 12 API KEYS)
+.mcp.json
+*.mcp.json
+**/.mcp.json
+mcp.json
+**/*mcp.json
+
+# Environment Variables & Secrets
 .env
+.env.*
 .env.local
 .env.*.local
-
-# Node modules
-node_modules/
-
-# OS files
-.DS_Store
-..bfg-report/
-.mcp.json
-
-# MCP Configuration (contains API tokens)
-.mcp.json
-
-# Test scripts with credentials
-voice-agent-poc/test-*.sh
-
-# Local environment files
-*.env.local
 .env.production
+.env.development
+.env.staging
+.env.test
+*.env
+**/*.env
+.envrc
+.envrc.local
+
+# Credential Files (ALL VARIANTS)
+credentials.*
+*credentials*
+credential.*
+*credential*
+secrets.*
+*secrets*
+secret.*
+*secret*
+*.secret
+secrets/
+.secrets/
+api_keys.*
+api-keys.*
+apikeys.*
+*apikey*
+*api_key*
+*api-key*
+
+# Private Keys & Certificates (SSH, SSL, TLS, JWT)
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.cer
+*.crt
+*.der
+**/private_key*
+**/privatekey*
+**/private-key*
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.ppk
+known_hosts
+authorized_keys
+
+# JWT & Auth Tokens
+*.jwt
+*token*
+*bearer*
+.auth
+auth.json
+token.json
+session.json
+
+# ==============================================================================
+# Cloud Provider Configurations
+# ==============================================================================
+
+# AWS
+.aws/
+*.aws
+aws-credentials
+.awsconfig
+
+# Google Cloud
+.gcloud/
+.google/
+*gcloud*
+service-account*.json
+*-service-account.json
+
+# Azure
+.azure/
+*.azure
+azureauth.json
+
+# Terraform (Infrastructure as Code with Secrets)
+terraform.tfvars
+*.auto.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+.kube/
+
+# ==============================================================================
+# n8n Workflow Platform (MICROSOFT TEAMS AGENT)
+# ==============================================================================
+
+# n8n Data Directory (may contain encrypted credentials)
+.n8n/
+n8n-data/
+.n8n-data/
+
+# n8n Backups (may expose credential IDs)
+*.n8n
+n8n-backup-*
+*-backup.json
+
+# n8n Local Config
+.n8nrc
+n8n.config.js
+
+# ==============================================================================
+# LiveKit Voice Agent & Biometric Data
+# ==============================================================================
+
+# Voice Recordings (PII/GDPR - Biometric Data)
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.m4a
+*.aac
+recordings/
+audio/
+voice-data/
+
+# Test Scripts with Hardcoded Credentials
+voice-agent-poc/test-*.sh
+test-*.sh
+**/test-credentials.*
+**/test-secrets.*
+
+# LiveKit Configuration
+livekit.yaml
+livekit-*.yaml
+.livekit/
+
+# ==============================================================================
+# Database & Data Stores
+# ==============================================================================
+
+# Database Files
+*.sql
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+
+# Database Backups (may contain PII)
+*.backup
+*.bak
+database-backup-*
+db-backup-*
+
+# PostgreSQL
+.pgpass
+pgpass.conf
+
+# Redis
+dump.rdb
+appendonly.aof
+
+# ==============================================================================
+# Logs & Temporary Files (May Contain PII or Secrets)
+# ==============================================================================
+
+# Log Files
+*.log
+*.logs
+logs/
+log/
+*.log.*
+**/*.log
+
+# Temporary Files
+*.tmp
+*.temp
+.cache/
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Backup Files (may contain secrets)
+*.backup
+*.bak
+*.old
+*.orig
+*~
+*.swp
+*.swo
+
+# ==============================================================================
+# Node.js & Package Management
+# ==============================================================================
+
+# Dependencies
+node_modules/
+jspm_packages/
+bower_components/
+
+# Package Manager Files
+.npm
+.yarn/
+.pnp.*
+.yarn-integrity
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Build Outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+
+# ==============================================================================
+# IDE & Editor Configurations (May Contain Workspace Secrets)
+# ==============================================================================
+
+# JetBrains IDEs (IntelliJ, WebStorm, PyCharm)
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/dictionaries
+.idea/**/shelf
+
+# Visual Studio Code
+.vscode/
+.vscode/settings.json
+.vscode/*.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# ==============================================================================
+# Operating System Files
+# ==============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ==============================================================================
+# Security Tools & Reports
+# ==============================================================================
+
+# BFG Repo-Cleaner (Used in Security Audit)
+.bfg-report/
+..bfg-report/
+
+# Security Scanning Reports
+*.sarif
+security-report.*
+vulnerability-report.*
+.snyk
+
+# ==============================================================================
+# Docker & Containerization (May Contain Secrets in Env Files)
+# ==============================================================================
+
+# Docker
+docker-compose.override.yml
+.dockerenv
+*.dockerignore
+
+# Kubernetes Secrets
+*-secret.yaml
+secret-*.yaml
+
+# ==============================================================================
+# Testing & Coverage (May Expose Internal Logic)
+# ==============================================================================
+
+# Coverage Reports
+coverage/
+*.lcov
+.nyc_output/
+.coverage
+htmlcov/
+
+# Test Results
+test-results/
+.pytest_cache/
+.tox/
+
+# ==============================================================================
+# Miscellaneous Security-Sensitive Files
+# ==============================================================================
+
+# Configuration Files with Secrets
+config.local.*
+config.*.local.*
+*-config.local.*
+
+# Private Notes/Documentation (may contain credentials)
+PRIVATE.md
+TODO.private
+notes.private.*
+
+# Archives (may contain old credentials)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# ==============================================================================
+# Project-Specific Exclusions
+# ==============================================================================
+
+# Allow specific safe files if needed (uncomment as required)
+# !.vscode/extensions.json
+# !.gitkeep
+# !README.md
+
+# ==============================================================================
+# END OF .gitignore
+# ==============================================================================
+# SECURITY REMINDER: Always verify no secrets in git history with:
+# git log -p | grep -i "api_key\|password\|secret\|token"
+# Use BFG or git-filter-repo to remove exposed secrets
+# ==============================================================================
