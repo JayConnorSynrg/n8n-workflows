@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "n8n-mcp": {
+      "command": "npx",
+      "args": ["-y", "@leonardsellem/n8n-mcp-server"],
+      "env": {
+        "N8N_API_KEY": "YOUR_N8N_API_KEY_HERE",
+        "N8N_HOST": "https://your-instance.app.n8n.cloud/"
+      }
+    },
+    "supabase-postgres": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/postgres-mcp-server@latest"],
+      "env": {
+        "DATABASE_URL": "postgresql://USER:PASSWORD@HOST:5432/DATABASE"
+      }
+    },
+    "n8n-workflows": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_TOKEN_HERE"
+      }
+    }
+  }
+}

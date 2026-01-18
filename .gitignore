@@ -9,3 +9,14 @@ node_modules/
 # OS files
 .DS_Store
 ..bfg-report/
+.mcp.json
+
+# MCP Configuration (contains API tokens)
+.mcp.json
+
+# Test scripts with credentials
+voice-agent-poc/test-*.sh
+
+# Local environment files
+*.env.local
+.env.production
