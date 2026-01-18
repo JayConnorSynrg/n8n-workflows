@@ -34,9 +34,15 @@ from .tools.email_tool import send_email_tool
 from .tools.database_tool import query_database_tool
 from .tools.vector_store_tool import store_knowledge_tool
 from .tools.google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool
-from .tools.agent_context_tool import query_context_tool, get_session_summary_tool
+from .tools.agent_context_tool import (
+    query_context_tool,
+    get_session_summary_tool,
+    warm_session_cache,
+    invalidate_session_cache,
+)
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
+from .utils.context_cache import get_cache_manager
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -103,7 +109,7 @@ SYSTEM_PROMPT = """You are a professional voice assistant for enterprise meeting
 
 
 def prewarm(proc: JobProcess):
-    """Prewarm VAD model during server initialization for reduced first-call latency."""
+    """Prewarm VAD model and initialize cache during server initialization."""
     logger.info("Prewarming VAD model...")
     proc.userdata["vad"] = silero.VAD.load(
         min_speech_duration=0.05,      # 50ms - faster speech detection start
@@ -114,6 +120,11 @@ def prewarm(proc: JobProcess):
         force_cpu=True,                # Consistent CPU inference
     )
     logger.info("VAD model prewarmed with activation_threshold=0.05")
+
+    # Initialize context cache manager
+    cache_manager = get_cache_manager()
+    proc.userdata["cache_manager"] = cache_manager
+    logger.info("Context cache manager initialized")
 
 
 async def entrypoint(ctx: JobContext):
@@ -605,6 +616,11 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"  participant_identity: {participant_identity}")
         logger.info(f"  audio_input: sample_rate=16000, num_channels=1")
         logger.info(f"  audio_output: sample_rate=24000, num_channels=1")
+
+        # Pre-warm context cache in background while session starts
+        # This fetches session context before user speaks, reducing first-query latency
+        session_id = ctx.room.name or "livekit-agent"
+        cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
 
         await session.start(
             agent=agent,
