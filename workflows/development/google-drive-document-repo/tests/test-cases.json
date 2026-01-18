@@ -1,0 +1,324 @@
+{
+  "workflow_id": "IamjzfFxjHviJvJg",
+  "webhook_path": "/drive-document-repo",
+  "test_suite": "Google Drive Document Repository - Comprehensive Tests",
+  "generated": "2026-01-17",
+  "test_categories": {
+    "operation_routing": {
+      "description": "Tests for operation switch routing",
+      "cases": [
+        {
+          "id": "OP-001",
+          "name": "List operation routing",
+          "request": {"operation": "list"},
+          "expected": {"status": 200, "contains": ["files", "success"]}
+        },
+        {
+          "id": "OP-002",
+          "name": "Search operation routing",
+          "request": {"operation": "search", "query": "test", "limit": 5},
+          "expected": {"status": 200, "contains": ["results"]}
+        },
+        {
+          "id": "OP-003",
+          "name": "Sync operation routing",
+          "request": {"operation": "sync"},
+          "expected": {"status": 200, "contains": ["processed", "skipped"]}
+        },
+        {
+          "id": "OP-004",
+          "name": "Get operation routing",
+          "request": {"operation": "get", "file_id": "test-file-id"},
+          "expected": {"status": 200}
+        },
+        {
+          "id": "OP-005",
+          "name": "Analyze operation routing",
+          "request": {"operation": "analyze", "file_id": "test-image-id"},
+          "expected": {"status": 200}
+        },
+        {
+          "id": "OP-006",
+          "name": "Invalid operation - fallback",
+          "request": {"operation": "invalid_operation"},
+          "expected": {"status": 400, "contains": ["error", "available operations"]}
+        },
+        {
+          "id": "OP-007",
+          "name": "Missing operation field",
+          "request": {},
+          "expected": {"status": 400, "contains": ["error"]}
+        },
+        {
+          "id": "OP-008",
+          "name": "Null operation",
+          "request": {"operation": null},
+          "expected": {"status": 400, "contains": ["error"]}
+        }
+      ]
+    },
+    "list_operation": {
+      "description": "Tests for list files functionality",
+      "cases": [
+        {
+          "id": "LIST-001",
+          "name": "List all files in folder",
+          "request": {"operation": "list"},
+          "expected": {"status": 200, "type": "array_or_object"}
+        },
+        {
+          "id": "LIST-002",
+          "name": "List returns file metadata",
+          "request": {"operation": "list"},
+          "expected": {"contains_fields": ["id", "name", "mimeType"]}
+        }
+      ]
+    },
+    "search_operation": {
+      "description": "Tests for full-text search",
+      "cases": [
+        {
+          "id": "SEARCH-001",
+          "name": "Search with valid query",
+          "request": {"operation": "search", "query": "document", "limit": 10},
+          "expected": {"status": 200}
+        },
+        {
+          "id": "SEARCH-002",
+          "name": "Search with empty query",
+          "request": {"operation": "search", "query": ""},
+          "expected": {"status": 200, "note": "May return empty or all results"}
+        },
+        {
+          "id": "SEARCH-003",
+          "name": "Search with special characters",
+          "request": {"operation": "search", "query": "test & 'quotes' \"double\""},
+          "expected": {"status": 200, "note": "Should handle SQL injection safely"}
+        },
+        {
+          "id": "SEARCH-004",
+          "name": "Search with limit 1",
+          "request": {"operation": "search", "query": "test", "limit": 1},
+          "expected": {"status": 200, "max_results": 1}
+        },
+        {
+          "id": "SEARCH-005",
+          "name": "Search with large limit",
+          "request": {"operation": "search", "query": "test", "limit": 1000},
+          "expected": {"status": 200}
+        },
+        {
+          "id": "SEARCH-006",
+          "name": "Search without limit (default)",
+          "request": {"operation": "search", "query": "test"},
+          "expected": {"status": 200, "note": "Should use default limit of 10"}
+        },
+        {
+          "id": "SEARCH-007",
+          "name": "Search missing query field",
+          "request": {"operation": "search"},
+          "expected": {"status": 400, "note": "Should error or return empty"}
+        }
+      ]
+    },
+    "sync_operation": {
+      "description": "Tests for sync and extraction",
+      "cases": [
+        {
+          "id": "SYNC-001",
+          "name": "Sync entire folder",
+          "request": {"operation": "sync"},
+          "expected": {"status": 200, "contains": ["processed", "skipped"]}
+        },
+        {
+          "id": "SYNC-002",
+          "name": "Sync deduplication - already synced",
+          "request": {"operation": "sync"},
+          "expected": {"note": "Second sync should skip already processed files"}
+        }
+      ]
+    },
+    "get_operation": {
+      "description": "Tests for getting specific file content",
+      "cases": [
+        {
+          "id": "GET-001",
+          "name": "Get existing file by ID",
+          "request": {"operation": "get", "file_id": "PLACEHOLDER_REAL_ID"},
+          "expected": {"status": 200, "contains": ["extracted_text", "file_name"]}
+        },
+        {
+          "id": "GET-002",
+          "name": "Get non-existent file",
+          "request": {"operation": "get", "file_id": "non-existent-id-12345"},
+          "expected": {"status": 404, "note": "Should return not found or empty"}
+        },
+        {
+          "id": "GET-003",
+          "name": "Get without file_id",
+          "request": {"operation": "get"},
+          "expected": {"status": 400, "contains": ["error"]}
+        },
+        {
+          "id": "GET-004",
+          "name": "Get with empty file_id",
+          "request": {"operation": "get", "file_id": ""},
+          "expected": {"status": 400}
+        }
+      ]
+    },
+    "analyze_operation": {
+      "description": "Tests for AI image analysis",
+      "cases": [
+        {
+          "id": "ANALYZE-001",
+          "name": "Analyze image file",
+          "request": {"operation": "analyze", "file_id": "PLACEHOLDER_IMAGE_ID"},
+          "expected": {"status": 200, "contains": ["analysis"]}
+        },
+        {
+          "id": "ANALYZE-002",
+          "name": "Analyze non-image file",
+          "request": {"operation": "analyze", "file_id": "PLACEHOLDER_PDF_ID"},
+          "expected": {"note": "Should handle gracefully or error"}
+        },
+        {
+          "id": "ANALYZE-003",
+          "name": "Analyze non-existent file",
+          "request": {"operation": "analyze", "file_id": "non-existent-id"},
+          "expected": {"status": 404}
+        },
+        {
+          "id": "ANALYZE-004",
+          "name": "Analyze without file_id",
+          "request": {"operation": "analyze"},
+          "expected": {"status": 400}
+        }
+      ]
+    },
+    "mime_type_handling": {
+      "description": "Tests for different file type extraction",
+      "cases": [
+        {
+          "id": "MIME-001",
+          "name": "PDF extraction",
+          "file_type": "application/pdf",
+          "expected": {"extraction_method": "readPDF"}
+        },
+        {
+          "id": "MIME-002",
+          "name": "DOCX extraction",
+          "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "expected": {"extraction_method": "extractFromFile"}
+        },
+        {
+          "id": "MIME-003",
+          "name": "TXT extraction",
+          "file_type": "text/plain",
+          "expected": {"extraction_method": "extractFromFile"}
+        },
+        {
+          "id": "MIME-004",
+          "name": "CSV extraction",
+          "file_type": "text/csv",
+          "expected": {"extraction_method": "extractFromFile"}
+        },
+        {
+          "id": "MIME-005",
+          "name": "Image (PNG) analysis",
+          "file_type": "image/png",
+          "expected": {"extraction_method": "vision_ai"}
+        },
+        {
+          "id": "MIME-006",
+          "name": "Image (JPEG) analysis",
+          "file_type": "image/jpeg",
+          "expected": {"extraction_method": "vision_ai"}
+        },
+        {
+          "id": "MIME-007",
+          "name": "Unknown MIME type",
+          "file_type": "application/octet-stream",
+          "expected": {"note": "Should skip or handle gracefully"}
+        }
+      ]
+    },
+    "edge_cases": {
+      "description": "Edge case and boundary tests",
+      "cases": [
+        {
+          "id": "EDGE-001",
+          "name": "Empty request body",
+          "request": null,
+          "expected": {"status": 400}
+        },
+        {
+          "id": "EDGE-002",
+          "name": "Malformed JSON",
+          "raw_body": "{invalid json",
+          "expected": {"status": 400}
+        },
+        {
+          "id": "EDGE-003",
+          "name": "Very long query string",
+          "request": {"operation": "search", "query": "a]".repeat(10000)},
+          "expected": {"note": "Should handle without crashing"}
+        },
+        {
+          "id": "EDGE-004",
+          "name": "Unicode characters in query",
+          "request": {"operation": "search", "query": "日本語 emoji 🎉"},
+          "expected": {"status": 200}
+        },
+        {
+          "id": "EDGE-005",
+          "name": "SQL injection attempt",
+          "request": {"operation": "search", "query": "'; DROP TABLE drive_document_repository; --"},
+          "expected": {"status": 200, "note": "Should be safely escaped"}
+        },
+        {
+          "id": "EDGE-006",
+          "name": "XSS attempt in query",
+          "request": {"operation": "search", "query": "<script>alert('xss')</script>"},
+          "expected": {"status": 200, "note": "Should not execute"}
+        }
+      ]
+    },
+    "database_integration": {
+      "description": "Tests for database operations",
+      "cases": [
+        {
+          "id": "DB-001",
+          "name": "Deduplication check - new file",
+          "sql_function": "check_file_needs_processing('new-file-id', NOW())",
+          "expected": {"needs_processing": true, "reason": "NEW_FILE"}
+        },
+        {
+          "id": "DB-002",
+          "name": "Deduplication check - existing file",
+          "sql_function": "check_file_needs_processing('existing-file-id', '2020-01-01')",
+          "expected": {"needs_processing": false, "reason": "ALREADY_PROCESSED"}
+        },
+        {
+          "id": "DB-003",
+          "name": "Deduplication check - updated file",
+          "sql_function": "check_file_needs_processing('existing-file-id', NOW())",
+          "expected": {"needs_processing": true, "reason": "FILE_UPDATED"}
+        },
+        {
+          "id": "DB-004",
+          "name": "Search function - basic query",
+          "sql_function": "search_drive_documents('test', NULL, 10)",
+          "expected": {"returns_rows": true}
+        },
+        {
+          "id": "DB-005",
+          "name": "Search function - no results",
+          "sql_function": "search_drive_documents('xyznonexistentquery123', NULL, 10)",
+          "expected": {"returns_rows": false}
+        }
+      ]
+    }
+  },
+  "total_test_cases": 43
+}
