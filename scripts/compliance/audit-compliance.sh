@@ -7,7 +7,8 @@
 # Output: JSON report + markdown summary
 # ============================================
 
-set -e
+# Note: Removed 'set -e' because arithmetic operations like ((PASS++))
+# return exit code 1 when the value is 0, causing premature exit
 
 # Colors for terminal output
 RED='\033[0;31m'
