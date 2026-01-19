@@ -19,7 +19,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import silero, deepgram, cartesia, groq
+from livekit.plugins import silero, deepgram, cartesia, groq, openai
 
 # OPTIMIZED: Turn detector loaded lazily to reduce cold start (saves ~300-500ms)
 # Moved from module-level import to on-demand loading in get_turn_detector()
@@ -135,14 +135,26 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        # OPTIMIZED: Use max_tokens=100 for voice (concise responses)
-        # This helps stay under Groq's 6000 TPM free tier limit
-        return groq.LLM(
-            model=settings.groq_model,
-            api_key=settings.groq_api_key,
-            temperature=settings.groq_temperature,
-            max_tokens=100,  # Voice responses should be short
-        )
+        """Initialize LLM based on configured provider (cerebras or groq)."""
+        provider = settings.llm_provider.lower()
+
+        if provider == "cerebras" and settings.cerebras_api_key:
+            # Cerebras: 1M free tokens/day, ~1000 TPS with GLM-4.7
+            logger.info(f"Using Cerebras with model: {settings.cerebras_model}")
+            return openai.LLM.with_cerebras(
+                model=settings.cerebras_model,
+                api_key=settings.cerebras_api_key,
+                temperature=settings.cerebras_temperature,
+            )
+        else:
+            # Groq fallback: 6000 TPM limit on free tier
+            logger.info(f"Using Groq with model: {settings.groq_model}")
+            return groq.LLM(
+                model=settings.groq_model,
+                api_key=settings.groq_api_key,
+                temperature=settings.groq_temperature,
+                max_tokens=settings.groq_max_tokens,
+            )
 
     def init_tts():
         return cartesia.TTS(
