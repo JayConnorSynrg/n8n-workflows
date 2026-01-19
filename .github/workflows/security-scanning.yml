@@ -20,6 +20,7 @@ on:
           - secrets
           - dependencies
           - sast
+          - infrastructure
 
 permissions:
   contents: read
@@ -274,7 +275,7 @@ jobs:
   infrastructure-scanning:
     name: Infrastructure & Config
     runs-on: ubuntu-latest
-    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == ''
+    if: github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'infrastructure' || github.event.inputs.scan_type == ''
 
     steps:
       - name: Checkout code

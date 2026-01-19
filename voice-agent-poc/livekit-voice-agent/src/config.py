@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(..., alias="GROQ_API_KEY")
     groq_model: str = Field(default="llama-3.1-8b-instant", alias="GROQ_MODEL")
     groq_temperature: float = Field(default=0.7, alias="GROQ_TEMPERATURE")
-    groq_max_tokens: int = Field(default=256, alias="GROQ_MAX_TOKENS")
+    # OPTIMIZED: Lower max_tokens for voice (concise responses, stay under 6000 TPM)
+    groq_max_tokens: int = Field(default=100, alias="GROQ_MAX_TOKENS")
 
     # Cartesia
     cartesia_api_key: str = Field(..., alias="CARTESIA_API_KEY")

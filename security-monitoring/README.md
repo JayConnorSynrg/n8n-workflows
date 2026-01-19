@@ -2,6 +2,48 @@
 
 Automated security scanning and log aggregation system integrating GitHub Actions with n8n workflows.
 
+## Enterprise System Components
+
+| Component | ID | Purpose |
+|-----------|-----|---------|
+| GitHub Security Logs | `wEBNxJkHuOUgO2PO` | Basic markdown reports to Google Drive |
+| **Enterprise Security Report Generator** | `CZYHSSuGWRzn0P17` | Multi-source aggregation (GitHub + Railway + Recall.ai) |
+
+### Enterprise Security Report Generator
+
+**Webhook:** `/webhook/enterprise-security-report`
+
+**Data Sources:**
+- GitHub Actions security scan results
+- Railway deployment logs (GraphQL API)
+- Recall.ai bot session status (REST API)
+
+**Features:**
+- Risk scoring algorithm (Critical=25pts, High=10pts, Medium=3pts)
+- Automated recommendations generation
+- Severity-based alerting (CRITICAL/HIGH triggers alerts)
+- Google Drive upload with timestamped filenames
+
+**Required Credentials:**
+- `railwayApi` - Railway API Bearer token
+- `recallAiApi` - Recall.ai API Token
+- Google Drive OAuth2
+
+### PDF Generation (Future Enhancement)
+
+To enable PDF reports instead of markdown:
+1. Create APITemplate.io account at https://apitemplate.io
+2. Create PDF template using the structure in `pdf-template-structure.md`
+3. Add APITemplate.io API key credential in n8n
+4. Replace "Convert to Binary" node with APITemplate.io PDF generation node
+
+**PDF Template Fields:**
+- `{{company_name}}`, `{{timestamp}}`, `{{risk_score}}`
+- `{{critical_count}}`, `{{high_count}}`, `{{compliance_status}}`
+- `{{secrets_status}}`, `{{deps_status}}`, `{{sast_status}}`, `{{infra_status}}`
+- `{{railway_error_rate}}`, `{{recall_sessions}}`, `{{recall_failures}}`
+- `{{recommendations}}` (array)
+
 ## Architecture
 
 ```
@@ -195,12 +237,51 @@ curl -X POST https://your-n8n-instance.app.n8n.cloud/webhook/security-logs \
   }'
 ```
 
+## Testing
+
+### Run All Tests
+
+```bash
+./security-monitoring/tests/run-all-tests.sh
+```
+
+### Test Suites
+
+**Bash E2E Tests** (`tests/test-security-pipeline.sh`):
+- GitHub Actions workflow validation
+- n8n workflow configuration
+- Webhook connectivity (when URLs configured)
+- Voice agent security logging
+- External API connectivity (Railway, Recall.ai)
+- Documentation completeness
+- Security configuration (.gitignore)
+
+**Python Tests** (`tests/test_enterprise_security.py`):
+- Risk scoring algorithm (8 tests)
+- Data normalization from GitHub/Railway/Recall.ai (3 tests)
+- Report generation and recommendations (3 tests)
+- Webhook payload validation (3 tests)
+- End-to-end integration (2 tests)
+
+### Environment Variables for Full Testing
+
+```bash
+export N8N_SECURITY_WEBHOOK_URL="https://your-n8n.app.n8n.cloud/webhook/security-logs"
+export N8N_ENTERPRISE_SECURITY_WEBHOOK_URL="https://your-n8n.app.n8n.cloud/webhook/enterprise-security-report"
+export RAILWAY_API_TOKEN="your-railway-token"
+export RECALL_API_TOKEN="your-recall-token"
+```
+
 ## Files
 
 ```
 security-monitoring/
 ├── README.md                              # This file
-└── github-security-logs-workflow.json     # n8n workflow export
+├── github-security-logs-workflow.json     # n8n workflow export
+└── tests/
+    ├── run-all-tests.sh                   # Complete test runner
+    ├── test-security-pipeline.sh          # Bash E2E tests
+    └── test_enterprise_security.py        # Python unit/integration tests
 
 .github/workflows/
 └── security-scanning.yml                  # GitHub Actions workflow

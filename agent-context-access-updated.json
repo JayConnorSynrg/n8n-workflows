@@ -1,0 +1,1434 @@
+{
+  "name": "Agent Context Access - Universal Query",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent-context-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook: Context Query",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-384, 912],
+      "webhookId": "4b1286e2-50ad-400b-83cb-56311d0794ba",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const timestamp = Date.now();\nconst random = Math.random().toString(36).substring(2, 8);\nconst toolCallId = `tc_context_${timestamp}_${random}`;\n\nconst webhookData = $input.first().json;\n\nreturn [{\n  json: {\n    ...webhookData,\n    tool_call_id: toolCallId,\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "generate-tool-call-id",
+      "name": "Code: Generate Tool Call ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 912]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tool_calls (\n  tool_call_id,\n  session_id,\n  intent_id,\n  function_name,\n  parameters,\n  status,\n  created_at\n)\nVALUES ($1, $2, $3, $4, $5, $6, NOW())\nRETURNING id, tool_call_id, created_at;",
+        "options": {
+          "queryReplacement": "={{ $json.tool_call_id }}, {{ $json.body.session_id || 'unknown' }}, {{ $json.body.intent_id || null }}, {{ 'agent_context_query' }}, {{ JSON.stringify($json.body) }}, {{ 'EXECUTING' }}"
+        }
+      },
+      "id": "insert-tool-call",
+      "name": "Postgres: INSERT Tool Call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [64, 912],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Code: Generate Tool Call ID').item.json.body.callback_url }}",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "AWAITING_CONFIRMATION"
+            },
+            {
+              "name": "gate",
+              "value": "confirm_context_query"
+            },
+            {
+              "name": "requires_confirmation",
+              "value": true
+            },
+            {
+              "name": "tool_call_id",
+              "value": "={{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+            },
+            {
+              "name": "intent_id",
+              "value": "={{ $('Code: Generate Tool Call ID').item.json.body.intent_id }}"
+            },
+            {
+              "name": "query_type",
+              "value": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ 'About to execute ' + $('Code: Generate Tool Call ID').item.json.body.query_type + ' query. Proceed?' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "confirmation-gate",
+      "name": "HTTP: Confirmation Gate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [288, 912]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-continue",
+              "leftValue": "={{ $json.continue }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-check-confirmation",
+      "name": "IF: Check Confirmation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [512, 912]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, completed_at = NOW(), error_message = $2\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'CANCELLED' }}, {{ 'User denied confirmation' }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-cancelled",
+      "name": "Postgres: UPDATE Cancelled",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [736, 1056],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'CANCELLED', message: 'Query execution cancelled by user', tool_call_id: $('Code: Generate Tool Call ID').item.json.tool_call_id } }}",
+        "options": {}
+      },
+      "id": "respond-cancelled",
+      "name": "Respond: Cancelled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [960, 1056]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "session_context",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "session_context"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "tool_history",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "tool_history"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "schema",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "schema"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "all_tables",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "all_tables"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "global_context",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "global_context"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "session_archive",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "session_archive"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "archive_session",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "archive_session"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "search_history",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "search_history"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Generate Tool Call ID').item.json.body.query_type }}",
+                    "rightValue": "custom_query",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "custom_query"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "route-query",
+      "name": "Route Query Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [736, 784]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  tc.tool_call_id,\n  tc.session_id,\n  tc.intent_id,\n  tc.function_name,\n  tc.parameters,\n  tc.status,\n  tc.result,\n  tc.voice_response,\n  tc.error_message,\n  tc.created_at,\n  tc.completed_at,\n  tc.execution_time_ms\nFROM tool_calls tc\nWHERE tc.session_id = $1\nORDER BY tc.created_at DESC\nLIMIT $2;",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.session_id }}, {{ $('Code: Generate Tool Call ID').item.json.body.limit || 50 }}"
+        }
+      },
+      "id": "query-session-context",
+      "name": "Query: Session Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1536, 208],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  tc.tool_call_id,\n  tc.session_id,\n  tc.function_name,\n  tc.parameters,\n  tc.status,\n  tc.result,\n  tc.voice_response,\n  tc.created_at,\n  tc.completed_at\nFROM tool_calls tc\nWHERE ($1::varchar IS NULL OR tc.session_id = $1)\n  AND ($2::varchar IS NULL OR tc.function_name = $2)\n  AND ($3::varchar IS NULL OR tc.status = $3)\nORDER BY tc.created_at DESC\nLIMIT $4;",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.session_id }}, {{ $('Code: Generate Tool Call ID').item.json.body.function_name }}, {{ $('Code: Generate Tool Call ID').item.json.body.status }}, {{ $('Code: Generate Tool Call ID').item.json.body.limit || 20 }}"
+        }
+      },
+      "id": "query-tool-history",
+      "name": "Query: Tool History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1536, 352],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  c.column_name,\n  c.data_type,\n  c.is_nullable,\n  c.column_default,\n  c.character_maximum_length,\n  (SELECT COUNT(*) FROM information_schema.table_constraints tc \n   JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name\n   WHERE tc.table_name = c.table_name AND kcu.column_name = c.column_name AND tc.constraint_type = 'PRIMARY KEY') > 0 as is_primary_key\nFROM information_schema.columns c\nWHERE c.table_name = $1 AND c.table_schema = 'public'\nORDER BY c.ordinal_position;",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.table_name || 'tool_calls' }}"
+        }
+      },
+      "id": "query-schema",
+      "name": "Query: Table Schema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1536, 512],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  t.table_name,\n  t.table_type,\n  (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name) as column_count,\n  obj_description((quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass, 'pg_class') as description\nFROM information_schema.tables t\nWHERE t.table_schema = 'public'\nORDER BY t.table_type, t.table_name;",
+        "options": {}
+      },
+      "id": "query-all-tables",
+      "name": "Query: All Tables",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1536, 656],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  'recent_tool_calls' as data_type,\n  json_agg(json_build_object(\n    'tool_call_id', tc.tool_call_id,\n    'session_id', tc.session_id,\n    'function_name', tc.function_name,\n    'status', tc.status,\n    'created_at', tc.created_at\n  ) ORDER BY tc.created_at DESC) as data\nFROM (SELECT * FROM tool_calls ORDER BY created_at DESC LIMIT 10) tc\nUNION ALL\nSELECT \n  'active_sessions' as data_type,\n  json_agg(DISTINCT tc.session_id) as data\nFROM tool_calls tc\nWHERE tc.created_at > NOW() - INTERVAL '24 hours';",
+        "options": {}
+      },
+      "id": "query-default",
+      "name": "Query: Default (Recent Activity)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1504, 1664],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM v_agent_global_context ORDER BY created_at DESC LIMIT $1",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.limit || 50 }}"
+        }
+      },
+      "id": "query-global-context",
+      "name": "Query: Global Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1520, 848],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT session_id, session_summary, total_tool_calls, session_ended_at FROM agent_session_archive ORDER BY session_ended_at DESC LIMIT $1",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.limit || 20 }}"
+        }
+      },
+      "id": "query-session-archive",
+      "name": "Query: Session Archive",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1520, 1056],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT archive_session($1::varchar) as result",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.session_id }}"
+        }
+      },
+      "id": "query-archive-session",
+      "name": "Query: Archive Session",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1520, 1248],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM search_session_history($1::text, $2::integer)",
+        "options": {
+          "queryReplacement": "={{ $('Code: Generate Tool Call ID').item.json.body.search_query }}, {{ $('Code: Generate Tool Call ID').item.json.body.limit || 10 }}"
+        }
+      },
+      "id": "query-search-history",
+      "name": "Query: Search History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1520, 1456],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a PostgreSQL query generator for a voice agent system. Generate READ-ONLY SELECT queries only.\n\nAvailable tables:\n- tool_calls (id, tool_call_id, session_id, intent_id, function_name, parameters, status, result, voice_response, error_message, created_at, completed_at, execution_time_ms)\n- session_context (id, session_id, key, value, created_at)\n- agent_session_archive (id, session_id, session_summary, total_tool_calls, session_started_at, session_ended_at, archived_at, context_data)\n\nRULES:\n- NEVER use INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE\n- Return ONLY the SQL query, no explanation or markdown\n- Use parameterized queries when possible\n- Limit results to reasonable amounts (default LIMIT 50)"
+            },
+            {
+              "role": "user",
+              "content": "={{ $('Code: Generate Tool Call ID').item.json.body.search_query }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "id": "openai-generate-sql",
+      "name": "OpenAI: Generate SQL",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [1520, 1856],
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst sql = response.message?.content || response.choices?.[0]?.message?.content || '';\n\nconst forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE', 'CREATE', 'GRANT', 'REVOKE'];\nconst upperSql = sql.toUpperCase();\nconst isValid = !forbidden.some(word => upperSql.includes(word)) && upperSql.includes('SELECT');\n\nif (!isValid) {\n  throw new Error('Generated SQL is not a valid read-only query: ' + sql);\n}\n\nreturn [{\n  json: {\n    sql: sql.trim(),\n    validated: true,\n    original_query: $('Code: Generate Tool Call ID').item.json.body.search_query\n  }\n}];"
+      },
+      "id": "validate-sql",
+      "name": "Code: Validate SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1744, 1856]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "execute-custom-sql",
+      "name": "Postgres: Execute Custom SQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1968, 1856],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\nconst sessionId = $('Code: Generate Tool Call ID').first().json.body.session_id;\n\nreturn [{\n  json: {\n    query_type: 'session_context',\n    session_id: sessionId,\n    tool_calls_count: results.length,\n    tool_calls: results.map(r => r.json),\n    summary: {\n      functions_used: [...new Set(results.map(r => r.json.function_name))],\n      statuses: results.reduce((acc, r) => {\n        acc[r.json.status] = (acc[r.json.status] || 0) + 1;\n        return acc;\n      }, {}),\n      first_call: results.length > 0 ? results[results.length-1].json.created_at : null,\n      last_call: results.length > 0 ? results[0].json.created_at : null\n    }\n  }\n}];"
+      },
+      "id": "format-session",
+      "name": "Format: Session Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1792, 208]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\nconst body = $('Code: Generate Tool Call ID').first().json.body;\n\nreturn [{\n  json: {\n    query_type: 'tool_history',\n    filters: {\n      session_id: body.session_id || 'all',\n      function_name: body.function_name || 'all',\n      status: body.status || 'all'\n    },\n    results_count: results.length,\n    tool_calls: results.map(r => r.json),\n    analytics: {\n      by_function: results.reduce((acc, r) => {\n        acc[r.json.function_name] = (acc[r.json.function_name] || 0) + 1;\n        return acc;\n      }, {}),\n      by_session: results.reduce((acc, r) => {\n        acc[r.json.session_id] = (acc[r.json.session_id] || 0) + 1;\n        return acc;\n      }, {})\n    }\n  }\n}];"
+      },
+      "id": "format-history",
+      "name": "Format: History Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1792, 352]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\nconst tableName = $('Code: Generate Tool Call ID').first().json.body.table_name || 'tool_calls';\n\nreturn [{\n  json: {\n    query_type: 'schema',\n    table_name: tableName,\n    column_count: results.length,\n    columns: results.map(r => ({\n      name: r.json.column_name,\n      type: r.json.data_type,\n      nullable: r.json.is_nullable === 'YES',\n      default: r.json.column_default,\n      max_length: r.json.character_maximum_length,\n      is_primary_key: r.json.is_primary_key\n    })),\n    primary_keys: results.filter(r => r.json.is_primary_key).map(r => r.json.column_name)\n  }\n}];"
+      },
+      "id": "format-schema",
+      "name": "Format: Schema Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1792, 512]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\n\nconst tables = results.filter(r => r.json.table_type === 'BASE TABLE');\nconst views = results.filter(r => r.json.table_type === 'VIEW');\n\nreturn [{\n  json: {\n    query_type: 'all_tables',\n    tables: {\n      count: tables.length,\n      list: tables.map(r => ({\n        name: r.json.table_name,\n        columns: r.json.column_count,\n        description: r.json.description\n      }))\n    },\n    views: {\n      count: views.length,\n      list: views.map(r => ({\n        name: r.json.table_name,\n        columns: r.json.column_count,\n        description: r.json.description\n      }))\n    }\n  }\n}];"
+      },
+      "id": "format-tables",
+      "name": "Format: Tables Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1792, 656]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\n\nreturn [{\n  json: {\n    query_type: 'overview',\n    message: 'Use query_type parameter: session_context, tool_history, schema, all_tables, custom_query',\n    available_query_types: [\n      { type: 'session_context', params: ['session_id (required)', 'limit (optional, default 50)'] },\n      { type: 'tool_history', params: ['session_id (optional)', 'function_name (optional)', 'status (optional)', 'limit (optional, default 20)'] },\n      { type: 'schema', params: ['table_name (optional, default tool_calls)'] },\n      { type: 'all_tables', params: [] },\n      { type: 'custom_query', params: ['search_query (required - natural language query)'] }\n    ],\n    recent_activity: results.map(r => r.json)\n  }\n}];"
+      },
+      "id": "format-default",
+      "name": "Format: Default Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1808, 1664]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    query_type: 'global_context',\n    results_count: results.length,\n    data: results,\n    message: `Retrieved ${results.length} global context entries`\n  }\n}];"
+      },
+      "id": "format-global-context",
+      "name": "Format: Global Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1776, 832]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    query_type: 'session_archive',\n    results_count: results.length,\n    data: results,\n    message: `Found ${results.length} archived sessions`\n  }\n}];"
+      },
+      "id": "format-session-archive",
+      "name": "Format: Session Archive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1776, 1040]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json.result;\nreturn [{\n  json: {\n    query_type: 'archive_session',\n    success: result?.success || false,\n    archived_tool_calls: result?.archived_tool_calls || 0,\n    promoted_to_global: result?.promoted_to_global || 0,\n    message: result?.success ? `Archived session with ${result.archived_tool_calls} tool calls` : 'Archive failed'\n  }\n}];"
+      },
+      "id": "format-archive-result",
+      "name": "Format: Archive Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1776, 1232]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    query_type: 'search_history',\n    results_count: results.length,\n    data: results.map(r => ({\n      session_id: r.session_id,\n      summary: r.session_summary,\n      relevance: r.relevance_score,\n      ended_at: r.session_ended_at\n    })),\n    message: `Found ${results.length} matching sessions`\n  }\n}];"
+      },
+      "id": "format-search-result",
+      "name": "Format: Search Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1776, 1440]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all().map(i => i.json);\nconst validatedSql = $('Code: Validate SQL').first().json;\n\nreturn [{\n  json: {\n    query_type: 'custom_query',\n    original_query: validatedSql.original_query,\n    generated_sql: validatedSql.sql,\n    results_count: results.length,\n    data: results,\n    message: `Custom query executed successfully, returned ${results.length} rows`\n  }\n}];"
+      },
+      "id": "format-custom-query",
+      "name": "Format: Custom Query Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2192, 1856]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-session",
+      "name": "Postgres: UPDATE Success (Session)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2016, 208],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-history",
+      "name": "Postgres: UPDATE Success (History)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2016, 352],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-schema",
+      "name": "Postgres: UPDATE Success (Schema)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2016, 512],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-tables",
+      "name": "Postgres: UPDATE Success (Tables)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2016, 656],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-global",
+      "name": "Postgres: UPDATE Success (Global)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2000, 832],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-archive",
+      "name": "Postgres: UPDATE Success (Archive)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2000, 1040],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-archive-result",
+      "name": "Postgres: UPDATE Success (Archive Result)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2000, 1232],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-search",
+      "name": "Postgres: UPDATE Success (Search)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2000, 1440],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-default",
+      "name": "Postgres: UPDATE Success (Default)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2032, 1664],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls\nSET status = $1, result = $2, completed_at = NOW(), execution_time_ms = EXTRACT(epoch FROM (NOW() - created_at)) * 1000\nWHERE tool_call_id = $3;",
+        "options": {
+          "queryReplacement": "={{ 'SUCCESS' }}, {{ JSON.stringify($json) }}, {{ $('Code: Generate Tool Call ID').item.json.tool_call_id }}"
+        }
+      },
+      "id": "update-success-custom",
+      "name": "Postgres: UPDATE Success (Custom)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2416, 1856],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('Format: Session Response').item.json }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2640, 1040]
+    }
+  ],
+  "connections": {
+    "Webhook: Context Query": {
+      "main": [
+        [
+          {
+            "node": "Code: Generate Tool Call ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Generate Tool Call ID": {
+      "main": [
+        [
+          {
+            "node": "Postgres: INSERT Tool Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: INSERT Tool Call": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Confirmation Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Confirmation Gate": {
+      "main": [
+        [
+          {
+            "node": "IF: Check Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Check Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route Query Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Respond: Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Query Type": {
+      "main": [
+        [
+          {
+            "node": "Query: Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Tool History",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Table Schema",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: All Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Global Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Session Archive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Archive Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Search History",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI: Generate SQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query: Default (Recent Activity)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Session Context": {
+      "main": [
+        [
+          {
+            "node": "Format: Session Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Tool History": {
+      "main": [
+        [
+          {
+            "node": "Format: History Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Table Schema": {
+      "main": [
+        [
+          {
+            "node": "Format: Schema Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: All Tables": {
+      "main": [
+        [
+          {
+            "node": "Format: Tables Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Default (Recent Activity)": {
+      "main": [
+        [
+          {
+            "node": "Format: Default Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Global Context": {
+      "main": [
+        [
+          {
+            "node": "Format: Global Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Session Archive": {
+      "main": [
+        [
+          {
+            "node": "Format: Session Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Archive Session": {
+      "main": [
+        [
+          {
+            "node": "Format: Archive Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query: Search History": {
+      "main": [
+        [
+          {
+            "node": "Format: Search Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Generate SQL": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate SQL": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Execute Custom SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Execute Custom SQL": {
+      "main": [
+        [
+          {
+            "node": "Format: Custom Query Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Session Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Session)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: History Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (History)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Schema Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Schema)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Tables Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Tables)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Global Context": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Global)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Session Archive": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Archive)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Archive Result": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Archive Result)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Search Result": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Search)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Default Response": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Default)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format: Custom Query Result": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Success (Custom)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Session)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (History)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Schema)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Tables)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Global)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Archive)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Archive Result)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Search)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Default)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: UPDATE Success (Custom)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

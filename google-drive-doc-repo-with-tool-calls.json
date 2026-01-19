@@ -1,0 +1,1093 @@
+{
+  "name": "Google Drive Document Repository",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "drive-document-repo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 304],
+      "webhookId": "09f131a9-9cc5-4bec-a851-de24c592fde2",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const timestamp = Date.now();\nconst random = Math.random().toString(36).substring(2, 8);\nconst tool_call_id = `tc_drive_${timestamp}_${random}`;\n\nconst body = $json.body || {};\nconst operation = body.operation || $json.operation || 'unknown';\n\nreturn {\n  json: {\n    ...($json.body ? { body: $json.body } : $json),\n    tool_call_id,\n    session_id: body.session_id || $json.session_id || 'unknown',\n    intent_id: body.intent_id || $json.intent_id || null,\n    callback_url: body.callback_url || $json.callback_url || null,\n    operation,\n    parameters: body,\n    start_time: timestamp\n  }\n};"
+      },
+      "id": "generate-tool-call-id",
+      "name": "Generate Tool Call ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [340, 304]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tool_calls (\n  tool_call_id, session_id, intent_id, function_name, \n  parameters, status, callback_url, created_at\n) VALUES (\n  $1, $2, $3, $4, $5, 'EXECUTING', $6, NOW()\n)\nRETURNING id, tool_call_id;",
+        "options": {
+          "queryReplacement": "={{ [$json.tool_call_id, $json.session_id, $json.intent_id, 'google_drive_' + $json.operation, JSON.stringify($json.parameters), $json.callback_url] }}"
+        }
+      },
+      "id": "insert-tool-call",
+      "name": "Log Tool Call Start",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [540, 304],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.operation }}",
+                    "rightValue": "list",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "list"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.operation }}",
+                    "rightValue": "search",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "search"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.operation }}",
+                    "rightValue": "sync",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "sync"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.operation }}",
+                    "rightValue": "get",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "get"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.operation }}",
+                    "rightValue": "analyze",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "analyze"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "switch",
+      "name": "Route Operation",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [740, 304]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "filters": {
+          "folderId": {
+            "__rl": true,
+            "value": "11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF",
+            "mode": "id"
+          }
+        },
+        "options": {}
+      },
+      "id": "list-files",
+      "name": "List Files in Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [980, -128],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $input.all().map(item => ({\n  id: item.json.id,\n  name: item.json.name,\n  mimeType: item.json.mimeType,\n  size: item.json.size,\n  modifiedTime: item.json.modifiedTime,\n  webViewLink: item.json.webViewLink\n}));\n\nreturn [{ json: { files, count: files.length } }];"
+      },
+      "id": "format-list-response",
+      "name": "Format List Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1204, -128]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'SUCCESS',\n    result = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-list",
+      "name": "Update Tool Call - List",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1316, -128],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $input.first().json }}",
+        "options": {}
+      },
+      "id": "respond-list",
+      "name": "Respond List",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1412, -128]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM search_drive_documents($1, $2, $3)",
+        "options": {
+          "queryReplacement": "={{ $json.body.query }}, {{ '11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF' }}, {{ $json.body.limit || 10 }}"
+        }
+      },
+      "id": "search-db",
+      "name": "Search Documents",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [980, 80],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'SUCCESS',\n    result = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify({ results: $input.all().map(i => i.json) }), Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-search",
+      "name": "Update Tool Call - Search",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1108, 80],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { results: $input.all().map(i => i.json) } }}",
+        "options": {}
+      },
+      "id": "respond-search",
+      "name": "Respond Search",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1204, 80]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "filters": {
+          "folderId": {
+            "__rl": true,
+            "value": "11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF",
+            "mode": "id"
+          }
+        },
+        "options": {
+          "fields": ["*"]
+        }
+      },
+      "id": "sync-list-files",
+      "name": "Get All Files",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [964, 240],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM check_file_needs_processing($1, $2)",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.modifiedTime || null] }}"
+        }
+      },
+      "id": "check-processing",
+      "name": "Check If Needs Processing",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1188, 240],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "needs-processing-check",
+              "leftValue": "={{ $json.needs_processing }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "name": "filter.operator.true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-needs-processing",
+      "name": "Filter Needs Processing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1364, 304]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Get All Files').item.json.mimeType }}",
+                    "rightValue": "application/pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pdf"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Get All Files').item.json.mimeType }}",
+                    "rightValue": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "docx"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Get All Files').item.json.mimeType }}",
+                    "rightValue": "text/plain",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Get All Files').item.json.mimeType }}",
+                    "rightValue": "image/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith",
+                      "name": "filter.operator.startsWith"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "image"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Get All Files').item.json.mimeType }}",
+                    "rightValue": "text/csv",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "csv"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "route-by-mime",
+      "name": "Route By MIME Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1620, 304]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Get All Files').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "keepData": true
+        }
+      },
+      "id": "download-pdf",
+      "name": "Download PDF",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1956, 96],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "extract-pdf",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.readPDF",
+      "typeVersion": 1,
+      "position": [2228, 96]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Get All Files').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "keepData": true,
+          "googleFileConversion": {
+            "conversion": {}
+          }
+        }
+      },
+      "id": "download-docx",
+      "name": "Download DOCX",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1940, 272],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "destinationKey": "text",
+        "options": {}
+      },
+      "id": "extract-docx",
+      "name": "Extract DOCX Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [2164, 272]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Get All Files').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "keepData": true
+        }
+      },
+      "id": "download-text",
+      "name": "Download Text File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1940, 480],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "destinationKey": "text",
+        "options": {}
+      },
+      "id": "extract-text",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [2164, 480]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Get All Files').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "keepData": true
+        }
+      },
+      "id": "download-image",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1956, 688],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Placeholder for OpenAI Vision API call\n// Will be implemented with proper API configuration\nreturn [{ json: { text: 'Image analysis placeholder', analysis: {} } }];"
+      },
+      "id": "analyze-image",
+      "name": "Analyze Image with AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 688]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Get All Files').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "keepData": true
+        }
+      },
+      "id": "download-csv",
+      "name": "Download CSV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1940, 880],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "destinationKey": "text",
+        "options": {}
+      },
+      "id": "extract-csv",
+      "name": "Extract CSV Content",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [2164, 880]
+    },
+    {
+      "parameters": {
+        "jsCode": "const downloadNodeData = $input.first().json;\nconst extractedText = downloadNodeData.text || downloadNodeData.data || '';\n\n// Safely extract file metadata - handle both Google Drive fields and PDF metadata contamination\nconst fileId = downloadNodeData.id || 'unknown';\nconst fileName = downloadNodeData.name || 'unknown';\nconst mimeType = downloadNodeData.mimeType || 'application/octet-stream';\nconst webViewLink = downloadNodeData.webViewLink || '';\nconst modifiedTime = downloadNodeData.modifiedTime || null;\n\n// Safely parse numeric fields - protect against non-numeric strings\nconst rawSize = downloadNodeData.size;\nconst fileSize = (typeof rawSize === 'number') ? rawSize : \n                 (typeof rawSize === 'string' && /^\\d+$/.test(rawSize)) ? parseInt(rawSize, 10) : 0;\n\nconst textLength = typeof extractedText === 'string' ? extractedText.length : 0;\n\nreturn [{\n  json: {\n    drive_file_id: fileId,\n    drive_folder_id: '11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF',\n    file_name: fileName,\n    mime_type: mimeType,\n    file_size_bytes: fileSize,\n    web_view_link: webViewLink,\n    extracted_text: extractedText,\n    text_length: textLength,\n    extraction_method: 'auto',\n    drive_modified_time: modifiedTime,\n    extraction_status: 'SUCCESS'\n  }\n}];"
+      },
+      "id": "merge-extractions",
+      "name": "Prepare DB Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2548, 352]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO drive_document_repository (\n  drive_file_id, drive_folder_id, file_name, mime_type, file_size_bytes,\n  web_view_link, extracted_text, text_length, extraction_method,\n  drive_modified_time, extraction_status, first_accessed_at, last_accessed_at\n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())\nON CONFLICT (drive_file_id) DO UPDATE SET\n  file_name = EXCLUDED.file_name,\n  mime_type = EXCLUDED.mime_type,\n  file_size_bytes = EXCLUDED.file_size_bytes,\n  web_view_link = EXCLUDED.web_view_link,\n  extracted_text = EXCLUDED.extracted_text,\n  text_length = EXCLUDED.text_length,\n  extraction_method = EXCLUDED.extraction_method,\n  drive_modified_time = EXCLUDED.drive_modified_time,\n  extraction_status = EXCLUDED.extraction_status,\n  last_accessed_at = NOW(),\n  access_count = drive_document_repository.access_count + 1,\n  updated_at = NOW()\nRETURNING *",
+        "options": {
+          "queryReplacement": "={{ [$json.drive_file_id, $json.drive_folder_id, $json.file_name, $json.mime_type, $json.file_size_bytes, $json.web_view_link, $json.extracted_text, $json.text_length, $json.extraction_method, $json.drive_modified_time, $json.extraction_status] }}"
+        }
+      },
+      "id": "upsert-db",
+      "name": "Insert/Update Document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2772, 352],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO drive_access_log (drive_folder_id, operation, files_found, files_processed, success) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        "options": {
+          "queryReplacement": "={{ '11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF' }}, {{ 'sync' }}, {{ $('Get All Files').all().length }}, {{ $input.all().length }}, {{ true }}"
+        }
+      },
+      "id": "log-sync",
+      "name": "Log Sync Operation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2996, 352],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'SUCCESS',\n    result = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-sync",
+      "name": "Update Tool Call - Sync",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [3124, 352],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { operation: 'sync', processed: $input.first().json.files_processed, success: true } }}",
+        "options": {}
+      },
+      "id": "respond-sync",
+      "name": "Respond Sync",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [3220, 352]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM drive_document_repository WHERE drive_file_id = $1",
+        "options": {
+          "queryReplacement": "={{ $json.body.file_id }}"
+        }
+      },
+      "id": "get-file",
+      "name": "Get File Content",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [980, 448],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'SUCCESS',\n    result = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-get",
+      "name": "Update Tool Call - Get",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1108, 448],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $input.first().json }}",
+        "options": {}
+      },
+      "id": "respond-get",
+      "name": "Respond Get",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1204, 448]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM drive_document_repository WHERE drive_file_id = $1",
+        "options": {
+          "queryReplacement": "={{ $json.body.file_id }}"
+        }
+      },
+      "id": "analyze-get-file",
+      "name": "Get File for Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [964, 592],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.drive_file_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "analyze-download",
+      "name": "Download for Analysis",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1188, 592],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "ylMLH2SMUpGQpUUr",
+          "name": "JayConnor@synrgscaling.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Placeholder for OpenAI Vision analysis\nreturn [{ json: { analysis: {}, success: true } }];"
+      },
+      "id": "analyze-vision",
+      "name": "AI Vision Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1396, 512]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE drive_document_repository SET ai_analysis = $1, updated_at = NOW() WHERE drive_file_id = $2 RETURNING *",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json.analysis) }}, {{ $('Get File for Analysis').item.json.drive_file_id }}"
+        }
+      },
+      "id": "update-analysis",
+      "name": "Update AI Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1620, 512],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'SUCCESS',\n    result = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-analyze",
+      "name": "Update Tool Call - Analyze",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1844, 1088],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $input.first().json }}",
+        "options": {}
+      },
+      "id": "respond-analyze",
+      "name": "Respond Analyze",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1940, 1088]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    error: 'Invalid operation',\n    message: 'Operation must be one of: list, search, sync, get, analyze',\n    available_operations: ['list', 'search', 'sync', 'get', 'analyze']\n  }\n}];"
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [948, 768]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tool_calls \nSET status = 'FAILED',\n    error_message = $1,\n    execution_time_ms = $2,\n    completed_at = NOW()\nWHERE tool_call_id = $3\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.message || $json.error || 'Unknown error', Date.now() - $('Generate Tool Call ID').item.json.start_time, $('Generate Tool Call ID').item.json.tool_call_id] }}"
+        }
+      },
+      "id": "update-tool-call-error",
+      "name": "Update Tool Call - Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1076, 768],
+      "credentials": {
+        "postgres": {
+          "id": "NI3jbq1U8xPst3j3",
+          "name": "MICROSOFT TEAMS AGENT DATTABASE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $input.first().json }}",
+        "options": {}
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1172, 768]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "Generate Tool Call ID", "type": "main", "index": 0}]]
+    },
+    "Generate Tool Call ID": {
+      "main": [[{"node": "Log Tool Call Start", "type": "main", "index": 0}]]
+    },
+    "Log Tool Call Start": {
+      "main": [[{"node": "Route Operation", "type": "main", "index": 0}]]
+    },
+    "Route Operation": {
+      "main": [
+        [{"node": "List Files in Folder", "type": "main", "index": 0}],
+        [{"node": "Search Documents", "type": "main", "index": 0}],
+        [{"node": "Get All Files", "type": "main", "index": 0}],
+        [{"node": "Get File Content", "type": "main", "index": 0}],
+        [{"node": "Get File for Analysis", "type": "main", "index": 0}],
+        [{"node": "Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "List Files in Folder": {
+      "main": [[{"node": "Format List Response", "type": "main", "index": 0}]]
+    },
+    "Format List Response": {
+      "main": [[{"node": "Update Tool Call - List", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - List": {
+      "main": [[{"node": "Respond List", "type": "main", "index": 0}]]
+    },
+    "Search Documents": {
+      "main": [[{"node": "Update Tool Call - Search", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - Search": {
+      "main": [[{"node": "Respond Search", "type": "main", "index": 0}]]
+    },
+    "Get All Files": {
+      "main": [[{"node": "Check If Needs Processing", "type": "main", "index": 0}]]
+    },
+    "Check If Needs Processing": {
+      "main": [[{"node": "Filter Needs Processing", "type": "main", "index": 0}]]
+    },
+    "Filter Needs Processing": {
+      "main": [[{"node": "Route By MIME Type", "type": "main", "index": 0}], []]
+    },
+    "Route By MIME Type": {
+      "main": [
+        [{"node": "Download PDF", "type": "main", "index": 0}],
+        [{"node": "Download DOCX", "type": "main", "index": 0}],
+        [{"node": "Download Text File", "type": "main", "index": 0}],
+        [{"node": "Download Image", "type": "main", "index": 0}],
+        [{"node": "Download CSV", "type": "main", "index": 0}]
+      ]
+    },
+    "Download PDF": {
+      "main": [[{"node": "Extract PDF Text", "type": "main", "index": 0}]]
+    },
+    "Extract PDF Text": {
+      "main": [[{"node": "Prepare DB Insert", "type": "main", "index": 0}]]
+    },
+    "Download DOCX": {
+      "main": [[{"node": "Extract DOCX Text", "type": "main", "index": 0}]]
+    },
+    "Extract DOCX Text": {
+      "main": [[{"node": "Prepare DB Insert", "type": "main", "index": 0}]]
+    },
+    "Download Text File": {
+      "main": [[{"node": "Extract Text", "type": "main", "index": 0}]]
+    },
+    "Extract Text": {
+      "main": [[{"node": "Prepare DB Insert", "type": "main", "index": 0}]]
+    },
+    "Download Image": {
+      "main": [[{"node": "Analyze Image with AI", "type": "main", "index": 0}]]
+    },
+    "Analyze Image with AI": {
+      "main": [[{"node": "Prepare DB Insert", "type": "main", "index": 0}]]
+    },
+    "Download CSV": {
+      "main": [[{"node": "Extract CSV Content", "type": "main", "index": 0}]]
+    },
+    "Extract CSV Content": {
+      "main": [[{"node": "Prepare DB Insert", "type": "main", "index": 0}]]
+    },
+    "Prepare DB Insert": {
+      "main": [[{"node": "Insert/Update Document", "type": "main", "index": 0}]]
+    },
+    "Insert/Update Document": {
+      "main": [[{"node": "Log Sync Operation", "type": "main", "index": 0}]]
+    },
+    "Log Sync Operation": {
+      "main": [[{"node": "Update Tool Call - Sync", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - Sync": {
+      "main": [[{"node": "Respond Sync", "type": "main", "index": 0}]]
+    },
+    "Get File Content": {
+      "main": [[{"node": "Update Tool Call - Get", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - Get": {
+      "main": [[{"node": "Respond Get", "type": "main", "index": 0}]]
+    },
+    "Get File for Analysis": {
+      "main": [[{"node": "Download for Analysis", "type": "main", "index": 0}]]
+    },
+    "Download for Analysis": {
+      "main": [[{"node": "AI Vision Analysis", "type": "main", "index": 0}]]
+    },
+    "AI Vision Analysis": {
+      "main": [[{"node": "Update AI Analysis", "type": "main", "index": 0}]]
+    },
+    "Update AI Analysis": {
+      "main": [[{"node": "Update Tool Call - Analyze", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - Analyze": {
+      "main": [[{"node": "Respond Analyze", "type": "main", "index": 0}]]
+    },
+    "Error Response": {
+      "main": [[{"node": "Update Tool Call - Error", "type": "main", "index": 0}]]
+    },
+    "Update Tool Call - Error": {
+      "main": [[{"node": "Respond Error", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}
