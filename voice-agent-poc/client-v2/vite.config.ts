@@ -18,5 +18,31 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // OPTIMIZED: Build optimizations for faster loading
+    rollupOptions: {
+      output: {
+        // Manual chunks to optimize loading order
+        manualChunks: {
+          // Separate LiveKit SDK for better caching
+          'livekit': ['livekit-client'],
+          // Separate vendor libs
+          'vendor': ['react', 'react-dom', 'zustand'],
+          // Animation libs loaded separately
+          'animation': ['framer-motion'],
+        },
+      },
+    },
+    // Minify for smaller bundles
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: false,  // Keep console for debugging
+        drop_debugger: true,
+      },
+    },
+  },
+  // OPTIMIZED: Enable dependency pre-bundling
+  optimizeDeps: {
+    include: ['livekit-client', 'react', 'react-dom', 'zustand', 'framer-motion'],
   },
 })
