@@ -19,7 +19,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import silero, deepgram, cartesia, groq, openai
+from livekit.plugins import silero, deepgram, cartesia, openai
 
 # OPTIMIZED: Turn detector loaded lazily to reduce cold start (saves ~300-500ms)
 # Moved from module-level import to on-demand loading in get_turn_detector()
@@ -66,7 +66,7 @@ logger = setup_logging(__name__)
 settings = get_settings()
 
 # System prompt for the voice agent - OPTIMIZED for token efficiency
-# Reduced from ~500 tokens to ~200 tokens to stay under Groq TPM limits
+# Concise prompt reduces latency and token usage
 SYSTEM_PROMPT = """You are a concise voice assistant. Keep responses under 2 sentences.
 
 TOOLS: send_email, query_database, store_knowledge, search_documents, get_document, list_drive_files, query_context, get_session_summary
@@ -135,26 +135,13 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        """Initialize LLM based on configured provider (cerebras or groq)."""
-        provider = settings.llm_provider.lower()
-
-        if provider == "cerebras" and settings.cerebras_api_key:
-            # Cerebras: 1M free tokens/day, ~1000 TPS with GLM-4.7
-            logger.info(f"Using Cerebras with model: {settings.cerebras_model}")
-            return openai.LLM.with_cerebras(
-                model=settings.cerebras_model,
-                api_key=settings.cerebras_api_key,
-                temperature=settings.cerebras_temperature,
-            )
-        else:
-            # Groq fallback: 6000 TPM limit on free tier
-            logger.info(f"Using Groq with model: {settings.groq_model}")
-            return groq.LLM(
-                model=settings.groq_model,
-                api_key=settings.groq_api_key,
-                temperature=settings.groq_temperature,
-                max_tokens=settings.groq_max_tokens,
-            )
+        """Initialize Cerebras LLM with GLM-4.7 (~1000 TPS, 1M tokens/day free)."""
+        logger.info(f"Initializing Cerebras LLM: {settings.cerebras_model}")
+        return openai.LLM.with_cerebras(
+            model=settings.cerebras_model,
+            api_key=settings.cerebras_api_key,
+            temperature=settings.cerebras_temperature,
+        )
 
     def init_tts():
         return cartesia.TTS(

@@ -7,8 +7,8 @@ livekit-plugins-deepgram>=1.0.0,<2.0.0
 livekit-plugins-cartesia>=1.0.0,<2.0.0
 livekit-plugins-turn-detector>=1.0.0,<2.0.0
 
-# LLM
-livekit-plugins-groq>=1.0.0,<2.0.0
+# LLM (Cerebras via OpenAI-compatible API)
+livekit-plugins-openai>=1.0.0,<2.0.0
 
 # HTTP
 aiohttp>=3.9.0

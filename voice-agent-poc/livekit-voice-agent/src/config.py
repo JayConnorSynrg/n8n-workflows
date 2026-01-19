@@ -16,20 +16,11 @@ class Settings(BaseSettings):
     deepgram_api_key: str = Field(..., alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
 
-    # LLM Provider Selection (cerebras or groq)
-    llm_provider: str = Field(default="cerebras", alias="LLM_PROVIDER")
-
-    # Cerebras (PRIMARY - 1M free tokens/day, ~1000 TPS)
-    cerebras_api_key: str = Field(default="", alias="CEREBRAS_API_KEY")
+    # Cerebras LLM (1M free tokens/day, ~1000 TPS with GLM-4.7)
+    cerebras_api_key: str = Field(..., alias="CEREBRAS_API_KEY")
     cerebras_model: str = Field(default="zai-glm-4.7", alias="CEREBRAS_MODEL")
     cerebras_temperature: float = Field(default=0.7, alias="CEREBRAS_TEMPERATURE")
     cerebras_max_tokens: int = Field(default=150, alias="CEREBRAS_MAX_TOKENS")
-
-    # Groq (FALLBACK - 6000 TPM limit on free tier)
-    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
-    groq_model: str = Field(default="llama-3.1-8b-instant", alias="GROQ_MODEL")
-    groq_temperature: float = Field(default=0.7, alias="GROQ_TEMPERATURE")
-    groq_max_tokens: int = Field(default=100, alias="GROQ_MAX_TOKENS")
 
     # Cartesia
     cartesia_api_key: str = Field(..., alias="CARTESIA_API_KEY")
