@@ -1,0 +1,256 @@
+# Weekly Compliance Report Generator
+# Runs: Every Monday at 9 AM UTC
+# Zero human interaction required
+
+name: Weekly Compliance Report
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9 AM UTC
+  workflow_dispatch:  # Manual trigger
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  generate-report:
+    name: Generate Weekly Compliance Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for age calculations
+
+      - name: Calculate Policy Ages
+        id: policy-ages
+        run: |
+          echo "## Policy Age Analysis" > policy-report.md
+          echo "" >> policy-report.md
+          echo "| Policy | Last Modified | Age (Days) | Status |" >> policy-report.md
+          echo "|--------|---------------|------------|--------|" >> policy-report.md
+
+          today=$(date +%s)
+          stale=0
+          review_soon=0
+          current=0
+
+          for policy in security/policies/*.md compliance/gdpr/*.md; do
+            if [ -f "$policy" ]; then
+              last_modified=$(git log -1 --format="%ct" -- "$policy" 2>/dev/null || echo "$today")
+              age_days=$(( (today - last_modified) / 86400 ))
+              last_date=$(date -d @$last_modified +%Y-%m-%d 2>/dev/null || date -r $last_modified +%Y-%m-%d 2>/dev/null || echo "Unknown")
+
+              if [ $age_days -gt 365 ]; then
+                status="STALE"
+                stale=$((stale + 1))
+              elif [ $age_days -gt 180 ]; then
+                status="Review Soon"
+                review_soon=$((review_soon + 1))
+              else
+                status="Current"
+                current=$((current + 1))
+              fi
+
+              echo "| $(basename $policy) | $last_date | $age_days | $status |" >> policy-report.md
+            fi
+          done
+
+          echo "" >> policy-report.md
+          echo "**Summary:** $current current, $review_soon need review soon, $stale stale" >> policy-report.md
+
+          echo "stale=$stale" >> $GITHUB_OUTPUT
+          echo "review_soon=$review_soon" >> $GITHUB_OUTPUT
+          echo "current=$current" >> $GITHUB_OUTPUT
+
+      - name: Calculate Credential Ages
+        id: credential-ages
+        run: |
+          echo "" >> policy-report.md
+          echo "## Credential Rotation Tracking" >> policy-report.md
+          echo "" >> policy-report.md
+
+          # Check for credential rotation checklist
+          if [ -f "compliance/checklists/CREDENTIAL-ROTATION-CHECKLIST.md" ]; then
+            # Count rotated vs pending
+            rotated=$(grep -c "\[x\]" compliance/checklists/CREDENTIAL-ROTATION-CHECKLIST.md 2>/dev/null || echo "0")
+            pending=$(grep -c "\[ \]" compliance/checklists/CREDENTIAL-ROTATION-CHECKLIST.md 2>/dev/null || echo "0")
+
+            echo "- **Rotated:** $rotated credentials" >> policy-report.md
+            echo "- **Pending:** $pending credentials" >> policy-report.md
+
+            if [ "$pending" -gt 0 ]; then
+              echo "" >> policy-report.md
+              echo "**ACTION REQUIRED:** $pending credentials still need rotation!" >> policy-report.md
+            fi
+
+            echo "rotated=$rotated" >> $GITHUB_OUTPUT
+            echo "pending=$pending" >> $GITHUB_OUTPUT
+          else
+            echo "Credential rotation checklist not found." >> policy-report.md
+            echo "rotated=0" >> $GITHUB_OUTPUT
+            echo "pending=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check Compliance Documentation
+        id: compliance-docs
+        run: |
+          echo "" >> policy-report.md
+          echo "## Compliance Documentation Status" >> policy-report.md
+          echo "" >> policy-report.md
+          echo "| Document Category | Files | Status |" >> policy-report.md
+          echo "|-------------------|-------|--------|" >> policy-report.md
+
+          # Count files in each category
+          security_policies=$(find security/policies -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+          security_procedures=$(find security/procedures -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+          compliance_checklists=$(find compliance/checklists -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+          gdpr_docs=$(find compliance/gdpr -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+
+          echo "| Security Policies | $security_policies | $([ $security_policies -ge 5 ] && echo 'Complete' || echo 'Incomplete') |" >> policy-report.md
+          echo "| Security Procedures | $security_procedures | $([ $security_procedures -ge 4 ] && echo 'Complete' || echo 'Incomplete') |" >> policy-report.md
+          echo "| Compliance Checklists | $compliance_checklists | $([ $compliance_checklists -ge 3 ] && echo 'Complete' || echo 'Incomplete') |" >> policy-report.md
+          echo "| GDPR Documentation | $gdpr_docs | $([ $gdpr_docs -ge 4 ] && echo 'Complete' || echo 'Incomplete') |" >> policy-report.md
+
+          total=$((security_policies + security_procedures + compliance_checklists + gdpr_docs))
+          echo "doc_count=$total" >> $GITHUB_OUTPUT
+
+      - name: Check DPA Status
+        id: dpa-status
+        run: |
+          echo "" >> policy-report.md
+          echo "## Vendor DPA Status" >> policy-report.md
+          echo "" >> policy-report.md
+
+          if [ -f "compliance/gdpr/VENDOR-RISK-REGISTER.md" ]; then
+            # Extract DPA status from vendor register
+            executed=$(grep -c "Executed" compliance/gdpr/VENDOR-RISK-REGISTER.md 2>/dev/null || echo "0")
+            pending=$(grep -c "Pending\|UNKNOWN\|Not executed" compliance/gdpr/VENDOR-RISK-REGISTER.md 2>/dev/null || echo "0")
+
+            echo "- **DPAs Executed:** $executed" >> policy-report.md
+            echo "- **DPAs Pending:** $pending" >> policy-report.md
+
+            if [ "$pending" -gt 0 ]; then
+              echo "" >> policy-report.md
+              echo "**ACTION REQUIRED:** $pending vendor DPAs need execution!" >> policy-report.md
+            fi
+
+            echo "dpa_executed=$executed" >> $GITHUB_OUTPUT
+            echo "dpa_pending=$pending" >> $GITHUB_OUTPUT
+          else
+            echo "Vendor risk register not found." >> policy-report.md
+            echo "dpa_executed=0" >> $GITHUB_OUTPUT
+            echo "dpa_pending=8" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Calculate Compliance Score
+        id: score
+        run: |
+          echo "" >> policy-report.md
+          echo "## Weekly Compliance Score" >> policy-report.md
+          echo "" >> policy-report.md
+
+          # Base score calculation (simplified)
+          # Max 100 points:
+          # - Documentation completeness: 30 points
+          # - Policy freshness: 30 points
+          # - Credential rotation: 20 points
+          # - DPA execution: 20 points
+
+          doc_count=${{ steps.compliance-docs.outputs.doc_count }}
+          doc_score=$((doc_count > 20 ? 30 : doc_count * 30 / 20))
+
+          current=${{ steps.policy-ages.outputs.current }}
+          stale=${{ steps.policy-ages.outputs.stale }}
+          total_policies=$((current + stale + ${{ steps.policy-ages.outputs.review_soon }}))
+          freshness_score=$((total_policies > 0 ? current * 30 / total_policies : 0))
+
+          rotated=${{ steps.credential-ages.outputs.rotated }}
+          pending_creds=${{ steps.credential-ages.outputs.pending }}
+          total_creds=$((rotated + pending_creds))
+          cred_score=$((total_creds > 0 ? rotated * 20 / total_creds : 0))
+
+          dpa_executed=${{ steps.dpa-status.outputs.dpa_executed }}
+          dpa_pending=${{ steps.dpa-status.outputs.dpa_pending }}
+          total_dpa=$((dpa_executed + dpa_pending))
+          dpa_score=$((total_dpa > 0 ? dpa_executed * 20 / total_dpa : 0))
+
+          total_score=$((doc_score + freshness_score + cred_score + dpa_score))
+
+          echo "| Component | Score | Max |" >> policy-report.md
+          echo "|-----------|-------|-----|" >> policy-report.md
+          echo "| Documentation | $doc_score | 30 |" >> policy-report.md
+          echo "| Policy Freshness | $freshness_score | 30 |" >> policy-report.md
+          echo "| Credential Rotation | $cred_score | 20 |" >> policy-report.md
+          echo "| DPA Execution | $dpa_score | 20 |" >> policy-report.md
+          echo "| **TOTAL** | **$total_score** | **100** |" >> policy-report.md
+
+          echo "total_score=$total_score" >> $GITHUB_OUTPUT
+
+      - name: Generate Report Summary
+        run: |
+          echo "" >> policy-report.md
+          echo "---" >> policy-report.md
+          echo "" >> policy-report.md
+          echo "*Generated automatically on $(date -u +%Y-%m-%d) at $(date -u +%H:%M) UTC*" >> policy-report.md
+          echo "" >> policy-report.md
+          echo "[View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> policy-report.md
+
+          cat policy-report.md
+
+      - name: Create Weekly Report Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('policy-report.md', 'utf8');
+            const score = ${{ steps.score.outputs.total_score }};
+            const stale = ${{ steps.policy-ages.outputs.stale }};
+            const pendingCreds = ${{ steps.credential-ages.outputs.pending }};
+            const dpaPending = ${{ steps.dpa-status.outputs.dpa_pending }};
+
+            let priority = 'low';
+            let labels = ['compliance', 'automated-report'];
+
+            if (score < 50 || stale > 3 || pendingCreds > 5) {
+              priority = 'high';
+              labels.push('priority-high');
+            } else if (score < 75 || stale > 0 || pendingCreds > 0) {
+              priority = 'medium';
+              labels.push('priority-medium');
+            }
+
+            const weekNumber = Math.ceil((new Date().getDate()) / 7);
+            const month = new Date().toLocaleString('default', { month: 'short' });
+            const year = new Date().getFullYear();
+
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Weekly Compliance Report - W${weekNumber} ${month} ${year} (Score: ${score}/100)`,
+              body: `# Weekly Compliance Report
+
+            **Week:** ${weekNumber} of ${month} ${year}
+            **Score:** ${score}/100
+            **Priority:** ${priority.toUpperCase()}
+
+            ${report}
+
+            ## Action Items
+
+            ${stale > 0 ? `- [ ] Review and update ${stale} stale policies\n` : ''}${pendingCreds > 0 ? `- [ ] Complete rotation of ${pendingCreds} credentials\n` : ''}${dpaPending > 0 ? `- [ ] Execute ${dpaPending} pending DPAs\n` : ''}${score >= 90 ? '- No immediate action required - compliance is healthy!' : ''}
+
+            ---
+            *This report was generated automatically by the compliance automation pipeline.*
+            `,
+              labels: labels
+            });
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-compliance-report-${{ github.run_number }}
+          path: policy-report.md
+          retention-days: 90

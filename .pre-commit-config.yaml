@@ -1,0 +1,79 @@
+# Pre-commit hooks for security and compliance
+# Install: pip install pre-commit && pre-commit install
+# SOC 2 CC8.1: Change management controls
+
+repos:
+  # Secret Detection - Gitleaks
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+        name: Detect hardcoded secrets
+
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: detect-private-key
+        name: Detect private keys
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+        name: Check for large files
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: check-yaml
+        name: Validate YAML files
+      - id: check-json
+        name: Validate JSON files
+      - id: end-of-file-fixer
+        name: Fix end of files
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+      - id: no-commit-to-branch
+        args: ['--branch', 'main', '--branch', 'master']
+        name: Prevent direct commits to main
+
+  # Python security (if applicable)
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.7
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml', '-r', '.']
+        additional_dependencies: ['bandit[toml]']
+        exclude: ^tests/
+
+  # Custom local hooks
+  - repo: local
+    hooks:
+      # Block common secret patterns
+      - id: no-secrets-in-code
+        name: Check for secret patterns
+        entry: bash -c 'if grep -rE "(api_key|apikey|secret|password|token).*=.*[\"'\''](sk-|gsk_|pk_|AIza|ghp_|xox)" --include="*.ts" --include="*.js" --include="*.json" --include="*.py" . 2>/dev/null | grep -v node_modules | grep -v ".example"; then echo "Potential secrets detected!"; exit 1; fi'
+        language: system
+        types: [text]
+
+      # Block .env files
+      - id: no-env-files
+        name: Block .env files
+        entry: bash -c 'for f in "$@"; do if [[ "$f" =~ ^\.env$ ]] || [[ "$f" =~ ^\.env\. ]] && [[ ! "$f" =~ \.example$ ]]; then echo "Blocked: $f - .env files should not be committed"; exit 1; fi; done'
+        language: system
+        types: [file]
+
+      # Block .mcp.json files
+      - id: no-mcp-files
+        name: Block .mcp.json files
+        entry: bash -c 'for f in "$@"; do if [[ "$f" =~ \.mcp\.json$ ]]; then echo "Blocked: $f - .mcp.json files should not be committed"; exit 1; fi; done'
+        language: system
+        types: [file]
+
+      # Require commit message format
+      - id: commit-message-format
+        name: Check commit message format
+        entry: bash -c 'if ! head -1 "$1" | grep -qE "^(feat|fix|docs|style|refactor|test|chore|security|compliance)\(.*\):"; then echo "Commit message must follow format: type(scope): description"; echo "Types: feat, fix, docs, style, refactor, test, chore, security, compliance"; exit 1; fi'
+        language: system
+        stages: [commit-msg]
+
+# Default settings
+default_stages: [commit]
+fail_fast: false
+minimum_pre_commit_version: '3.0.0'
