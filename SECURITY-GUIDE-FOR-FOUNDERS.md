@@ -99,7 +99,7 @@ This document explains **what's protecting your business**, **what runs automati
 | Weekly Compliance Reports | ACTIVE | Every Monday 9 AM UTC | None |
 | Policy Review Reminders | ACTIVE | 1st of each month | None |
 | Pre-commit Hooks | ACTIVE | `.pre-commit-config.yaml` | None (installed Jan 20, 2026) |
-| Database Retention | NEEDS DEPLOY | `scripts/compliance/retention-automation.sql` | Deploy to Supabase (see below) |
+| Database Retention | ACTIVE | Supabase pg_cron | None (deployed Jan 20, 2026) |
 
 ### Latest Audit Results (January 20, 2026)
 
@@ -135,33 +135,35 @@ This document explains **what's protecting your business**, **what runs automati
 |------|--------|-----------|
 | Install Pre-commit Hooks | DONE | January 20, 2026 |
 | Investigate Potential Secrets | DONE | False positives in build artifacts - audit script updated |
+| Deploy Database Retention | DONE | January 20, 2026 - All functions and cron jobs active |
 
-### Remaining Setup (One Item)
+### All Setup Complete
 
-#### Deploy Database Retention Automation
-**Why it matters:** Without this, you're storing voice recordings and personal data indefinitely, which violates GDPR.
+**All security automation is now active.** No remaining setup tasks.
 
-**How to do it (5 minutes):**
-1. Open your Supabase dashboard at [supabase.com](https://supabase.com)
-2. Go to "SQL Editor" in the left sidebar
-3. Copy everything from `scripts/compliance/retention-automation.sql`
-4. Paste it into the SQL Editor
-5. Click "Run"
-6. You're done - it will automatically delete old data on schedule
+#### Database Retention (Now Active)
 
-**What the SQL does:**
-- Creates `cleanup_voice_recordings()` - deletes recordings after 24 hours
-- Creates `cleanup_session_context()` - clears temp data hourly
-- Creates `cleanup_tool_executions()` - purges logs after 90 days
-- Creates `gdpr_export_user_data()` - for GDPR access requests
-- Creates `gdpr_erase_user_data()` - for GDPR deletion requests
-- Schedules automatic cleanup via pg_cron (daily at 3 AM UTC)
-- Creates `retention_audit_log` table for compliance tracking
+The following is now running automatically in your Supabase database:
 
-**After deployment, verify with:**
+| Schedule | What Runs | What It Does |
+|----------|-----------|--------------|
+| Every hour | `cleanup_session_context()` | Clears expired session data |
+| Daily 3 AM UTC | `run_daily_retention_cleanup()` | Deletes old data per retention policy |
+
+**Functions Deployed:**
+- `cleanup_voice_recordings()` - deletes recordings after 24 hours
+- `cleanup_session_context()` - clears temp data hourly
+- `cleanup_tool_executions()` - purges logs after 90 days
+- `cleanup_tool_calls()` - purges call logs after 90 days
+- `cleanup_training_metrics()` - purges after 1 year
+- `cleanup_session_analytics()` - purges after 6 months
+- `gdpr_export_user_data(email)` - for GDPR access requests
+- `gdpr_erase_user_data(email)` - for GDPR deletion requests
+
+**Verify with:**
 ```sql
--- Check scheduled jobs are running
-SELECT * FROM cron.job;
+-- Check scheduled jobs
+SELECT jobname, schedule, command FROM cron.job;
 
 -- View cleanup history
 SELECT * FROM retention_audit_log ORDER BY executed_at DESC LIMIT 10;
@@ -332,6 +334,7 @@ pre-commit run --all-files
 |------|--------|
 | 2026-01-19 | Initial version created |
 | 2026-01-20 | Updated to 100% compliance - pre-commit installed, secrets false positive resolved, audit script improved |
+| 2026-01-20 | Database retention deployed to Supabase - all 11 functions + 2 cron jobs active |
 
 ---
 
