@@ -218,6 +218,9 @@ async def entrypoint(ctx: JobContext):
 
     # Initialize async tool worker for background execution
     tool_worker = AsyncToolWorker(room=ctx.room, max_concurrent=3)
+
+    # Register result callback BEFORE starting (defined later, uses session)
+    # The callback will be set after session is created
     await tool_worker.start()
     set_worker(tool_worker)
     logger.info("AsyncToolWorker started - tools will execute in background")
@@ -366,6 +369,7 @@ async def entrypoint(ctx: JobContext):
     # =========================================================================
     # ASYNC TOOL RESULT HANDLER
     # When background tools complete, announce the result to the user
+    # Uses direct callback from worker (not data channel - avoids self-publish issue)
     # =========================================================================
     async def handle_tool_result(result_data: dict):
         """Handle async tool result and announce to user."""
@@ -404,16 +408,25 @@ async def entrypoint(ctx: JobContext):
             except Exception as e:
                 logger.error(f"Failed to announce error: {e}")
 
+    # Register callback on worker for direct notification
+    tool_worker.on_result = handle_tool_result
+    logger.info("Tool result callback registered on AsyncToolWorker")
+
+    # Also listen for data_received for external tool results (from other participants)
     @ctx.room.on("data_received")
     def on_data_received(data: rtc.DataPacket):
-        """Handle incoming data packets including tool results."""
+        """Handle incoming data packets from OTHER participants."""
         try:
             message = json.loads(data.data.decode("utf-8"))
             msg_type = message.get("type", "")
 
             if msg_type == "tool_result":
-                # Handle async tool completion
-                asyncio.create_task(handle_tool_result(message))
+                # Only handle if from external source (not our own worker)
+                # Our worker notifies directly via callback
+                task_id = message.get("task_id", "")
+                if not task_id.startswith("task_"):
+                    # External task, handle it
+                    asyncio.create_task(handle_tool_result(message))
 
         except json.JSONDecodeError:
             pass  # Ignore non-JSON data

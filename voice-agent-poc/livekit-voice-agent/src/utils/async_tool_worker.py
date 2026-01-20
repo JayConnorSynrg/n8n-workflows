@@ -51,6 +51,7 @@ class AsyncToolWorker:
 
     Usage:
         worker = AsyncToolWorker(room)
+        worker.on_result = my_callback  # Direct callback for results
         await worker.start()
 
         # Dispatch a tool (returns immediately)
@@ -60,7 +61,7 @@ class AsyncToolWorker:
             kwargs={"to": "user@example.com", "subject": "Hello"}
         )
 
-        # Worker executes in background, publishes result to room
+        # Worker executes in background, calls on_result when done
     """
 
     def __init__(
@@ -78,6 +79,9 @@ class AsyncToolWorker:
         self._workers: list[asyncio.Task] = []
         self._running = False
         self._semaphore = asyncio.Semaphore(max_concurrent)
+
+        # Direct callback for results (avoids data channel self-publish issue)
+        self.on_result: Optional[Callable[[dict], Coroutine[Any, Any, None]]] = None
 
     async def start(self) -> None:
         """Start the background worker pool."""
@@ -206,33 +210,36 @@ class AsyncToolWorker:
         await self._publish_result(task)
 
     async def _publish_result(self, task: ToolTask) -> None:
-        """Publish task result via room data channel."""
+        """Notify result via callback and publish to room data channel."""
+        # Build result message
+        message = {
+            "type": "tool_result",
+            "task_id": task.task_id,
+            "tool_name": task.tool_name,
+            "status": task.status.value,
+            "result": task.result,
+            "error": task.error,
+            "duration_ms": int((task.completed_at - task.created_at) * 1000)
+                if task.completed_at else None,
+        }
+
+        # Primary notification: Direct callback (avoids data channel self-publish issue)
+        if self.on_result:
+            try:
+                await self.on_result(message)
+                logger.debug(f"Callback notified for {task.task_id}")
+            except Exception as e:
+                logger.error(f"Callback failed for {task.task_id}: {e}")
+
+        # Secondary: Also publish to room for external listeners (UI, etc.)
         try:
-            if not self.room.local_participant:
-                logger.warning("No local participant, cannot publish result")
-                return
-
-            # Build result message
-            message = {
-                "type": "tool_result",
-                "task_id": task.task_id,
-                "tool_name": task.tool_name,
-                "status": task.status.value,
-                "result": task.result,
-                "error": task.error,
-                "duration_ms": int((task.completed_at - task.created_at) * 1000)
-                    if task.completed_at else None,
-            }
-
-            data = json.dumps(message).encode("utf-8")
-
-            await self.room.local_participant.publish_data(
-                data,
-                topic=self.result_topic,
-            )
-
-            logger.debug(f"Published result for {task.task_id}")
-
+            if self.room.local_participant:
+                data = json.dumps(message).encode("utf-8")
+                await self.room.local_participant.publish_data(
+                    data,
+                    topic=self.result_topic,
+                )
+                logger.debug(f"Published result for {task.task_id}")
         except Exception as e:
             logger.error(f"Failed to publish result: {e}")
 
