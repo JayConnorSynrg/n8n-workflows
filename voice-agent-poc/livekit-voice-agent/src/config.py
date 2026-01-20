@@ -16,9 +16,9 @@ class Settings(BaseSettings):
     deepgram_api_key: str = Field(..., alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
 
-    # Cerebras LLM (1M free tokens/day, ~1000 TPS with GLM-4.7)
+    # Cerebras LLM (1M free tokens/day, ~1000 TPS)
     cerebras_api_key: str = Field(..., alias="CEREBRAS_API_KEY")
-    cerebras_model: str = Field(default="zai-glm-4.7", alias="CEREBRAS_MODEL")
+    cerebras_model: str = Field(default="llama3.1-8b", alias="CEREBRAS_MODEL")
     cerebras_temperature: float = Field(default=0.7, alias="CEREBRAS_TEMPERATURE")
     cerebras_max_tokens: int = Field(default=150, alias="CEREBRAS_MAX_TOKENS")
 

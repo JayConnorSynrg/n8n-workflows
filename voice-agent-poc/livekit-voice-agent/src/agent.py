@@ -57,40 +57,44 @@ from .tools.agent_context_tool import (
     warm_session_cache,
     invalidate_session_cache,
 )
+from .tools.async_wrappers import ASYNC_TOOLS
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
+from .utils.async_tool_worker import AsyncToolWorker, set_worker
 
 # Initialize logging
 logger = setup_logging(__name__)
 settings = get_settings()
 
-# System prompt for the voice agent - OPTIMIZED for token efficiency
-# Concise prompt reduces latency and token usage
-SYSTEM_PROMPT = """You are a concise voice assistant. Keep responses under 2 sentences.
+# System prompt for the voice agent - ASYNC TOOL EXECUTION
+# Tools run in background - agent continues conversation while waiting
+SYSTEM_PROMPT = """You are a concise voice assistant with ASYNC tools. Keep responses under 2 sentences.
 
-TOOLS AVAILABLE:
-- Send email (15 to 30 seconds)
-- Search the knowledge base (5 to 10 seconds)
-- Save information to the knowledge base (10 to 20 seconds)
-- Search documents in Google Drive (5 to 15 seconds)
-- Get a specific document from Drive (5 to 10 seconds)
-- List files in the Drive folder (5 to 10 seconds)
-- Check conversation history (2 to 5 seconds)
+CRITICAL BEHAVIOR:
+- Tools run in BACKGROUND - you get immediate confirmation, results arrive later
+- After calling a tool, KEEP TALKING - ask follow-up questions, chat naturally
+- When you receive a tool_result notification, announce it conversationally
 
-MANDATORY RULES:
-1. ALWAYS announce before using a tool: "I'm going to [action] now, this takes about [time]"
-2. ALWAYS announce when done: "Done. [brief result]"
-3. Never use tools silently
+TOOL CALL PATTERN:
+1. Call tool -> get "ASYNC_TASK:xxx" response immediately
+2. Say "I'm working on that now" and continue conversation
+3. When result arrives, announce: "Got it! [result summary]"
 
-CONTEXT:
-- The knowledge base uses semantic search to find relevant information
-- Documents are stored in a shared Google Drive folder
-- Session history tracks our conversation
+AVAILABLE TOOLS (all async):
+- send_email_async: Send email in background
+- query_database_async: Search knowledge base
+- store_knowledge_async: Save information
+- search_documents_async: Search Google Drive
+- get_document_async: Retrieve document
+- list_drive_files_async: List Drive files
+- query_context_async: Check session history
 
-STYLE:
+CONVERSATION STYLE:
+- Keep chatting after dispatching tools
+- Ask clarifying questions while waiting
 - Speak naturally with contractions
-- If something fails, apologize briefly and explain"""
+- Never go silent waiting for results"""
 
 
 def prewarm(proc: JobProcess):
@@ -212,23 +216,16 @@ async def entrypoint(ctx: JobContext):
             vad_frame_count["last_log_time"] = now
             logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
 
-    # Define agent with tools
+    # Initialize async tool worker for background execution
+    tool_worker = AsyncToolWorker(room=ctx.room, max_concurrent=3)
+    await tool_worker.start()
+    set_worker(tool_worker)
+    logger.info("AsyncToolWorker started - tools will execute in background")
+
+    # Define agent with ASYNC tools (non-blocking)
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=[
-            # Communication
-            send_email_tool,
-            # Knowledge Base
-            query_database_tool,
-            store_knowledge_tool,
-            # Documents
-            search_documents_tool,
-            get_document_tool,
-            list_drive_files_tool,
-            # Context & History
-            query_context_tool,
-            get_session_summary_tool,
-        ],
+        tools=ASYNC_TOOLS,  # Use async wrappers that dispatch to background worker
     )
 
     # Register event handlers BEFORE starting session
@@ -365,6 +362,63 @@ async def entrypoint(ctx: JobContext):
     def on_metrics_collected(ev):
         """Collect and log metrics."""
         logger.debug(f"Metrics: {ev}")
+
+    # =========================================================================
+    # ASYNC TOOL RESULT HANDLER
+    # When background tools complete, announce the result to the user
+    # =========================================================================
+    async def handle_tool_result(result_data: dict):
+        """Handle async tool result and announce to user."""
+        tool_name = result_data.get("tool_name", "unknown")
+        status = result_data.get("status", "unknown")
+        result = result_data.get("result", "")
+        error = result_data.get("error", "")
+        duration = result_data.get("duration_ms", 0)
+
+        logger.info(f"🔧 Tool result received: {tool_name} ({status}) in {duration}ms")
+
+        if status == "completed" and result:
+            # Extract meaningful part of result (skip ASYNC_TASK prefix if present)
+            announcement = result
+            if ":" in result:
+                # Get the human-readable part after task ID
+                parts = result.split(":", 2)
+                if len(parts) > 2:
+                    announcement = parts[2]
+
+            # Announce the result to the user
+            try:
+                await session.say(
+                    f"Got it! {announcement[:200]}",
+                    allow_interruptions=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to announce result: {e}")
+
+        elif status == "failed":
+            try:
+                await session.say(
+                    f"Sorry, the {tool_name.replace('_', ' ')} operation failed. {error[:100]}",
+                    allow_interruptions=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to announce error: {e}")
+
+    @ctx.room.on("data_received")
+    def on_data_received(data: rtc.DataPacket):
+        """Handle incoming data packets including tool results."""
+        try:
+            message = json.loads(data.data.decode("utf-8"))
+            msg_type = message.get("type", "")
+
+            if msg_type == "tool_result":
+                # Handle async tool completion
+                asyncio.create_task(handle_tool_result(message))
+
+        except json.JSONDecodeError:
+            pass  # Ignore non-JSON data
+        except Exception as e:
+            logger.error(f"Error handling data packet: {e}")
 
     # =========================================================================
     # AUDIO INPUT DEBUGGING - Track subscription events
