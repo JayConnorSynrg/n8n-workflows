@@ -23,9 +23,11 @@ settings = get_settings()
 
 @llm.function_tool(
     name="query_database",
-    description="""Search the knowledge base for information.
+    description="""Search the Pinecone vector database for information (READ-ONLY).
     Use this to look up data, find documents, or answer questions about stored content.
-    Summarize the results conversationally for the user.""",
+    Performs semantic search - results ranked by relevance to query.
+    Database: Pinecone (vector embeddings), NOT Supabase.
+    Estimated execution time: 5-10 seconds.""",
 )
 async def query_database_tool(
     query: str,
