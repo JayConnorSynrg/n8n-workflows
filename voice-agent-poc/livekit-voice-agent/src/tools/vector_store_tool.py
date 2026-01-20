@@ -19,13 +19,11 @@ settings = get_settings()
 
 @llm.function_tool(
     name="store_knowledge",
-    description="""Store information in the Pinecone vector database for future retrieval.
-    Use this to save important facts, meeting notes, or reference data.
-    The content will be chunked and embedded for semantic search.
-    Database: Pinecone (vector embeddings), NOT Supabase.
-    Schema: {content, metadata: {source, category, added_by}}
-    Categories: "meeting_notes", "reference", "general"
-    Estimated execution time: 10-20 seconds.""",
+    description="""Save information to the knowledge base for future retrieval.
+    Use this to store important facts, meeting notes, or reference data.
+    The content will be indexed for semantic search.
+    Categories available: meeting notes, reference, or general.
+    Takes about 10 to 20 seconds.""",
 )
 async def store_knowledge_tool(
     content: str,

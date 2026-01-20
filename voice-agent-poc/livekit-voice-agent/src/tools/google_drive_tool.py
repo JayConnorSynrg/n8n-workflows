@@ -20,10 +20,10 @@ settings = get_settings()
 
 @llm.function_tool(
     name="search_documents",
-    description="""Search for documents in Google Drive folder 11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF.
+    description="""Search for documents in the shared Google Drive folder.
     Use this to find files, meeting notes, or reference documents.
     Returns matching documents with titles and snippets.
-    Estimated execution time: 5-15 seconds.""",
+    Takes about 5 to 15 seconds.""",
 )
 async def search_documents_tool(
     query: str,
@@ -84,10 +84,10 @@ async def search_documents_tool(
 
 @llm.function_tool(
     name="get_document",
-    description="""Retrieve the full content of a specific document from Google Drive folder 11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF.
-    Use this after searching to get complete document text.
-    Requires the file_id from a previous search.
-    Estimated execution time: 5-10 seconds.""",
+    description="""Retrieve the full content of a specific document from Google Drive.
+    Use this after searching to get the complete document text.
+    Requires the file ID from a previous search.
+    Takes about 5 to 10 seconds.""",
 )
 async def get_document_tool(
     file_id: str,
@@ -144,10 +144,10 @@ async def get_document_tool(
 
 @llm.function_tool(
     name="list_drive_files",
-    description="""List files in Google Drive folder 11KcezPe3NqgcC3TNvHxAAZS4nPYrMXRF.
+    description="""List files in the shared Google Drive folder.
     Use this to see what documents are available.
-    Returns file names and basic metadata.
-    Estimated execution time: 5-10 seconds.""",
+    Returns file names and types.
+    Takes about 5 to 10 seconds.""",
 )
 async def list_drive_files_tool(
     max_results: int = 10,
