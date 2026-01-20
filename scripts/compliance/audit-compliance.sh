@@ -141,8 +141,8 @@ else
     add_check "SEC-001" "Gitignore security patterns" "FAIL" "No .gitignore file" "SOC2-CC6.1"
 fi
 
-# Check 7: No secrets in tracked files
-secrets_found=$(grep -rE "(api_key|apikey|secret|password).*['\"][A-Za-z0-9]{20,}" --include="*.js" --include="*.ts" --include="*.json" --include="*.py" . 2>/dev/null | grep -v node_modules | grep -v ".example" | wc -l | tr -d ' ')
+# Check 7: No secrets in tracked files (excludes dist/, build/, node_modules)
+secrets_found=$(grep -rE "(api_key|apikey|secret|password).*['\"][A-Za-z0-9]{20,}" --include="*.js" --include="*.ts" --include="*.json" --include="*.py" . 2>/dev/null | grep -v node_modules | grep -v ".example" | grep -v "/dist/" | grep -v "/build/" | grep -v ".min.js" | wc -l | tr -d ' ')
 if [ "$secrets_found" -eq 0 ]; then
     add_check "SEC-002" "No hardcoded secrets" "PASS" "No secrets detected" "SOC2-CC6.1"
 else

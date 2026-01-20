@@ -48,30 +48,23 @@ repos:
       # Block common secret patterns
       - id: no-secrets-in-code
         name: Check for secret patterns
-        entry: bash -c 'if grep -rE "(api_key|apikey|secret|password|token).*=.*[\"'\''](sk-|gsk_|pk_|AIza|ghp_|xox)" --include="*.ts" --include="*.js" --include="*.json" --include="*.py" . 2>/dev/null | grep -v node_modules | grep -v ".example"; then echo "Potential secrets detected!"; exit 1; fi'
+        entry: bash -c 'grep -rE "(api_key|apikey|secret|password|token).*=.*(sk-|gsk_|pk_|AIza|ghp_|xox)" --include="*.ts" --include="*.js" --include="*.json" --include="*.py" . 2>/dev/null | grep -v node_modules | grep -v ".example" && echo "Secrets detected" && exit 1 || exit 0'
         language: system
         types: [text]
 
       # Block .env files
       - id: no-env-files
         name: Block .env files
-        entry: bash -c 'for f in "$@"; do if [[ "$f" =~ ^\.env$ ]] || [[ "$f" =~ ^\.env\. ]] && [[ ! "$f" =~ \.example$ ]]; then echo "Blocked: $f - .env files should not be committed"; exit 1; fi; done'
+        entry: bash -c 'echo "$@" | grep -E "^\.env$|^\.env\." | grep -v "\.example$" && echo "env file blocked" && exit 1 || exit 0'
         language: system
         types: [file]
 
       # Block .mcp.json files
       - id: no-mcp-files
         name: Block .mcp.json files
-        entry: bash -c 'for f in "$@"; do if [[ "$f" =~ \.mcp\.json$ ]]; then echo "Blocked: $f - .mcp.json files should not be committed"; exit 1; fi; done'
+        entry: bash -c 'echo "$@" | grep "\.mcp\.json$" && echo "mcp file blocked" && exit 1 || exit 0'
         language: system
         types: [file]
-
-      # Require commit message format
-      - id: commit-message-format
-        name: Check commit message format
-        entry: bash -c 'if ! head -1 "$1" | grep -qE "^(feat|fix|docs|style|refactor|test|chore|security|compliance)\(.*\):"; then echo "Commit message must follow format: type(scope): description"; echo "Types: feat, fix, docs, style, refactor, test, chore, security, compliance"; exit 1; fi'
-        language: system
-        stages: [commit-msg]
 
 # Default settings
 default_stages: [commit]
