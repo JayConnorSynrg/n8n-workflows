@@ -68,61 +68,84 @@ logger = setup_logging(__name__)
 settings = get_settings()
 
 # =============================================================================
-# AIO VOICE ECOSYSTEM - ENTERPRISE SYSTEM PROMPT
+# AIO VOICE ECOSYSTEM - ENTERPRISE SYSTEM PROMPT v2
 # =============================================================================
-# Design: Conversational, task-oriented, subtly witty, never robotic
-# Tools are invisible - the agent "does things", never explains mechanics
+# Key Requirements:
+# 1. User-gated tool flow - ALWAYS confirm before executing tools
+# 2. NEVER speak punctuation marks aloud
+# 3. Enterprise tool explanations when relevant
+# 4. Programmatic wit (20% of responses, contextually relevant)
 
-SYSTEM_PROMPT = """You are AIO - an intelligent voice assistant at the heart of a productivity ecosystem.
+SYSTEM_PROMPT = """You are AIO, an intelligent voice assistant at the center of a productivity ecosystem.
 
-IDENTITY:
-- Name: AIO (All-In-One)
-- Personality: Capable, warm, subtly witty. Think helpful colleague who occasionally drops a clever reference.
-- Speech style: Natural, concise, uses contractions. Never robotic or scripted.
+IDENTITY
+Name: AIO which stands for All In One
+Voice: Warm, capable, efficient. A trusted colleague who gets things done.
+Style: Natural speech with contractions. Task-focused. Occasionally witty.
 
-OPENING (say this ONLY on very first interaction):
-"Hi, I'm AIO, welcome to your ecosystem. Infinite possibilities at our fingertips - where should we start?"
+OPENING LINE (first interaction only):
+Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start
 
-CONVERSATION PRINCIPLES:
-1. TASK FIRST - Understand intent, execute swiftly, confirm briefly
-2. NEVER ENUMERATE - Don't list your capabilities or tool names; just do them
-3. KEEP FLOWING - After any action, the ball is back to the user
-4. BREVITY IS RESPECT - 1-2 sentences max. Voice time is precious.
-5. GRACEFUL FAILURES - "Hit a snag" not "Error executing tool"
+CRITICAL SPEECH RULE - NEVER SPEAK PUNCTUATION
+You are a VOICE assistant. Never say punctuation marks out loud.
+WRONG: "Hi, I'm AIO!" or "What should I do?"
+RIGHT: "Hi I am AIO" or "What should I do"
+Write all responses as continuous speech without punctuation symbols.
 
-WHEN YOU USE A TOOL:
-- Say something brief like "On it!" or "Working on that now"
-- DON'T explain async mechanics or tool names to users
-- DO continue conversing naturally while work happens
-- When results arrive, announce conversationally
+AVAILABLE TOOLS (Enterprise Descriptions)
 
-RESPONSE PATTERNS:
+Email Communication Tool: For sending emails to contacts and team members
+Google Drive Tool: For searching the Google Drive document repository
+Vector Database Tool: For storing and retrieving semantic data
+Centralized Database Query Tool: For adding and retrieving data from the centralized database via SQL
+Session History Tool: For checking conversation context and previous interactions
 
-Acknowledged task:
-- "On it!"
-- "Consider it done."
-- "Working on that now. Anything else?"
+USER-GATED TOOL FLOW (MANDATORY)
+You must ALWAYS confirm with the user before executing any tool.
 
-Clarification needed:
-- "Quick question - [specific ask]?"
-- "Just to make sure I nail this - [confirmation]?"
+Pattern:
+1. User requests an action
+2. You clarify any missing details
+3. You summarize what you will do and ASK for confirmation
+4. User confirms with yes go ahead sure etc
+5. ONLY THEN do you execute the tool
+6. Report the result
 
-Small talk (brief, then redirect):
-- "Ha! Good one. Now, what can I actually help you build today?"
+Example Flow:
+User: Send an email to John about the meeting
+AIO: I can help with that what should the email say
+User: Tell him we moved it to 3pm
+AIO: Got it I will email John to let him know the meeting moved to 3pm should I send it
+User: Yes
+AIO: Sending now [executes tool] Done email sent to John
 
-WIT GUIDELINES (use sparingly - 1 per 3-4 exchanges max):
-- "Eureka!" for discoveries
-- "Mission accomplished" for completions
-- "Error 404 on that one" for graceful failures
-- Problem-solving metaphors welcome when natural
+NEVER execute a tool without user confirmation. This is mandatory.
 
-THINGS TO NEVER DO:
-- Never say tool names like "send_email" or "search_knowledge"
-- Never list parameters or technical details
-- Never give time estimates
-- Never explain your async architecture
-- Never start two responses in a row with "I"
-- Never repeat the same phrase pattern consecutively"""
+RESPONSE STYLE
+Keep responses to one or two sentences maximum
+Be direct and task focused
+Ask clarifying questions when details are missing
+Always end confirmations with a question like should I proceed or ready to send
+
+WITTY RESPONSES (Use approximately 20% of the time)
+Add contextual wit that relates to the specific topic being discussed.
+
+For document searches: Found your needle in the digital haystack
+For email completions: Message delivered faster than a carrier pigeon
+For database saves: Locked and loaded in the vault
+For discoveries: Eureka that is exactly what you were looking for
+For errors: Hit a snag on that one let me try a different approach
+For completions: Mission accomplished what is next on the agenda
+
+Only use wit when it naturally fits the context. Do not force it.
+
+THINGS TO NEVER DO
+Never speak punctuation marks like comma period exclamation question mark
+Never execute tools without user confirmation
+Never give technical details about tool mechanics
+Never list all your capabilities unprompted
+Never use the same response pattern twice in a row
+Never start consecutive responses with the word I"""
 
 
 def prewarm(proc: JobProcess):
@@ -395,99 +418,127 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"Metrics: {ev}")
 
     # =========================================================================
-    # ASYNC TOOL RESULT HANDLER - AIO ECOSYSTEM
-    # Announcements are conversational, never technical
+    # ASYNC TOOL RESULT HANDLER - AIO ECOSYSTEM v2
+    # - No punctuation in voice output
+    # - 20% programmatic wit (contextually relevant)
+    # - Clean conversational announcements
     # =========================================================================
 
-    # Result announcement templates (AIO personality)
-    SUCCESS_PHRASES = [
-        "Done!",
-        "All set!",
-        "Got it!",
-        "Mission accomplished!",
-    ]
-    DISCOVERY_PHRASES = [
-        "Eureka!",
-        "Found it!",
-        "Here's what I found -",
-    ]
-    FAILURE_PHRASES = [
-        "Hit a snag -",
-        "Hmm, that didn't work -",
-        "Error 404 on that one -",
-    ]
-
     import random
-    phrase_index = {"success": 0, "discovery": 0, "failure": 0}
 
-    def get_announcement_phrase(category: str) -> str:
-        """Get varied announcement phrase without consecutive repeats."""
-        phrases = {
-            "success": SUCCESS_PHRASES,
-            "discovery": DISCOVERY_PHRASES,
-            "failure": FAILURE_PHRASES,
-        }.get(category, SUCCESS_PHRASES)
+    # Standard announcements (no punctuation for voice)
+    STANDARD_SUCCESS = [
+        "Done",
+        "All set",
+        "Completed",
+        "Finished",
+    ]
 
-        # Rotate through phrases to avoid repetition
-        idx = phrase_index.get(category, 0)
-        phrase = phrases[idx % len(phrases)]
-        phrase_index[category] = idx + 1
-        return phrase
+    # Witty announcements (20% chance, contextually matched)
+    WITTY_RESPONSES = {
+        "email": [
+            "Message delivered faster than a carrier pigeon",
+            "Email sent and on its way",
+            "Done that message is flying through the internet",
+        ],
+        "search": [
+            "Found your needle in the digital haystack",
+            "Eureka that is exactly what you were looking for",
+            "Got some results for you",
+        ],
+        "save": [
+            "Locked and loaded in the vault",
+            "Saved and secure in the knowledge base",
+            "Information stored successfully",
+        ],
+        "document": [
+            "Found the document you needed",
+            "Got that file pulled up",
+            "Retrieved the document",
+        ],
+        "error": [
+            "Hit a snag on that one let me try a different approach",
+            "That did not work as expected want to try again",
+            "Ran into an issue there",
+        ],
+    }
 
-    def format_tool_result(tool_name: str, result: str) -> str:
-        """Format tool result into human-speakable announcement."""
-        # Map tool names to conversational summaries
+    def strip_punctuation(text: str) -> str:
+        """Remove all punctuation from text for voice output."""
+        import re
+        # Remove common punctuation but keep apostrophes in contractions
+        text = re.sub(r'[.,!?;:\-"\(\)\[\]{}]', '', text)
+        # Clean up extra spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    def get_witty_response(tool_type: str) -> str:
+        """Get a contextually relevant witty response."""
+        responses = WITTY_RESPONSES.get(tool_type, WITTY_RESPONSES.get("save", []))
+        return random.choice(responses) if responses else "Done"
+
+    def format_tool_result_v2(tool_name: str, result: str, status: str) -> str:
+        """Format tool result with 20% wit probability, no punctuation."""
+
+        # Determine tool type for contextual responses
+        tool_type = "save"  # default
         if "email" in tool_name:
-            # Extract recipient if present
-            if "to " in result.lower() or "@" in result:
-                return f"Email's on its way."
-            return "Email sent."
+            tool_type = "email"
+        elif "search" in tool_name or "query" in tool_name:
+            tool_type = "search"
+        elif "document" in tool_name or "file" in tool_name:
+            tool_type = "document"
+        elif "store" in tool_name or "save" in tool_name:
+            tool_type = "save"
 
-        if "search" in tool_name or "query" in tool_name:
-            # For searches, summarize findings
-            if "found" in result.lower():
-                return result[:150]
-            if "no " in result.lower() or "nothing" in result.lower():
-                return "No luck finding that one. Want to try different terms?"
-            return f"Here's what I found: {result[:120]}"
+        if status == "failed":
+            tool_type = "error"
 
-        if "save" in tool_name or "store" in tool_name:
-            return "Saved to your knowledge base."
+        # 20% chance for witty response
+        use_wit = random.random() < 0.20
 
-        if "document" in tool_name or "file" in tool_name:
-            return result[:150] if result else "Got the document."
+        if use_wit:
+            announcement = get_witty_response(tool_type)
+        else:
+            # Standard announcement based on tool type
+            if status == "failed":
+                announcement = "That did not work want to try again"
+            elif tool_type == "email":
+                announcement = "Email sent"
+            elif tool_type == "search":
+                # Include summary of what was found
+                if result and len(result) > 10:
+                    clean_result = strip_punctuation(result[:100])
+                    announcement = f"Here is what I found {clean_result}"
+                else:
+                    announcement = "Search complete"
+            elif tool_type == "document":
+                announcement = "Got the document"
+            else:
+                announcement = random.choice(STANDARD_SUCCESS)
 
-        # Default: use result directly but trim
-        return result[:150] if result else "Done."
+        # Ensure no punctuation in final output
+        return strip_punctuation(announcement)
 
     async def handle_tool_result(result_data: dict):
-        """Handle async tool result with AIO-style conversational announcement."""
+        """Handle async tool result with AIO v2 conversational announcement."""
         tool_name = result_data.get("tool_name", "unknown")
         status = result_data.get("status", "unknown")
         result = result_data.get("result", "")
         error = result_data.get("error", "")
         duration = result_data.get("duration_ms", 0)
 
-        logger.info(f"🔧 Tool result: {tool_name} ({status}) in {duration}ms")
+        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms")
 
-        if status == "completed" and result:
-            # Determine if this is a discovery (search) or completion (action)
-            is_discovery = any(x in tool_name for x in ["search", "query", "list", "get"])
-            phrase = get_announcement_phrase("discovery" if is_discovery else "success")
-            summary = format_tool_result(tool_name, result)
-
-            announcement = f"{phrase} {summary}"
-
+        if status == "completed":
+            announcement = format_tool_result_v2(tool_name, result, status)
             try:
                 await session.say(announcement, allow_interruptions=True)
             except Exception as e:
                 logger.error(f"Failed to announce result: {e}")
 
         elif status == "failed":
-            phrase = get_announcement_phrase("failure")
-            # Make error message conversational
-            friendly_error = error[:80] if error else "something went sideways"
-            announcement = f"{phrase} {friendly_error}. Want to try again?"
+            announcement = format_tool_result_v2(tool_name, error, status)
 
             try:
                 await session.say(announcement, allow_interruptions=True)
@@ -800,11 +851,11 @@ async def entrypoint(ctx: JobContext):
         logger.error(f"CRITICAL: session.start() failed: {e}")
         raise
 
-    # Generate AIO opening greeting
+    # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
     try:
         await session.say(
-            "Hi, I'm AIO, welcome to your ecosystem. Infinite possibilities at our fingertips - where should we start?",
+            "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
             allow_interruptions=False
         )
         logger.info("AIO greeting sent successfully")
