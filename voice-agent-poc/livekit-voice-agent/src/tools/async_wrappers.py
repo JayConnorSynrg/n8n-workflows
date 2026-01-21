@@ -29,7 +29,14 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
     name="email_tool",
     description="""Email Communication Tool: For sending emails to contacts and team members.
     Use this when the user wants to send a message to someone via email.
-    Always confirm the recipient, subject, and message content with the user before sending.
+
+    GATING REQUIRED - This is a WRITE operation that sends real emails.
+    You MUST confirm with the user before executing:
+    1. Confirm the recipient email address
+    2. Confirm the subject line
+    3. Confirm the message content
+    4. Ask "should I send this email" and wait for yes/confirmation
+
     Required: to (email address), subject, body. Optional: cc.""",
 )
 async def send_email_async(
@@ -63,18 +70,19 @@ async def send_email_async(
     description="""Google Drive Tool: For searching the Google Drive document repository.
     Use this when the user wants to find documents, files, or stored information in Drive.
     Can search by keywords, file names, or content.
-    Required: query (what to search for).""",
+    This is a read-only search operation that does not require user confirmation.
+    Required: query (what to search for). Optional: max_results (default 5).""",
 )
-async def search_documents_async(query: str) -> str:
-    """Execute Drive search after user confirmation."""
+async def search_documents_async(query: str, max_results: int = 5) -> str:
+    """Execute Drive search - read-only, no confirmation needed."""
     worker = get_worker()
     if not worker:
-        return await google_drive_tool.search_documents_tool(query)
+        return await google_drive_tool.search_documents_tool(query, max_results)
 
     await worker.dispatch(
         tool_name="search_documents",
         tool_func=google_drive_tool.search_documents_tool,
-        kwargs={"query": query},
+        kwargs={"query": query, "max_results": max_results},
     )
 
     return f"Searching Drive for {query}"
@@ -84,10 +92,11 @@ async def search_documents_async(query: str) -> str:
     name="drive_file_retrieval",
     description="""Drive File Retrieval: For getting a specific document from Google Drive.
     Use when the user wants to open or read a particular file.
-    Required: file_id (the document identifier).""",
+    This is a read-only operation that does not require user confirmation.
+    Required: file_id (the document identifier from a previous search).""",
 )
 async def get_document_async(file_id: str) -> str:
-    """Execute document retrieval."""
+    """Execute document retrieval - read-only, no confirmation needed."""
     worker = get_worker()
     if not worker:
         return await google_drive_tool.get_document_tool(file_id)
@@ -103,24 +112,24 @@ async def get_document_async(file_id: str) -> str:
 
 @llm.function_tool(
     name="drive_file_listing",
-    description="""Drive File Listing: For listing files in Google Drive folders.
-    Use when the user wants to see what files are available.
-    Optional: folder_name to filter by specific folder.""",
+    description="""Drive File Listing: For listing files in Google Drive.
+    Use when the user wants to see what files are available in Drive.
+    This is a read-only operation that does not require user confirmation.
+    Optional: max_results (default 10).""",
 )
-async def list_drive_files_async(folder_name: Optional[str] = None) -> str:
-    """Execute file listing."""
+async def list_drive_files_async(max_results: int = 10) -> str:
+    """Execute file listing - read-only, no confirmation needed."""
     worker = get_worker()
     if not worker:
-        return await google_drive_tool.list_drive_files_tool(folder_name)
+        return await google_drive_tool.list_drive_files_tool(max_results)
 
     await worker.dispatch(
         tool_name="list_drive_files",
         tool_func=google_drive_tool.list_drive_files_tool,
-        kwargs={"folder_name": folder_name},
+        kwargs={"max_results": max_results},
     )
 
-    location = f"in {folder_name}" if folder_name else "in Drive"
-    return f"Listing files {location}"
+    return "Listing files in Drive"
 
 
 # =============================================================================
@@ -132,17 +141,27 @@ async def list_drive_files_async(folder_name: Optional[str] = None) -> str:
     description="""Vector Database Tool: For storing and retrieving semantic data.
     Use this for saving important information that needs to be recalled later,
     or for searching through stored knowledge using natural language queries.
-    For search: provide query. For storage: provide content to save.""",
+
+    For SEARCH operations (action=search/find/query/retrieve):
+    - This is read-only and does NOT require user confirmation
+    - Required: action, content (the search query)
+
+    For STORE operations (action=store/save/add):
+    - This WRITES data and REQUIRES user confirmation before executing
+    - Confirm what content will be stored and ask "should I save this"
+    - Required: action, content (what to save)
+    - Optional: category (meeting_notes, reference, or general)""",
 )
 async def vector_store_async(
     action: str,
     content: str,
-    metadata_type: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> str:
-    """Execute vector database operation."""
+    """Execute vector database operation with proper gating."""
     worker = get_worker()
 
     if action.lower() in ["search", "find", "query", "retrieve"]:
+        # READ operation - no confirmation needed
         if not worker:
             return await database_tool.query_database_tool(content)
 
@@ -153,14 +172,14 @@ async def vector_store_async(
         )
         return f"Searching knowledge base for {content[:50]}"
 
-    else:  # store/save
+    else:  # store/save - WRITE operation, should have been confirmed by user
         if not worker:
-            return await vector_store_tool.store_knowledge_tool(content, metadata_type, None)
+            return await vector_store_tool.store_knowledge_tool(content, category or "general", None)
 
         await worker.dispatch(
             tool_name="store_knowledge",
             tool_func=vector_store_tool.store_knowledge_tool,
-            kwargs={"content": content, "metadata_type": metadata_type, "metadata_source": None},
+            kwargs={"content": content, "category": category or "general", "source": None},
         )
         return "Saving to knowledge base"
 
@@ -171,13 +190,17 @@ async def vector_store_async(
 
 @llm.function_tool(
     name="database_query_tool",
-    description="""Centralized Database Query Tool: For adding and retrieving data from the centralized database via SQL.
-    Use this for structured data operations, records lookup, or data entry.
+    description="""Centralized Database Query Tool: For retrieving data from the centralized database.
+    Use this for structured data operations and records lookup.
     Supports natural language queries that get translated to database operations.
-    Required: query (what to find or store).""",
+
+    This is a READ-ONLY search operation that does NOT require user confirmation.
+    Simply execute the query when the user asks for information.
+
+    Required: query (what to find).""",
 )
 async def database_query_async(query: str) -> str:
-    """Execute database query."""
+    """Execute database query - read-only, no confirmation needed."""
     worker = get_worker()
     if not worker:
         return await database_tool.query_database_tool(query)
@@ -199,13 +222,18 @@ async def database_query_async(query: str) -> str:
     name="session_history_tool",
     description="""Session History Tool: For checking conversation context and previous interactions.
     Use this to recall what was discussed earlier in the session or to maintain continuity.
-    Required: context_type (what aspect to check). Optional: query.""",
+
+    This is a READ-ONLY operation that does NOT require user confirmation.
+    Use it to check context before responding to user questions.
+
+    Required: context_type (session_context, tool_history, global_context, search_history, custom_query).
+    Optional: query (for search_history or custom_query types).""",
 )
 async def query_context_async(
     context_type: str,
     query: Optional[str] = None,
 ) -> str:
-    """Execute context query."""
+    """Execute context query - read-only, no confirmation needed."""
     worker = get_worker()
     if not worker:
         return await agent_context_tool.query_context_tool(context_type, query)
