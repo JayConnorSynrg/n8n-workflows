@@ -67,34 +67,62 @@ from .utils.async_tool_worker import AsyncToolWorker, set_worker
 logger = setup_logging(__name__)
 settings = get_settings()
 
-# System prompt for the voice agent - ASYNC TOOL EXECUTION
-# Tools run in background - agent continues conversation while waiting
-SYSTEM_PROMPT = """You are a concise voice assistant with ASYNC tools. Keep responses under 2 sentences.
+# =============================================================================
+# AIO VOICE ECOSYSTEM - ENTERPRISE SYSTEM PROMPT
+# =============================================================================
+# Design: Conversational, task-oriented, subtly witty, never robotic
+# Tools are invisible - the agent "does things", never explains mechanics
 
-CRITICAL BEHAVIOR:
-- Tools run in BACKGROUND - you get immediate confirmation, results arrive later
-- After calling a tool, KEEP TALKING - ask follow-up questions, chat naturally
-- When you receive a tool_result notification, announce it conversationally
+SYSTEM_PROMPT = """You are AIO - an intelligent voice assistant at the heart of a productivity ecosystem.
 
-TOOL CALL PATTERN:
-1. Call tool -> get "ASYNC_TASK:xxx" response immediately
-2. Say "I'm working on that now" and continue conversation
-3. When result arrives, announce: "Got it! [result summary]"
+IDENTITY:
+- Name: AIO (All-In-One)
+- Personality: Capable, warm, subtly witty. Think helpful colleague who occasionally drops a clever reference.
+- Speech style: Natural, concise, uses contractions. Never robotic or scripted.
 
-AVAILABLE TOOLS (all async):
-- send_email_async: Send email in background
-- query_database_async: Search knowledge base
-- store_knowledge_async: Save information
-- search_documents_async: Search Google Drive
-- get_document_async: Retrieve document
-- list_drive_files_async: List Drive files
-- query_context_async: Check session history
+OPENING (say this ONLY on very first interaction):
+"Hi, I'm AIO, welcome to your ecosystem. Infinite possibilities at our fingertips - where should we start?"
 
-CONVERSATION STYLE:
-- Keep chatting after dispatching tools
-- Ask clarifying questions while waiting
-- Speak naturally with contractions
-- Never go silent waiting for results"""
+CONVERSATION PRINCIPLES:
+1. TASK FIRST - Understand intent, execute swiftly, confirm briefly
+2. NEVER ENUMERATE - Don't list your capabilities or tool names; just do them
+3. KEEP FLOWING - After any action, the ball is back to the user
+4. BREVITY IS RESPECT - 1-2 sentences max. Voice time is precious.
+5. GRACEFUL FAILURES - "Hit a snag" not "Error executing tool"
+
+WHEN YOU USE A TOOL:
+- Say something brief like "On it!" or "Working on that now"
+- DON'T explain async mechanics or tool names to users
+- DO continue conversing naturally while work happens
+- When results arrive, announce conversationally
+
+RESPONSE PATTERNS:
+
+Acknowledged task:
+- "On it!"
+- "Consider it done."
+- "Working on that now. Anything else?"
+
+Clarification needed:
+- "Quick question - [specific ask]?"
+- "Just to make sure I nail this - [confirmation]?"
+
+Small talk (brief, then redirect):
+- "Ha! Good one. Now, what can I actually help you build today?"
+
+WIT GUIDELINES (use sparingly - 1 per 3-4 exchanges max):
+- "Eureka!" for discoveries
+- "Mission accomplished" for completions
+- "Error 404 on that one" for graceful failures
+- Problem-solving metaphors welcome when natural
+
+THINGS TO NEVER DO:
+- Never say tool names like "send_email" or "search_knowledge"
+- Never list parameters or technical details
+- Never give time estimates
+- Never explain your async architecture
+- Never start two responses in a row with "I"
+- Never repeat the same phrase pattern consecutively"""
 
 
 def prewarm(proc: JobProcess):
@@ -367,44 +395,102 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"Metrics: {ev}")
 
     # =========================================================================
-    # ASYNC TOOL RESULT HANDLER
-    # When background tools complete, announce the result to the user
-    # Uses direct callback from worker (not data channel - avoids self-publish issue)
+    # ASYNC TOOL RESULT HANDLER - AIO ECOSYSTEM
+    # Announcements are conversational, never technical
     # =========================================================================
+
+    # Result announcement templates (AIO personality)
+    SUCCESS_PHRASES = [
+        "Done!",
+        "All set!",
+        "Got it!",
+        "Mission accomplished!",
+    ]
+    DISCOVERY_PHRASES = [
+        "Eureka!",
+        "Found it!",
+        "Here's what I found -",
+    ]
+    FAILURE_PHRASES = [
+        "Hit a snag -",
+        "Hmm, that didn't work -",
+        "Error 404 on that one -",
+    ]
+
+    import random
+    phrase_index = {"success": 0, "discovery": 0, "failure": 0}
+
+    def get_announcement_phrase(category: str) -> str:
+        """Get varied announcement phrase without consecutive repeats."""
+        phrases = {
+            "success": SUCCESS_PHRASES,
+            "discovery": DISCOVERY_PHRASES,
+            "failure": FAILURE_PHRASES,
+        }.get(category, SUCCESS_PHRASES)
+
+        # Rotate through phrases to avoid repetition
+        idx = phrase_index.get(category, 0)
+        phrase = phrases[idx % len(phrases)]
+        phrase_index[category] = idx + 1
+        return phrase
+
+    def format_tool_result(tool_name: str, result: str) -> str:
+        """Format tool result into human-speakable announcement."""
+        # Map tool names to conversational summaries
+        if "email" in tool_name:
+            # Extract recipient if present
+            if "to " in result.lower() or "@" in result:
+                return f"Email's on its way."
+            return "Email sent."
+
+        if "search" in tool_name or "query" in tool_name:
+            # For searches, summarize findings
+            if "found" in result.lower():
+                return result[:150]
+            if "no " in result.lower() or "nothing" in result.lower():
+                return "No luck finding that one. Want to try different terms?"
+            return f"Here's what I found: {result[:120]}"
+
+        if "save" in tool_name or "store" in tool_name:
+            return "Saved to your knowledge base."
+
+        if "document" in tool_name or "file" in tool_name:
+            return result[:150] if result else "Got the document."
+
+        # Default: use result directly but trim
+        return result[:150] if result else "Done."
+
     async def handle_tool_result(result_data: dict):
-        """Handle async tool result and announce to user."""
+        """Handle async tool result with AIO-style conversational announcement."""
         tool_name = result_data.get("tool_name", "unknown")
         status = result_data.get("status", "unknown")
         result = result_data.get("result", "")
         error = result_data.get("error", "")
         duration = result_data.get("duration_ms", 0)
 
-        logger.info(f"🔧 Tool result received: {tool_name} ({status}) in {duration}ms")
+        logger.info(f"🔧 Tool result: {tool_name} ({status}) in {duration}ms")
 
         if status == "completed" and result:
-            # Extract meaningful part of result (skip ASYNC_TASK prefix if present)
-            announcement = result
-            if ":" in result:
-                # Get the human-readable part after task ID
-                parts = result.split(":", 2)
-                if len(parts) > 2:
-                    announcement = parts[2]
+            # Determine if this is a discovery (search) or completion (action)
+            is_discovery = any(x in tool_name for x in ["search", "query", "list", "get"])
+            phrase = get_announcement_phrase("discovery" if is_discovery else "success")
+            summary = format_tool_result(tool_name, result)
 
-            # Announce the result to the user
+            announcement = f"{phrase} {summary}"
+
             try:
-                await session.say(
-                    f"Got it! {announcement[:200]}",
-                    allow_interruptions=True
-                )
+                await session.say(announcement, allow_interruptions=True)
             except Exception as e:
                 logger.error(f"Failed to announce result: {e}")
 
         elif status == "failed":
+            phrase = get_announcement_phrase("failure")
+            # Make error message conversational
+            friendly_error = error[:80] if error else "something went sideways"
+            announcement = f"{phrase} {friendly_error}. Want to try again?"
+
             try:
-                await session.say(
-                    f"Sorry, the {tool_name.replace('_', ' ')} operation failed. {error[:100]}",
-                    allow_interruptions=True
-                )
+                await session.say(announcement, allow_interruptions=True)
             except Exception as e:
                 logger.error(f"Failed to announce error: {e}")
 
@@ -714,14 +800,14 @@ async def entrypoint(ctx: JobContext):
         logger.error(f"CRITICAL: session.start() failed: {e}")
         raise
 
-    # Generate initial greeting with interruptions disabled
-    # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
+    # Generate AIO opening greeting
+    # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
     try:
         await session.say(
-            "Hello! I'm your voice assistant. How can I help you today?",
-            allow_interruptions=False  # Don't interrupt greeting
+            "Hi, I'm AIO, welcome to your ecosystem. Infinite possibilities at our fingertips - where should we start?",
+            allow_interruptions=False
         )
-        logger.info("Greeting sent successfully")
+        logger.info("AIO greeting sent successfully")
     except Exception as e:
         logger.error(f"CRITICAL: session.say() failed: {e}")
 

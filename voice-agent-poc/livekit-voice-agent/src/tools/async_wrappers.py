@@ -1,13 +1,8 @@
-"""Async tool wrappers that dispatch to background worker.
+"""Async tool wrappers for AIO ecosystem.
 
-These tools return immediately with an acknowledgment,
-while the actual work happens in the background.
-
-Pattern:
-1. User: "Send an email to John"
-2. Agent: "I'm sending the email now. I'll let you know when it's done."
-3. (Background: email is sent)
-4. Agent: "Done! The email was sent successfully."
+Tools execute in background, returning instant acknowledgment.
+The main agent handles all conversational aspects via system prompt.
+Tool descriptions are minimal - conversation style lives in the agent prompt.
 """
 from typing import Optional
 
@@ -18,15 +13,12 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
 
 
 # =============================================================================
-# EMAIL TOOL (Async)
+# EMAIL
 # =============================================================================
 
 @llm.function_tool(
-    name="send_email_async",
-    description="""Send an email in the background. Returns immediately - you'll be notified when complete.
-    ALWAYS confirm recipient and subject with user before calling.
-    After calling, say "I'm sending that email now, I'll let you know when it's done."
-    DO NOT wait silently - keep the conversation going.""",
+    name="send_email",
+    description="Send an email. Requires: to (email address), subject, body. Optional: cc.",
 )
 async def send_email_async(
     to: str,
@@ -37,28 +29,26 @@ async def send_email_async(
     """Dispatch email to background worker."""
     worker = get_worker()
     if not worker:
-        # Fallback to sync if worker not available
         return await email_tool.send_email_tool(to, subject, body, cc)
 
-    # Dispatch to background
     task_id = await worker.dispatch(
         tool_name="send_email",
         tool_func=email_tool.send_email_tool,
         kwargs={"to": to, "subject": subject, "body": body, "cc": cc},
     )
 
-    return f"ASYNC_TASK:{task_id}:Email to {to} is being sent. I'll notify you when complete."
+    # Return human-speakable status for the agent
+    recipient_name = to.split("@")[0].title()
+    return f"Sending email to {recipient_name}..."
 
 
 # =============================================================================
-# DATABASE TOOL (Async)
+# KNOWLEDGE BASE SEARCH
 # =============================================================================
 
 @llm.function_tool(
-    name="query_database_async",
-    description="""Search the knowledge base in the background.
-    After calling, say "I'm searching for that now."
-    Continue the conversation - results will arrive shortly.""",
+    name="search_knowledge",
+    description="Search the knowledge base. Requires: query (what to search for).",
 )
 async def query_database_async(query: str) -> str:
     """Dispatch database query to background worker."""
@@ -72,18 +62,16 @@ async def query_database_async(query: str) -> str:
         kwargs={"query": query},
     )
 
-    return f"ASYNC_TASK:{task_id}:Searching the knowledge base. Results coming shortly."
+    return "Searching the knowledge base..."
 
 
 # =============================================================================
-# VECTOR STORE TOOL (Async)
+# KNOWLEDGE BASE STORE
 # =============================================================================
 
 @llm.function_tool(
-    name="store_knowledge_async",
-    description="""Save information to the knowledge base in the background.
-    After calling, say "I'm saving that information now."
-    Continue the conversation.""",
+    name="save_knowledge",
+    description="Save information to knowledge base. Requires: content. Optional: type, source.",
 )
 async def store_knowledge_async(
     content: str,
@@ -107,18 +95,16 @@ async def store_knowledge_async(
         },
     )
 
-    return f"ASYNC_TASK:{task_id}:Saving that information. I'll confirm when done."
+    return "Saving to knowledge base..."
 
 
 # =============================================================================
-# GOOGLE DRIVE TOOLS (Async)
+# GOOGLE DRIVE - SEARCH
 # =============================================================================
 
 @llm.function_tool(
-    name="search_documents_async",
-    description="""Search Google Drive documents in the background.
-    After calling, say "I'm searching your documents now."
-    Continue the conversation - results will arrive shortly.""",
+    name="search_documents",
+    description="Search Google Drive for documents. Requires: query.",
 )
 async def search_documents_async(query: str) -> str:
     """Dispatch document search to background worker."""
@@ -132,14 +118,16 @@ async def search_documents_async(query: str) -> str:
         kwargs={"query": query},
     )
 
-    return f"ASYNC_TASK:{task_id}:Searching your Google Drive. Results coming shortly."
+    return "Searching your documents..."
 
+
+# =============================================================================
+# GOOGLE DRIVE - GET DOCUMENT
+# =============================================================================
 
 @llm.function_tool(
-    name="get_document_async",
-    description="""Retrieve a document from Google Drive in the background.
-    After calling, say "I'm retrieving that document now."
-    Continue the conversation.""",
+    name="get_document",
+    description="Retrieve a specific document. Requires: file_id.",
 )
 async def get_document_async(file_id: str) -> str:
     """Dispatch document retrieval to background worker."""
@@ -153,14 +141,16 @@ async def get_document_async(file_id: str) -> str:
         kwargs={"file_id": file_id},
     )
 
-    return f"ASYNC_TASK:{task_id}:Retrieving the document. One moment."
+    return "Retrieving document..."
 
+
+# =============================================================================
+# GOOGLE DRIVE - LIST FILES
+# =============================================================================
 
 @llm.function_tool(
-    name="list_drive_files_async",
-    description="""List files in Google Drive in the background.
-    After calling, say "I'm checking your Drive files now."
-    Continue the conversation.""",
+    name="list_files",
+    description="List files in Google Drive. Optional: folder_name to filter.",
 )
 async def list_drive_files_async(folder_name: Optional[str] = None) -> str:
     """Dispatch file listing to background worker."""
@@ -174,18 +164,16 @@ async def list_drive_files_async(folder_name: Optional[str] = None) -> str:
         kwargs={"folder_name": folder_name},
     )
 
-    return f"ASYNC_TASK:{task_id}:Checking your Drive files. One moment."
+    return "Checking your files..."
 
 
 # =============================================================================
-# CONTEXT TOOLS (Async)
+# SESSION CONTEXT
 # =============================================================================
 
 @llm.function_tool(
-    name="query_context_async",
-    description="""Query session context in the background.
-    This is usually fast, but runs async for consistency.
-    After calling, continue the conversation naturally.""",
+    name="check_history",
+    description="Check conversation history or session context. Requires: context_type. Optional: query.",
 )
 async def query_context_async(
     context_type: str,
@@ -202,11 +190,11 @@ async def query_context_async(
         kwargs={"context_type": context_type, "query": query},
     )
 
-    return f"ASYNC_TASK:{task_id}:Checking the context. One moment."
+    return "Checking conversation history..."
 
 
 # =============================================================================
-# EXPORT ALL ASYNC TOOLS
+# TOOL REGISTRY
 # =============================================================================
 
 ASYNC_TOOLS = [
