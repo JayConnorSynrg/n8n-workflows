@@ -1,8 +1,17 @@
-"""Async tool wrappers for AIO ecosystem.
+"""AIO Ecosystem Tool Wrappers - Enterprise Edition
 
-Tools execute in background, returning instant acknowledgment.
-The main agent handles all conversational aspects via system prompt.
-Tool descriptions are minimal - conversation style lives in the agent prompt.
+Tool Architecture:
+1. Enterprise descriptions explain PURPOSE (not mechanics)
+2. User-gated flow - always confirm before executing
+3. Background execution with conversational results
+
+Flow Pattern:
+  User: "Send an email to John"
+  AIO: "I can send that email for you. Who should I address it to and what should it say?"
+  User: "Tell him the meeting is moved to 3pm"
+  AIO: "Got it. Send an email to John about the meeting moving to 3pm. Should I send it?"
+  User: "Yes"
+  AIO: "Sending now" [tool executes] "Done, email sent to John"
 """
 from typing import Optional
 
@@ -13,12 +22,15 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
 
 
 # =============================================================================
-# EMAIL
+# EMAIL COMMUNICATION TOOL
 # =============================================================================
 
 @llm.function_tool(
-    name="send_email",
-    description="Send an email. Requires: to (email address), subject, body. Optional: cc.",
+    name="email_tool",
+    description="""Email Communication Tool: For sending emails to contacts and team members.
+    Use this when the user wants to send a message to someone via email.
+    Always confirm the recipient, subject, and message content with the user before sending.
+    Required: to (email address), subject, body. Optional: cc.""",
 )
 async def send_email_async(
     to: str,
@@ -26,171 +38,185 @@ async def send_email_async(
     body: str,
     cc: Optional[str] = None,
 ) -> str:
-    """Dispatch email to background worker."""
+    """Execute email send after user confirmation."""
     worker = get_worker()
     if not worker:
-        return await email_tool.send_email_tool(to, subject, body, cc)
+        result = await email_tool.send_email_tool(to, subject, body, cc)
+        return f"Email sent to {to.split('@')[0].title()}"
 
-    task_id = await worker.dispatch(
+    await worker.dispatch(
         tool_name="send_email",
         tool_func=email_tool.send_email_tool,
         kwargs={"to": to, "subject": subject, "body": body, "cc": cc},
     )
 
-    # Return human-speakable status for the agent
-    recipient_name = to.split("@")[0].title()
-    return f"Sending email to {recipient_name}..."
+    recipient_name = to.split("@")[0].replace(".", " ").title()
+    return f"Email is being sent to {recipient_name}"
 
 
 # =============================================================================
-# KNOWLEDGE BASE SEARCH
-# =============================================================================
-
-@llm.function_tool(
-    name="search_knowledge",
-    description="Search the knowledge base. Requires: query (what to search for).",
-)
-async def query_database_async(query: str) -> str:
-    """Dispatch database query to background worker."""
-    worker = get_worker()
-    if not worker:
-        return await database_tool.query_database_tool(query)
-
-    task_id = await worker.dispatch(
-        tool_name="query_database",
-        tool_func=database_tool.query_database_tool,
-        kwargs={"query": query},
-    )
-
-    return "Searching the knowledge base..."
-
-
-# =============================================================================
-# KNOWLEDGE BASE STORE
+# GOOGLE DRIVE TOOL
 # =============================================================================
 
 @llm.function_tool(
-    name="save_knowledge",
-    description="Save information to knowledge base. Requires: content. Optional: type, source.",
-)
-async def store_knowledge_async(
-    content: str,
-    metadata_type: Optional[str] = None,
-    metadata_source: Optional[str] = None,
-) -> str:
-    """Dispatch knowledge storage to background worker."""
-    worker = get_worker()
-    if not worker:
-        return await vector_store_tool.store_knowledge_tool(
-            content, metadata_type, metadata_source
-        )
-
-    task_id = await worker.dispatch(
-        tool_name="store_knowledge",
-        tool_func=vector_store_tool.store_knowledge_tool,
-        kwargs={
-            "content": content,
-            "metadata_type": metadata_type,
-            "metadata_source": metadata_source,
-        },
-    )
-
-    return "Saving to knowledge base..."
-
-
-# =============================================================================
-# GOOGLE DRIVE - SEARCH
-# =============================================================================
-
-@llm.function_tool(
-    name="search_documents",
-    description="Search Google Drive for documents. Requires: query.",
+    name="google_drive_tool",
+    description="""Google Drive Tool: For searching the Google Drive document repository.
+    Use this when the user wants to find documents, files, or stored information in Drive.
+    Can search by keywords, file names, or content.
+    Required: query (what to search for).""",
 )
 async def search_documents_async(query: str) -> str:
-    """Dispatch document search to background worker."""
+    """Execute Drive search after user confirmation."""
     worker = get_worker()
     if not worker:
         return await google_drive_tool.search_documents_tool(query)
 
-    task_id = await worker.dispatch(
+    await worker.dispatch(
         tool_name="search_documents",
         tool_func=google_drive_tool.search_documents_tool,
         kwargs={"query": query},
     )
 
-    return "Searching your documents..."
+    return f"Searching Drive for {query}"
 
-
-# =============================================================================
-# GOOGLE DRIVE - GET DOCUMENT
-# =============================================================================
 
 @llm.function_tool(
-    name="get_document",
-    description="Retrieve a specific document. Requires: file_id.",
+    name="drive_file_retrieval",
+    description="""Drive File Retrieval: For getting a specific document from Google Drive.
+    Use when the user wants to open or read a particular file.
+    Required: file_id (the document identifier).""",
 )
 async def get_document_async(file_id: str) -> str:
-    """Dispatch document retrieval to background worker."""
+    """Execute document retrieval."""
     worker = get_worker()
     if not worker:
         return await google_drive_tool.get_document_tool(file_id)
 
-    task_id = await worker.dispatch(
+    await worker.dispatch(
         tool_name="get_document",
         tool_func=google_drive_tool.get_document_tool,
         kwargs={"file_id": file_id},
     )
 
-    return "Retrieving document..."
+    return "Retrieving the document"
 
-
-# =============================================================================
-# GOOGLE DRIVE - LIST FILES
-# =============================================================================
 
 @llm.function_tool(
-    name="list_files",
-    description="List files in Google Drive. Optional: folder_name to filter.",
+    name="drive_file_listing",
+    description="""Drive File Listing: For listing files in Google Drive folders.
+    Use when the user wants to see what files are available.
+    Optional: folder_name to filter by specific folder.""",
 )
 async def list_drive_files_async(folder_name: Optional[str] = None) -> str:
-    """Dispatch file listing to background worker."""
+    """Execute file listing."""
     worker = get_worker()
     if not worker:
         return await google_drive_tool.list_drive_files_tool(folder_name)
 
-    task_id = await worker.dispatch(
+    await worker.dispatch(
         tool_name="list_drive_files",
         tool_func=google_drive_tool.list_drive_files_tool,
         kwargs={"folder_name": folder_name},
     )
 
-    return "Checking your files..."
+    location = f"in {folder_name}" if folder_name else "in Drive"
+    return f"Listing files {location}"
 
 
 # =============================================================================
-# SESSION CONTEXT
+# VECTOR DATABASE TOOL
 # =============================================================================
 
 @llm.function_tool(
-    name="check_history",
-    description="Check conversation history or session context. Requires: context_type. Optional: query.",
+    name="vector_database_tool",
+    description="""Vector Database Tool: For storing and retrieving semantic data.
+    Use this for saving important information that needs to be recalled later,
+    or for searching through stored knowledge using natural language queries.
+    For search: provide query. For storage: provide content to save.""",
+)
+async def vector_store_async(
+    action: str,
+    content: str,
+    metadata_type: Optional[str] = None,
+) -> str:
+    """Execute vector database operation."""
+    worker = get_worker()
+
+    if action.lower() in ["search", "find", "query", "retrieve"]:
+        if not worker:
+            return await database_tool.query_database_tool(content)
+
+        await worker.dispatch(
+            tool_name="query_database",
+            tool_func=database_tool.query_database_tool,
+            kwargs={"query": content},
+        )
+        return f"Searching knowledge base for {content[:50]}"
+
+    else:  # store/save
+        if not worker:
+            return await vector_store_tool.store_knowledge_tool(content, metadata_type, None)
+
+        await worker.dispatch(
+            tool_name="store_knowledge",
+            tool_func=vector_store_tool.store_knowledge_tool,
+            kwargs={"content": content, "metadata_type": metadata_type, "metadata_source": None},
+        )
+        return "Saving to knowledge base"
+
+
+# =============================================================================
+# CENTRALIZED DATABASE TOOL
+# =============================================================================
+
+@llm.function_tool(
+    name="database_query_tool",
+    description="""Centralized Database Query Tool: For adding and retrieving data from the centralized database via SQL.
+    Use this for structured data operations, records lookup, or data entry.
+    Supports natural language queries that get translated to database operations.
+    Required: query (what to find or store).""",
+)
+async def database_query_async(query: str) -> str:
+    """Execute database query."""
+    worker = get_worker()
+    if not worker:
+        return await database_tool.query_database_tool(query)
+
+    await worker.dispatch(
+        tool_name="query_database",
+        tool_func=database_tool.query_database_tool,
+        kwargs={"query": query},
+    )
+
+    return f"Querying database for {query[:50]}"
+
+
+# =============================================================================
+# SESSION CONTEXT TOOL
+# =============================================================================
+
+@llm.function_tool(
+    name="session_history_tool",
+    description="""Session History Tool: For checking conversation context and previous interactions.
+    Use this to recall what was discussed earlier in the session or to maintain continuity.
+    Required: context_type (what aspect to check). Optional: query.""",
 )
 async def query_context_async(
     context_type: str,
     query: Optional[str] = None,
 ) -> str:
-    """Dispatch context query to background worker."""
+    """Execute context query."""
     worker = get_worker()
     if not worker:
         return await agent_context_tool.query_context_tool(context_type, query)
 
-    task_id = await worker.dispatch(
+    await worker.dispatch(
         tool_name="query_context",
         tool_func=agent_context_tool.query_context_tool,
         kwargs={"context_type": context_type, "query": query},
     )
 
-    return "Checking conversation history..."
+    return "Checking session history"
 
 
 # =============================================================================
@@ -199,10 +225,10 @@ async def query_context_async(
 
 ASYNC_TOOLS = [
     send_email_async,
-    query_database_async,
-    store_knowledge_async,
     search_documents_async,
     get_document_async,
     list_drive_files_async,
+    vector_store_async,
+    database_query_async,
     query_context_async,
 ]
