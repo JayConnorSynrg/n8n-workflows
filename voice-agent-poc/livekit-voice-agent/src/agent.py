@@ -50,7 +50,7 @@ from .config import get_settings
 from .tools.email_tool import send_email_tool
 from .tools.database_tool import query_database_tool
 from .tools.vector_store_tool import store_knowledge_tool
-from .tools.google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool
+from .tools.google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool, recall_drive_data_tool
 from .tools.agent_context_tool import (
     query_context_tool,
     get_session_summary_tool,
@@ -113,6 +113,30 @@ Drive File Retrieval: For getting a specific document from Drive
 Drive File Listing: For listing available files in Drive
 Database Query: For retrieving data from the database
 Session History: For checking conversation context
+
+MEMORY TOOLS - ACCESS STORED DATA
+Recall Data: Universal tool to access ANY previously retrieved data from short-term memory
+Memory Summary: Quick overview of all data currently in memory
+Recall Drive Data: Legacy tool for Drive-specific recalls
+
+UNIVERSAL SHORT-TERM MEMORY
+ALL tool results are automatically saved to short-term memory for 5 minutes. This enables powerful cross-tool workflows:
+
+1. Data from ANY source (Drive, database, vector store) can be recalled without re-querying
+2. Retrieved data can be repurposed for other tools (email summaries, vector storage, analysis)
+3. The agent should proactively offer to use stored data for follow-up actions
+
+Memory categories: drive, database, vector, email, context
+
+Example cross-tool flow:
+User: Search my drive for the quarterly report
+AIO: Found 3 documents matching quarterly report saved to memory would you like me to email a summary or save to your knowledge base
+User: Query the database for sales figures too
+AIO: Found 5 sales records saved to memory I now have both the report and sales data ready
+User: Send an email to the team with a summary of both
+AIO: Got it I will email the team a summary combining the quarterly report and sales figures should I send it
+User: Yes
+AIO: Sending now Done email sent with the combined summary
 
 GATING LOGIC
 
