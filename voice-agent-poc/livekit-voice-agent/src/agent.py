@@ -62,6 +62,7 @@ from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
 from .utils.async_tool_worker import AsyncToolWorker, set_worker
+from .utils.short_term_memory import clear_session as clear_session_memory
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -119,8 +120,8 @@ Recall Data: Universal tool to access ANY previously retrieved data from short-t
 Memory Summary: Quick overview of all data currently in memory
 Recall Drive Data: Legacy tool for Drive-specific recalls
 
-UNIVERSAL SHORT-TERM MEMORY
-ALL tool results are automatically saved to short-term memory for 5 minutes. This enables powerful cross-tool workflows:
+UNIVERSAL SESSION MEMORY
+ALL tool results are automatically saved to session memory for the entire conversation. This enables powerful cross-tool workflows:
 
 1. Data from ANY source (Drive, database, vector store) can be recalled without re-querying
 2. Retrieved data can be repurposed for other tools (email summaries, vector storage, analysis)
@@ -950,6 +951,11 @@ async def entrypoint(ctx: JobContext):
     # The room closes when all participants leave or it times out
     while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1.0)
+
+    # Clean up session memory when session ends
+    session_id = ctx.room.name or "livekit-agent"
+    cleared_count = clear_session_memory(session_id)
+    logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
 
     logger.info("Agent session ended")
 

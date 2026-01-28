@@ -1,30 +1,24 @@
-"""Universal Short-Term Memory for Voice Agent Tool Results.
+"""Session-Based Short-Term Memory for Voice Agent Tool Results.
 
-This module provides a centralized short-term memory system that:
-1. Stores results from ALL tool calls (not just Drive)
+This module provides a centralized memory system that:
+1. Stores results from ALL tool calls for the duration of the session
 2. Enables cross-tool context (use email search results for vector store, etc.)
 3. Allows the agent to recall and repurpose data without re-querying
-4. Provides summaries for voice-friendly responses
+4. Automatically clears when the session ends
 
-Memory Structure:
-- Tool results stored by category (drive, email, database, vector)
-- Automatic TTL management (default 5 minutes)
-- Most recent result per category readily accessible
-- Search across all memory for relevant context
+Memory is SESSION-SCOPED, not time-based:
+- Data persists for the entire conversation
+- Cleared only when clear_session() is called (on disconnect)
+- No arbitrary TTL expiration
 """
-import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TypeVar, Union
+from typing import Any, Dict, List, Optional, Union
 from enum import Enum
-
-from .context_cache import get_cache_manager
+from threading import Lock
 
 logger = logging.getLogger(__name__)
-
-# Short-term memory TTL (5 minutes for conversation reuse)
-DEFAULT_STM_TTL = 300.0
 
 
 class ToolCategory(str, Enum):
@@ -74,6 +68,9 @@ TOOL_CATEGORIES = {
     "list_drive_files": ToolCategory.DRIVE,
     "recall_drive_data": ToolCategory.DRIVE,
     "google_drive_tool": ToolCategory.DRIVE,
+    "google_drive_search": ToolCategory.DRIVE,
+    "google_drive_get": ToolCategory.DRIVE,
+    "google_drive_list": ToolCategory.DRIVE,
     "drive_file_retrieval": ToolCategory.DRIVE,
     "drive_file_listing": ToolCategory.DRIVE,
 
@@ -97,21 +94,119 @@ TOOL_CATEGORIES = {
 }
 
 
+class SessionMemory:
+    """Thread-safe session-scoped memory storage.
+
+    Memory persists for the entire session and is only cleared
+    when clear() is explicitly called (typically on session end).
+    """
+
+    def __init__(self):
+        self._lock = Lock()
+        # session_id -> category -> MemoryEntry
+        self._sessions: Dict[str, Dict[ToolCategory, MemoryEntry]] = {}
+        # session_id -> list of all entries (chronological)
+        self._history: Dict[str, List[MemoryEntry]] = {}
+
+    def store(
+        self,
+        session_id: str,
+        entry: MemoryEntry,
+    ) -> None:
+        """Store an entry in session memory."""
+        with self._lock:
+            if session_id not in self._sessions:
+                self._sessions[session_id] = {}
+                self._history[session_id] = []
+
+            # Store by category (most recent wins per category)
+            self._sessions[session_id][entry.category] = entry
+
+            # Also keep chronological history
+            self._history[session_id].append(entry)
+
+            logger.debug(f"Stored {entry.tool_name}.{entry.operation} to session {session_id}")
+
+    def get_by_category(
+        self,
+        session_id: str,
+        category: ToolCategory,
+    ) -> Optional[MemoryEntry]:
+        """Get the most recent entry for a category."""
+        with self._lock:
+            session_data = self._sessions.get(session_id, {})
+            return session_data.get(category)
+
+    def get_all_categories(
+        self,
+        session_id: str,
+    ) -> Dict[ToolCategory, MemoryEntry]:
+        """Get all category entries for a session."""
+        with self._lock:
+            return dict(self._sessions.get(session_id, {}))
+
+    def get_history(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+    ) -> List[MemoryEntry]:
+        """Get chronological history for a session."""
+        with self._lock:
+            history = self._history.get(session_id, [])
+            if limit:
+                return history[-limit:]
+            return list(history)
+
+    def get_most_recent(
+        self,
+        session_id: str,
+    ) -> Optional[MemoryEntry]:
+        """Get the single most recent entry."""
+        with self._lock:
+            history = self._history.get(session_id, [])
+            return history[-1] if history else None
+
+    def clear(self, session_id: str) -> int:
+        """Clear all memory for a session. Returns count of entries cleared."""
+        with self._lock:
+            count = 0
+            if session_id in self._sessions:
+                count = len(self._history.get(session_id, []))
+                del self._sessions[session_id]
+            if session_id in self._history:
+                del self._history[session_id]
+            logger.info(f"Cleared {count} memory entries for session {session_id}")
+            return count
+
+    def get_stats(self, session_id: str) -> Dict[str, Any]:
+        """Get memory statistics for a session."""
+        with self._lock:
+            history = self._history.get(session_id, [])
+            categories = self._sessions.get(session_id, {})
+            return {
+                "total_entries": len(history),
+                "categories_active": len(categories),
+                "categories": list(categories.keys()),
+            }
+
+
+# Global session memory instance
+_session_memory = SessionMemory()
+
+
 def _get_category(tool_name: str) -> ToolCategory:
     """Get the category for a tool by name."""
-    return TOOL_CATEGORIES.get(tool_name.lower(), ToolCategory.GENERAL)
+    # Check exact match first
+    if tool_name.lower() in TOOL_CATEGORIES:
+        return TOOL_CATEGORIES[tool_name.lower()]
 
+    # Check partial matches
+    tool_lower = tool_name.lower()
+    for key, category in TOOL_CATEGORIES.items():
+        if key in tool_lower or tool_lower in key:
+            return category
 
-def _make_memory_key(
-    session_id: str,
-    category: ToolCategory,
-    operation: Optional[str] = None
-) -> str:
-    """Generate a cache key for short-term memory."""
-    parts = ["stm", session_id, category.value]
-    if operation:
-        parts.append(operation)
-    return ":".join(parts)
+    return ToolCategory.GENERAL
 
 
 def store_tool_result(
@@ -122,9 +217,8 @@ def store_tool_result(
     session_id: str = "livekit-agent",
     suggested_uses: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    ttl: float = DEFAULT_STM_TTL,
 ) -> None:
-    """Store a tool result in short-term memory.
+    """Store a tool result in session memory.
 
     Args:
         tool_name: Name of the tool that produced the result
@@ -132,11 +226,9 @@ def store_tool_result(
         data: The actual result data to store
         summary: Human-readable summary for voice output
         session_id: Session identifier
-        suggested_uses: List of suggested follow-up uses (e.g., ["email", "vector_store"])
+        suggested_uses: List of suggested follow-up uses
         metadata: Additional metadata about the result
-        ttl: Time-to-live in seconds (default 5 minutes)
     """
-    cache_manager = get_cache_manager()
     category = _get_category(tool_name)
 
     entry = MemoryEntry(
@@ -149,15 +241,8 @@ def store_tool_result(
         metadata=metadata or {},
     )
 
-    # Store by category (most recent wins)
-    category_key = _make_memory_key(session_id, category)
-    cache_manager.query_cache.set(category_key, entry.to_dict(), ttl)
-
-    # Also store by specific operation for targeted recall
-    operation_key = _make_memory_key(session_id, category, operation)
-    cache_manager.query_cache.set(operation_key, entry.to_dict(), ttl)
-
-    logger.info(f"Stored {tool_name}.{operation} to STM: {summary[:50]}...")
+    _session_memory.store(session_id, entry)
+    logger.info(f"Stored {tool_name}.{operation} to session memory: {summary[:50]}...")
 
 
 def recall_by_category(
@@ -171,18 +256,16 @@ def recall_by_category(
         session_id: Session identifier
 
     Returns:
-        Most recent memory entry for category, or None
+        Most recent memory entry for category as dict, or None
     """
-    cache_manager = get_cache_manager()
-
     if isinstance(category, str):
         try:
             category = ToolCategory(category.lower())
         except ValueError:
             category = ToolCategory.GENERAL
 
-    key = _make_memory_key(session_id, category)
-    return cache_manager.query_cache.get(key)
+    entry = _session_memory.get_by_category(session_id, category)
+    return entry.to_dict() if entry else None
 
 
 def recall_by_tool(
@@ -194,24 +277,26 @@ def recall_by_tool(
 
     Args:
         tool_name: Name of the tool
-        operation: Specific operation (optional)
+        operation: Specific operation (optional, for filtering)
         session_id: Session identifier
 
     Returns:
-        Memory entry or None
+        Memory entry as dict or None
     """
-    cache_manager = get_cache_manager()
     category = _get_category(tool_name)
+    entry = _session_memory.get_by_category(session_id, category)
 
-    if operation:
-        key = _make_memory_key(session_id, category, operation)
-        result = cache_manager.query_cache.get(key)
-        if result:
-            return result
+    if entry and operation:
+        # Check if operation matches
+        if entry.operation != operation:
+            # Search history for matching operation
+            history = _session_memory.get_history(session_id)
+            for e in reversed(history):
+                if e.category == category and e.operation == operation:
+                    return e.to_dict()
+            return None
 
-    # Fall back to category-level recall
-    key = _make_memory_key(session_id, category)
-    return cache_manager.query_cache.get(key)
+    return entry.to_dict() if entry else None
 
 
 def recall_all(
@@ -225,12 +310,8 @@ def recall_all(
     Returns:
         Dict mapping category names to their most recent entries
     """
-    results = {}
-    for category in ToolCategory:
-        entry = recall_by_category(category, session_id)
-        if entry:
-            results[category.value] = entry
-    return results
+    all_entries = _session_memory.get_all_categories(session_id)
+    return {cat.value: entry.to_dict() for cat, entry in all_entries.items()}
 
 
 def recall_most_recent(
@@ -242,29 +323,33 @@ def recall_most_recent(
         session_id: Session identifier
 
     Returns:
-        Most recent entry across all categories, or None
+        Most recent entry as dict, or None
     """
-    all_entries = recall_all(session_id)
-    if not all_entries:
-        return None
+    entry = _session_memory.get_most_recent(session_id)
+    return entry.to_dict() if entry else None
 
-    # Find the most recent by timestamp
-    most_recent = None
-    most_recent_time = 0
 
-    for entry in all_entries.values():
-        entry_time = entry.get("timestamp", 0)
-        if entry_time > most_recent_time:
-            most_recent_time = entry_time
-            most_recent = entry
+def recall_history(
+    session_id: str = "livekit-agent",
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Recall chronological history of all tool results.
 
-    return most_recent
+    Args:
+        session_id: Session identifier
+        limit: Optional limit on number of entries
+
+    Returns:
+        List of entries in chronological order
+    """
+    entries = _session_memory.get_history(session_id, limit)
+    return [e.to_dict() for e in entries]
 
 
 def get_memory_summary(
     session_id: str = "livekit-agent",
 ) -> str:
-    """Get a voice-friendly summary of all short-term memory.
+    """Get a voice-friendly summary of all session memory.
 
     Args:
         session_id: Session identifier
@@ -272,30 +357,23 @@ def get_memory_summary(
     Returns:
         Summary string for voice output
     """
-    all_entries = recall_all(session_id)
+    all_entries = _session_memory.get_all_categories(session_id)
 
     if not all_entries:
-        return "No recent data in short-term memory"
+        return "No data in session memory"
 
     summaries = []
     for category, entry in all_entries.items():
-        summary = entry.get("summary", f"{category} data")
-        age = time.time() - entry.get("timestamp", time.time())
+        summary = entry.summary
+        age = entry.age_seconds
         age_str = f"{int(age)}s ago" if age < 60 else f"{int(age/60)}m ago"
-        summaries.append(f"{category}: {summary} ({age_str})")
+        summaries.append(f"{category.value}: {summary} ({age_str})")
 
     return "In memory: " + "; ".join(summaries)
 
 
 def suggest_uses_for_category(category: Union[ToolCategory, str]) -> List[str]:
-    """Get suggested uses for data in a category.
-
-    Args:
-        category: Tool category
-
-    Returns:
-        List of suggested follow-up actions
-    """
+    """Get suggested uses for data in a category."""
     if isinstance(category, str):
         try:
             category = ToolCategory(category.lower())
@@ -314,42 +392,18 @@ def suggest_uses_for_category(category: Union[ToolCategory, str]) -> List[str]:
     return suggestions.get(category, ["reference"])
 
 
-def clear_category(
-    category: Union[ToolCategory, str],
-    session_id: str = "livekit-agent",
-) -> bool:
-    """Clear short-term memory for a specific category.
-
-    Args:
-        category: Tool category to clear
-        session_id: Session identifier
-
-    Returns:
-        True if something was cleared
-    """
-    cache_manager = get_cache_manager()
-
-    if isinstance(category, str):
-        try:
-            category = ToolCategory(category.lower())
-        except ValueError:
-            return False
-
-    key = _make_memory_key(session_id, category)
-    return cache_manager.query_cache.invalidate(key)
-
-
-def clear_all(session_id: str = "livekit-agent") -> int:
-    """Clear all short-term memory for a session.
+def clear_session(session_id: str = "livekit-agent") -> int:
+    """Clear all memory for a session. Call this when session ends.
 
     Args:
         session_id: Session identifier
 
     Returns:
-        Number of categories cleared
+        Number of entries cleared
     """
-    cleared = 0
-    for category in ToolCategory:
-        if clear_category(category, session_id):
-            cleared += 1
-    return cleared
+    return _session_memory.clear(session_id)
+
+
+def get_session_stats(session_id: str = "livekit-agent") -> Dict[str, Any]:
+    """Get memory statistics for a session."""
+    return _session_memory.get_stats(session_id)
