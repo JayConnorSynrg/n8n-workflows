@@ -57,64 +57,39 @@ async def send_email_async(
 @llm.function_tool(
     name="search_drive",
     description="""Search Google Drive for documents. READ OPERATION - execute immediately.
-    Before calling: Say "Searching Drive" or similar acknowledgment.
-    After result: Summarize findings naturally - file names and count only.""",
+    Returns matching documents directly. Summarize findings naturally for the user.""",
 )
 async def search_documents_async(
     query: str,
     max_results: int = 5,
 ) -> str:
-    """Search Drive documents."""
-    worker = get_worker()
-    if not worker:
-        return await google_drive_tool.search_documents_tool(query, max_results)
-
-    await worker.dispatch(
-        tool_name="search_documents",
-        tool_func=google_drive_tool.search_documents_tool,
-        kwargs={"query": query, "max_results": max_results},
-    )
-    return "Searching Drive"
+    """Search Drive documents - runs synchronously for immediate results."""
+    # READ operations run synchronously to give LLM immediate results
+    return await google_drive_tool.search_documents_tool(query, max_results)
 
 
 @llm.function_tool(
     name="get_file",
     description="""Retrieve a specific file from Google Drive. READ OPERATION.
     Requires file_id from a previous search.
-    After result: Summarize document content briefly.""",
+    Returns document content directly. Summarize content briefly for the user.""",
 )
 async def get_document_async(file_id: str) -> str:
-    """Get document content."""
-    worker = get_worker()
-    if not worker:
-        return await google_drive_tool.get_document_tool(file_id)
-
-    await worker.dispatch(
-        tool_name="get_document",
-        tool_func=google_drive_tool.get_document_tool,
-        kwargs={"file_id": file_id},
-    )
-    return "Retrieving document"
+    """Get document content - runs synchronously for immediate results."""
+    # READ operations run synchronously to give LLM immediate results
+    return await google_drive_tool.get_document_tool(file_id)
 
 
 @llm.function_tool(
     name="list_files",
     description="""List files in Google Drive. READ OPERATION - execute immediately.
-    Before calling: Say "Checking your files" or similar.
-    After result: Read the file names naturally. Example: "You have 5 files: quarterly report, budget draft, meeting notes, project plan, and status update".""",
+    Returns file names directly. Summarize results naturally for the user.""",
 )
 async def list_drive_files_async(max_results: int = 10) -> str:
-    """List Drive files."""
-    worker = get_worker()
-    if not worker:
-        return await google_drive_tool.list_drive_files_tool(max_results)
-
-    await worker.dispatch(
-        tool_name="list_drive_files",
-        tool_func=google_drive_tool.list_drive_files_tool,
-        kwargs={"max_results": max_results},
-    )
-    return "Checking your files"
+    """List Drive files - runs synchronously for immediate results."""
+    # READ operations run synchronously to give LLM immediate results
+    # This prevents the LLM from looping while waiting for async results
+    return await google_drive_tool.list_drive_files_tool(max_results)
 
 
 # =============================================================================
@@ -133,18 +108,13 @@ async def vector_store_async(
     category: Optional[str] = None,
 ) -> str:
     """Knowledge base operations."""
-    worker = get_worker()
-
+    # READ operations (search) run synchronously for immediate results
+    # WRITE operations (store) run async with confirmation
     if action.lower() in ["search", "find", "query"]:
-        if not worker:
-            return await database_tool.query_database_tool(content)
-        await worker.dispatch(
-            tool_name="query_database",
-            tool_func=database_tool.query_database_tool,
-            kwargs={"query": content},
-        )
-        return "Searching knowledge base"
+        return await database_tool.query_database_tool(content)
     else:
+        # WRITE operation - use async for background execution
+        worker = get_worker()
         if not worker:
             return await vector_store_tool.store_knowledge_tool(content, category or "general", None)
         await worker.dispatch(
@@ -162,20 +132,12 @@ async def vector_store_async(
 @llm.function_tool(
     name="query_db",
     description="""Query the database. READ OPERATION - execute immediately.
-    Summarize results conversationally.""",
+    Returns results directly. Summarize results conversationally for the user.""",
 )
 async def database_query_async(query: str) -> str:
-    """Query database."""
-    worker = get_worker()
-    if not worker:
-        return await database_tool.query_database_tool(query)
-
-    await worker.dispatch(
-        tool_name="query_database",
-        tool_func=database_tool.query_database_tool,
-        kwargs={"query": query},
-    )
-    return "Querying database"
+    """Query database - runs synchronously for immediate results."""
+    # READ operations run synchronously to give LLM immediate results
+    return await database_tool.query_database_tool(query)
 
 
 # =============================================================================
@@ -185,23 +147,15 @@ async def database_query_async(query: str) -> str:
 @llm.function_tool(
     name="check_context",
     description="""Check conversation context or history. READ OPERATION.
-    Use to recall what was discussed earlier.""",
+    Returns context directly. Use to recall what was discussed earlier.""",
 )
 async def query_context_async(
     context_type: str,
     query: Optional[str] = None,
 ) -> str:
-    """Query session context."""
-    worker = get_worker()
-    if not worker:
-        return await agent_context_tool.query_context_tool(context_type, query)
-
-    await worker.dispatch(
-        tool_name="query_context",
-        tool_func=agent_context_tool.query_context_tool,
-        kwargs={"context_type": context_type, "query": query},
-    )
-    return "Checking context"
+    """Query session context - runs synchronously for immediate results."""
+    # READ operations run synchronously to give LLM immediate results
+    return await agent_context_tool.query_context_tool(context_type, query)
 
 
 # =============================================================================
