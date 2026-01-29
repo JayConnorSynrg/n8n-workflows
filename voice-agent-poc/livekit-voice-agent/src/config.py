@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
 
     # Cerebras LLM (1M free tokens/day, ~1000 TPS)
+    # Note: llama-3.3-70b has better function calling support than 8b
     cerebras_api_key: str = Field(..., alias="CEREBRAS_API_KEY")
-    cerebras_model: str = Field(default="llama3.1-8b", alias="CEREBRAS_MODEL")
-    cerebras_temperature: float = Field(default=0.7, alias="CEREBRAS_TEMPERATURE")
+    cerebras_model: str = Field(default="llama-3.3-70b", alias="CEREBRAS_MODEL")
+    cerebras_temperature: float = Field(default=0.6, alias="CEREBRAS_TEMPERATURE")
     cerebras_max_tokens: int = Field(default=150, alias="CEREBRAS_MAX_TOKENS")
 
     # Cartesia
