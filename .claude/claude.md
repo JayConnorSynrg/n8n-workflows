@@ -4,6 +4,37 @@
 
 ---
 
+## AIO Voice System (Priority Reference)
+
+**When user says "AIO Voice System"** - refers to the complete voice assistant ecosystem:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **LiveKit Agent** | `voice-agent-poc/livekit-voice-agent/` | Python voice agent on Railway |
+| **n8n Workflows** | `jayconnorexe.app.n8n.cloud` | Tool backends (Drive, Email, DB) |
+| **Recall.ai** | External | Meeting bot audio capture |
+| **LLM** | Cerebras `llama-3.3-70b` | Function calling + reasoning |
+| **STT** | Deepgram `nova-3` | Speech-to-text |
+| **TTS** | Cartesia `sonic-3` | Text-to-speech |
+
+**AIO Tools Registry:** `voice-agent-poc/livekit-voice-agent/docs/AIO-TOOLS-REGISTRY.md`
+- Security ratings for all voice agent tools
+- Modular format for adding new tools
+- Reference this when user mentions "AIO tools"
+
+**Key Workflows:**
+- `IamjzfFxjHviJvJg` - Google Drive Document Repository
+- `gjYSN6xNjLw8qsA1` - Teams Voice Bot v3
+- `ouWMjcKzbj6nrYXz` - Agent Context Access
+
+**Health Check Command:** `railway logs` + n8n execution history
+
+**Known Issues to Monitor:**
+- Google Drive OAuth expiration (credential: `ylMLH2SMUpGQpUUr`)
+- Cerebras tool calling with smaller models (use 70b+)
+
+---
+
 ## Agent Selection (Delegate via Task tool)
 
 **Agent Definitions:** `.claude/agents/`
@@ -50,6 +81,25 @@ Task({
 - `type` must be `"main"` not `"0"`
 - `index` must be integer not string
 
+### 5. Error Handling (Build Resilient from Start)
+**Apply error handling during initial build, not as afterthought:**
+
+| Node Category | Error Property | Retry Config |
+|--------------|----------------|--------------|
+| Switch/Route nodes | `onError: "continueErrorOutput"` | N/A |
+| External API (OpenAI) | `onError: "continueRegularOutput"` | `retryOnFail: true, maxTries: 2` |
+| OAuth APIs (Google) | `onError: "continueRegularOutput"` | Optional |
+| Critical DB (Search) | `onError: "continueRegularOutput"` | `retryOnFail: true` |
+| Logging DB | `onError: "continueRegularOutput"` | None |
+
+**Symbiotic Error Handling:** When using `continueRegularOutput`, downstream Code nodes MUST detect errors:
+```javascript
+// At START of Code nodes downstream of error-handled nodes:
+if (input.error || !input.expectedField) {
+  return [{ json: { error: true, message: errorMsg, /* defaults */ } }];
+}
+```
+
 ---
 
 ## Validation Criteria
@@ -58,6 +108,8 @@ Task({
 - [ ] All nodes use latest typeVersion
 - [ ] No expression syntax errors (= prefix contamination)
 - [ ] All connections use `type: "main"`
+- [ ] Error handling applied per node category (Rule 5)
+- [ ] Downstream Code nodes detect errors (symbiotic handling)
 - [ ] `mcp__n8n-mcp__n8n_validate_workflow` passes
 - [ ] Patterns consulted for node types in `.claude/patterns/pattern-index.json`
 
