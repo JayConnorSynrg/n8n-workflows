@@ -113,9 +113,10 @@ async def search_documents_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle new format with memory_offer
-                    data = result.get("data", result)
-                    documents = data.get("results", data.get("documents", []))
+                    # Handle n8n response format: {result: {...}}
+                    inner_result = result.get("result", result)
+                    data = inner_result if isinstance(inner_result, dict) else result
+                    documents = data.get("results", data.get("documents", data.get("files", [])))
                     memory_offer = result.get("memory_offer", {})
 
                     if not documents:
@@ -191,8 +192,9 @@ async def get_document_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle new format with memory_offer
-                    data = result.get("data", result)
+                    # Handle n8n response format: {result: {...}}
+                    inner_result = result.get("result", result)
+                    data = inner_result if isinstance(inner_result, dict) else result
                     memory_offer = result.get("memory_offer", {})
 
                     content = data.get("extracted_text", data.get("content", data.get("text", "")))
@@ -276,8 +278,10 @@ async def list_drive_files_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle new format with memory_offer
-                    data = result.get("data", result)
+                    # Handle n8n response format: {result: {files: [...], count: N}}
+                    # Also supports legacy format: {files: [...]}
+                    inner_result = result.get("result", result)
+                    data = inner_result if isinstance(inner_result, dict) else result
                     memory_offer = result.get("memory_offer", {})
 
                     files = data.get("files", data.get("documents", []))
