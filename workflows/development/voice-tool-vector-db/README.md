@@ -109,9 +109,13 @@ async def add_to_knowledge_base_tool(content: str, category: str = "general") ->
 
 ## Pinecone Index
 
-- **Index Name:** `resume-review-autopayplus`
-- **Embedding Model:** Google Gemini text-embedding-004
+- **Index Name:** `autopayplus-hr-semantic-archive`
+- **Dimensions:** 1024
+- **Embedding Model:** Google Gemini `gemini-embedding-001` (with `outputDimensionality: 1024`)
+- **Host:** `https://autopayplus-hr-semantic-archive-nzlkkal.svc.aped-4627-b74a.pinecone.io`
 - **Chunk Size:** 1000 characters with 100 char overlap
+
+> **Note:** The old index `resume-review-autopayplus` (768 dims, text-embedding-004) was deprecated after Google shut down text-embedding-004 on Jan 14, 2026.
 
 ## Related Workflows
 
