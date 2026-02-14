@@ -274,6 +274,77 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ============================================================
+-- CONTACTS TABLE (Voice Agent v3 - Contact Management)
+-- ============================================================
+-- Structured contact storage for AIO voice assistant
+-- Replaces unstructured vector DB storage for contacts
+
+CREATE TABLE IF NOT EXISTS contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(100) NOT NULL,  -- Owner/creator session
+    name VARCHAR(255) NOT NULL,
+    name_phonetic VARCHAR(255),        -- Phonetic spelling for voice confirmation
+    email VARCHAR(255),
+    email_confirmed BOOLEAN DEFAULT FALSE,  -- True when spelling was confirmed
+    phone VARCHAR(50),
+    company VARCHAR(255),
+    notes TEXT,
+    tags TEXT[],                       -- Array of tags for categorization
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by VARCHAR(100),           -- User who created
+    CONSTRAINT contacts_email_format CHECK (
+        email IS NULL OR email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    )
+);
+
+-- Indexes for fast lookup
+CREATE INDEX IF NOT EXISTS idx_contacts_session ON contacts(session_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(LOWER(name));
+CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(LOWER(email));
+CREATE INDEX IF NOT EXISTS idx_contacts_name_search ON contacts USING gin(to_tsvector('english', name));
+
+-- Update trigger for contacts.updated_at
+CREATE OR REPLACE FUNCTION update_contacts_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_contacts_updated_at ON contacts;
+CREATE TRIGGER trigger_contacts_updated_at
+    BEFORE UPDATE ON contacts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_contacts_updated_at();
+
+COMMENT ON TABLE contacts IS 'Structured contact storage for AIO voice assistant';
+COMMENT ON COLUMN contacts.name_phonetic IS 'Phonetic spelling (e.g., "J-E-L-A-L") for voice confirmation';
+COMMENT ON COLUMN contacts.email_confirmed IS 'True when email spelling was explicitly confirmed by user';
+COMMENT ON COLUMN contacts.tags IS 'Array of tags like {"client", "vendor", "personal"}';
+
+-- View for contact lookup with fuzzy matching
+CREATE OR REPLACE VIEW v_contacts_search AS
+SELECT
+    id,
+    name,
+    name_phonetic,
+    email,
+    phone,
+    company,
+    notes,
+    tags,
+    created_at,
+    updated_at,
+    -- Similarity score for fuzzy matching (requires pg_trgm extension)
+    -- similarity(name, '') as name_similarity
+    LOWER(name) as name_lower,
+    LOWER(email) as email_lower
+FROM contacts
+ORDER BY updated_at DESC;
+
+-- ============================================================
 -- CLEANUP (if needed)
 -- ============================================================
 
