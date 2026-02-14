@@ -17,7 +17,7 @@ from ..utils.short_term_memory import (
     get_memory_summary,
     ToolCategory,
 )
-from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool
+from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
 
 
 # =============================================================================
@@ -242,6 +242,74 @@ async def recall_drive_data_async(operation: Optional[str] = None) -> str:
 
 
 # =============================================================================
+# CONTACTS - MIXED OPERATIONS
+# =============================================================================
+
+@llm.function_tool(
+    name="add_contact",
+    description="""Add a new contact. WRITE OPERATION with multi-gate confirmation.
+    IMPORTANT: This uses a 3-step confirmation process:
+    1. First call: I'll spell the name phonetically - ask user to confirm
+    2. After name confirmed: I'll spell the email - ask user to confirm
+    3. After email confirmed: Contact is saved
+
+    You MUST repeat the spelling back to the user and wait for their confirmation
+    before calling with the next gate parameters.""",
+)
+async def add_contact_async(
+    name: str,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    company: Optional[str] = None,
+    notes: Optional[str] = None,
+    gate: int = 1,
+    name_confirmed: bool = False,
+    email_confirmed: bool = False,
+) -> str:
+    """Add contact with multi-gate confirmation - runs synchronously for immediate gate response."""
+    return await contact_tool.add_contact_tool(
+        name=name,
+        email=email,
+        phone=phone,
+        company=company,
+        notes=notes,
+        gate=gate,
+        name_confirmed=name_confirmed,
+        email_confirmed=email_confirmed,
+    )
+
+
+@llm.function_tool(
+    name="get_contact",
+    description="""Look up a contact by name, email, or ID. READ OPERATION.
+    Execute immediately and announce the contact details to the user.""",
+)
+async def get_contact_async(
+    query: Optional[str] = None,
+    name: Optional[str] = None,
+    email: Optional[str] = None,
+    contact_id: Optional[str] = None,
+) -> str:
+    """Get contact - runs synchronously for immediate results."""
+    return await contact_tool.get_contact_tool(
+        query=query,
+        name=name,
+        email=email,
+        contact_id=contact_id,
+    )
+
+
+@llm.function_tool(
+    name="search_contacts",
+    description="""Search contacts by name, email, or company. READ OPERATION.
+    Execute immediately and summarize matching contacts for the user.""",
+)
+async def search_contacts_async(query: str) -> str:
+    """Search contacts - runs synchronously for immediate results."""
+    return await contact_tool.search_contacts_tool(query)
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -256,4 +324,8 @@ ASYNC_TOOLS = [
     vector_store_async,
     database_query_async,
     query_context_async,
+    # Contacts
+    add_contact_async,
+    get_contact_async,
+    search_contacts_async,
 ]

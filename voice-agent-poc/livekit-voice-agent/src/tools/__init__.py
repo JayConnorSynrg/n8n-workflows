@@ -4,6 +4,7 @@ from .database_tool import query_database_tool
 from .vector_store_tool import store_knowledge_tool
 from .google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool
 from .agent_context_tool import query_context_tool, get_session_summary_tool
+from .contact_tool import add_contact_tool, get_contact_tool, search_contacts_tool, get_contact_email
 
 __all__ = [
     # Communication
@@ -18,4 +19,9 @@ __all__ = [
     # Context & History
     "query_context_tool",
     "get_session_summary_tool",
+    # Contacts
+    "add_contact_tool",
+    "get_contact_tool",
+    "search_contacts_tool",
+    "get_contact_email",
 ]

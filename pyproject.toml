@@ -1,0 +1,3 @@
+[tool.bandit]
+exclude_dirs = ["tests", "node_modules", "dist", "build", "venv", ".venv", "federation"]
+skips = ["B101", "B311"]

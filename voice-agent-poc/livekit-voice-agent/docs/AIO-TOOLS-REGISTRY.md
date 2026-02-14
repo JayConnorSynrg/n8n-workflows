@@ -1,7 +1,7 @@
 # AIO Tools Registry
 
-**Last Updated:** 2026-01-29
-**Version:** 1.0.0
+**Last Updated:** 2026-02-06
+**Version:** 1.1.0
 
 Quick reference for all AIO (All-In-One) Voice Assistant tools with security assessments.
 
@@ -145,6 +145,140 @@ Quick reference for all AIO (All-In-One) Voice Assistant tools with security ass
 
 ---
 
+### 7. File Download & Email Subworkflow
+| Property | Value |
+|----------|-------|
+| **n8n Workflow ID** | `z61gjAE9DtszE1u2` |
+| **Operation Type** | MIXED (download=READ, email=WRITE) |
+| **Confirmation Required** | Yes (email operations) |
+| **Security Rating** | **B** |
+| **n8n Backend** | `/file-download-email` webhook |
+
+**Supported File Types with Format-Specific Schemas:**
+| File Type | MIME Type | Schema Includes |
+|-----------|-----------|-----------------|
+| CSV | `text/csv` | columns, row_count, sample_data |
+| Excel | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | columns, row_count, sample_data |
+| PDF | `application/pdf` | page_count, word_count, content_preview |
+| DOCX | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | word_count, paragraph_count, content_preview |
+| Images | `image/*` | width, height, format, ai_description |
+| Text | `text/plain` | line_count, word_count, content |
+
+**Operations:**
+- `download` - Returns file with format-specific schema (READ)
+- `email` - Sends file link via email (WRITE - requires confirmation)
+- `download_and_email` - Downloads file, formats email with schema preview, sends (WRITE - requires confirmation)
+
+**Confirmation Gate:**
+- Email operations return `requires_confirmation: true` by default
+- Caller must resend with `confirmed: true` to execute
+- Bypassed with `requires_confirmation: false` (not recommended)
+
+**Security Notes:**
+- Confirmation gate for all WRITE operations (good)
+- File metadata retrieved from database (file_id validated)
+- Email recipients passed without sanitization
+
+**Improvements Needed:**
+- [ ] Add email address format validation
+- [ ] Sanitize HTML in custom email_body
+- [ ] Add rate limiting for email operations
+- [ ] Log all email operations to audit table
+
+**Usage Examples:**
+```json
+// Download with schema
+{
+  "operation": "download",
+  "file_id": "1abc...",
+  "session_id": "livekit-session-123"
+}
+
+// Email (requires confirmation)
+{
+  "operation": "email",
+  "file_id": "1abc...",
+  "email_to": "user@example.com",
+  "email_subject": "Requested File",
+  "confirmed": true  // Required after confirmation prompt
+}
+
+// Download and email with formatted preview
+{
+  "operation": "download_and_email",
+  "file_id": "1abc...",
+  "email_to": "user@example.com",
+  "confirmed": true
+}
+```
+
+---
+
+### 8. Contact Management Tool
+| Property | Value |
+|----------|-------|
+| **File** | `src/tools/contact_tool.py` |
+| **Operation Type** | MIXED (add=WRITE, get/search=READ) |
+| **Confirmation Required** | Yes (for add_contact - multi-gate) |
+| **Security Rating** | **A** |
+| **n8n Backend** | `/manage-contacts` webhook |
+| **n8n Workflow ID** | `ng5O0VNKosn5x728` |
+
+**Operations:**
+| Operation | Type | Gates | Description |
+|-----------|------|-------|-------------|
+| `add_contact` | WRITE | 3 | Gate 1: confirm name, Gate 2: confirm email, Gate 3: save |
+| `get_contact` | READ | 0 | Lookup by name, email, or ID |
+| `search_contacts` | READ | 0 | Fuzzy search across name, email, company |
+
+**Multi-Gate Flow for add_contact:**
+1. **Gate 1 (confirm_name)**: Returns phonetic name (e.g., "J-E-L-A-L"), asks user to confirm
+2. **Gate 2 (confirm_email)**: Returns email spelled out (e.g., "J-C-O-N at gmail dot com"), asks user to confirm
+3. **Gate 3 (save)**: Saves to PostgreSQL `contacts` table with `email_confirmed=true`
+
+**Security Notes:**
+- Multi-gate confirmation prevents spelling errors (good)
+- Structured PostgreSQL storage replaces unstructured vector DB (good)
+- Email format validation via database constraint
+- Session-scoped contacts
+
+**Database Table:** `contacts`
+```sql
+CREATE TABLE contacts (
+    id UUID PRIMARY KEY,
+    session_id VARCHAR(100) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    name_phonetic VARCHAR(255),  -- Stored for future reference
+    email VARCHAR(255),
+    email_confirmed BOOLEAN,     -- True after Gate 2 confirmation
+    phone VARCHAR(50),
+    company VARCHAR(255),
+    notes TEXT,
+    tags TEXT[]
+);
+```
+
+**Usage Examples:**
+```json
+// Gate 1: Initial add request
+{"operation": "add_contact", "name": "Jelal", "email": "jconrumi16@gmail.com"}
+// Response: {gate: 1, voice_response: "I have the name spelled as J-E-L-A-L..."}
+
+// Gate 2: After name confirmed
+{"operation": "add_contact", "name": "Jelal", "name_confirmed": true, "email": "jconrumi16@gmail.com", "gate": 2}
+// Response: {gate: 2, voice_response: "I have the email as J-C-O-N-R-U-M-I-1-6..."}
+
+// Gate 3: After email confirmed
+{"operation": "add_contact", "name": "Jelal", "name_confirmed": true, "email": "jconrumi16@gmail.com", "email_confirmed": true, "gate": 3}
+// Response: {success: true, voice_response: "I've saved the contact for Jelal."}
+
+// Get contact
+{"operation": "get_contact", "query": "Jelal"}
+// Response: {found: true, contact: {...}, voice_response: "Found Jelal..."}
+```
+
+---
+
 ## Security Priority Matrix
 
 | Priority | Tool | Rating | Key Issue |
@@ -154,7 +288,9 @@ Quick reference for all AIO (All-In-One) Voice Assistant tools with security ass
 | 3 | Google Drive | B | No file_id validation |
 | 4 | Database | B | Query sanitization gap |
 | 5 | Async Wrappers | B | Inconsistent validation |
-| 6 | Agent Context | A | Minor - already good |
+| 6 | File Download & Email | B | Email recipient validation |
+| 7 | Agent Context | A | Minor - already good |
+| 8 | Contact Management | A | Multi-gate confirmation, structured storage |
 
 ---
 
@@ -239,9 +375,13 @@ Add entry with appropriate priority based on rating.
 
 **When user mentions "AIO tools"** - refers to this complete tool ecosystem.
 
-**Tool Count:** 6 active tools
-**Average Security Rating:** B
+**Tool Count:** 8 active tools
+**Average Security Rating:** B+
 **Highest Priority:** Vector Store (needs confirmation for writes)
+
+**Subworkflows:**
+- `z61gjAE9DtszE1u2` - File Download & Email (webhook: `/file-download-email`)
+- `ng5O0VNKosn5x728` - Contact Management (webhook: `/manage-contacts`)
 
 ---
 
