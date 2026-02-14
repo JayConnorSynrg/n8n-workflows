@@ -390,6 +390,121 @@ notes.private.*
 # !README.md
 
 # ==============================================================================
+# Analysis & Debug Artifacts (Session-Specific, DO NOT COMMIT)
+# ==============================================================================
+
+# Workflow Analysis & Fix Reports
+AGENT_ANALYSIS_*.md
+AGENT_CONFIGURATION_*.json
+AGENT_PROBLEM_*.txt
+AGENT_QUICK_FIX_*.md
+AGENT_STRUCTURE_*.md
+AGENT_ANALYSIS_*.md
+ANALYSIS_COMPLETE*.txt
+ANALYSIS_INDEX.md
+ANALYSIS_SUMMARY.md
+
+# Debug & Fix Reports
+DEBUG_*.md
+*_FIX_REPORT.md
+*_FIX_SUMMARY.md
+FIX_SUMMARY.md
+MERGE_NODE_FIX_REPORT.md
+FILTER_NEW_CANDIDATES_FIX_SUMMARY.md
+APPEND_NEW_RECORD_FIX_REPORT.md
+PREPARE_DB_INSERT_FIX_EXECUTIVE_SUMMARY.md
+PREPARE_EMAIL_DATA_FIX.md
+
+# Execution & Trace Analysis
+EXECUTION_*.md
+TEST_EXECUTION_*.md
+ITEM_FLOW_COMPARISON.md
+LOOP_*.md
+LOOP_*.txt
+
+# Deduplication Analysis
+DEDUP_*.md
+DEDUP_*.txt
+DEDUP_*.json
+DEDUPLICATION_*.md
+START_HERE_DEDUP_ANALYSIS.md
+
+# Schema & Field Extraction
+EXCEL_SCHEMA_*.md
+EXCEL_SCHEMA_*.txt
+EXCEL_SCHEMA_*.json
+EXCEL_NODES_*.md
+FIELD_CONSUMER_*.md
+FIELD_CONSUMER_*.txt
+FIELD_CONSUMER_*.json
+FIELD_MAPPING_*.txt
+DATA_FLOW_TRANSFORMATION.md
+
+# API & Upstream Analysis
+PAYCOR_*.md
+PAYCOR_*.json
+UPSTREAM_*.md
+UPSTREAM_*.txt
+POSTGRESQL_NODE_COMPARISON.md
+
+# Email Analysis
+EMAIL_EXTRACTION_*.md
+EMAIL_EXTRACTION_*.txt
+EMAIL_NODES_QUICK_REFERENCE.txt
+EMAIL_FLOW_*.md
+COMPLETE_EMAIL_NODES_*.json
+
+# Workflow Session Artifacts (prefixed with workflow ID)
+WORKFLOW_*_ANALYSIS.md
+WORKFLOW_*_FIX*.md
+WORKFLOW_*_FIX*.json
+WORKFLOW_MMaJkr8abEjnCM2h*.md
+WORKFLOW_NODE_SEQUENCE_*.md
+AI_LLM_NODES_EXTRACTION_*.md
+AI_RECRUITER_AGENT_STRUCTURE_ANALYSIS.md
+
+# Quick References & Diagrams (temporary)
+*_QUICK_REFERENCE.txt
+*_QUICK_REF.txt
+DB_QUICK_REFERENCE.txt
+*_DIAGRAM.txt
+*_VISUAL_SUMMARY.txt
+AGENT_STRUCTURE_VISUAL_DIAGRAM.txt
+
+# Phase & Deployment Reports (temporary)
+PHASE*_COMPLETION_REPORT.md
+PHASE_*_VALIDATION_*.md
+DEPLOYMENT_PACKAGE_MANIFEST.txt
+DEPLOYMENT_CHECKLIST.md
+
+# Root-level session artifacts
+00_START_HERE.md
+AIO_HEALTH_REPORT_*.md
+CONNECTION_MAP_*.txt
+DATABASE_SCHEMA_REFERENCE.md
+EXECUTIVE_SUMMARY_*.md
+FILES_CREATED.txt
+IMPLEMENTATION_REFERENCE_CARD.txt
+INDEX_NEW_ANALYSIS_FILES.txt
+PREPARE_DB_INSERT_FIXED_CODE.js
+QUICK_FIX_REFERENCE_*.md
+QUICK_REFERENCE.md
+README_ANALYSIS_*.md
+README_EXCEL_SCHEMA.md
+README_LOOP_ANALYSIS.md
+README_TTS_RECALL_ANALYSIS.md
+ROOT_CAUSE_SUMMARY.txt
+ROUTE_OPERATION_VERIFICATION_*.md
+SEND_CANDIDATE_EMAIL_FIX.json
+SYNC_FLOW_*.md
+VOICE_ADD_VECTOR_DB_UPDATE_SUMMARY.md
+WORKFLOW_FIX_*.md
+WORKFLOW_STRUCTURE_*.json
+WORKFLOW_SUMMARY.md
+WORKFLOW_IamjzfFxjHviJvJg.json
+voice-tool-add-vector-db-UPDATED.json
+
+# ==============================================================================
 # END OF .gitignore
 # ==============================================================================
 # SECURITY REMINDER: Always verify no secrets in git history with:
