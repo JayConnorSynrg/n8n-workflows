@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { WebGLOrb } from './components/WebGLOrb'
 import { LiveWaveform } from './components/LiveWaveform'
 import { TranscriptCycler } from './components/TranscriptCycler'
+import { ToolCallPanel } from './components/ToolCallCard'
 import { useLiveKitAgent } from './hooks/useLiveKitAgent'
 import { useStore } from './lib/store'
 
@@ -29,7 +30,9 @@ const MOCK_MESSAGES = [
 
 const MOCK_TOOL_CALLS = [
   { id: 'tc-1', name: 'send_email', status: 'completed' as const, timestamp: Date.now() - 4000 },
-  { id: 'tc-2', name: 'query_database', status: 'executing' as const, timestamp: Date.now() - 500 },
+  { id: 'tc-2', name: 'query_db', status: 'executing' as const, timestamp: Date.now() - 500 },
+  { id: 'tc-3', name: 'list_files', status: 'pending' as const, timestamp: Date.now() - 200 },
+  { id: 'tc-4', name: 'search_drive', status: 'completed' as const, timestamp: Date.now() - 6000 },
 ]
 
 function App() {
@@ -126,12 +129,39 @@ function App() {
     // Log readiness once when first achieved
     if (isReady && !readinessSignaled.current) {
       readinessSignaled.current = true
-      console.log('VOICE_AGENT_READY - Page fully initialized and ready for meeting')
+
+      // Comprehensive Recall.ai integration logging
+      const integrationContext = {
+        timestamp: Date.now(),
+        inIframe: window !== window.parent,
+        hasParentWindow: !!window.parent,
+        userAgent: navigator.userAgent,
+        windowLocation: window.location.href,
+        status: window.voiceAgentStatus
+      }
+
+      console.log('🟢 VOICE_AGENT_READY - Page fully initialized', integrationContext)
 
       // Dispatch custom event that Recall.ai can listen for
       window.dispatchEvent(new CustomEvent('voiceAgentReady', {
         detail: window.voiceAgentStatus
       }))
+
+      // Log that event was dispatched
+      console.log('[Recall.ai] voiceAgentReady event dispatched to window')
+
+      // If in iframe, try to signal parent
+      if (window !== window.parent) {
+        try {
+          window.parent.postMessage({
+            type: 'voiceAgentReady',
+            payload: window.voiceAgentStatus
+          }, '*')
+          console.log('[Recall.ai] Posted message to parent window')
+        } catch (e) {
+          console.warn('[Recall.ai] Could not post to parent:', e)
+        }
+      }
     }
   }, [isConnected, agentConnected, audioStatus, error])
 
@@ -167,7 +197,7 @@ function App() {
       {/* Main content - vertical stack, all separated */}
       <div className="flex flex-col items-center gap-4 w-full max-w-2xl px-4">
 
-        {/* The Orb - 50% smaller (280 → 140) */}
+        {/* The Orb */}
         <div style={{ height: '140px', width: '140px' }}>
           <WebGLOrb
             agentState={displayAgentState}
@@ -188,20 +218,42 @@ function App() {
           </p>
         </div>
 
-        {/* Transcript Cycler - CENTER, keeps flex for text */}
-        <div className="w-full">
-          <TranscriptCycler
-            messages={displayMessages}
-            toolCalls={displayToolCalls}
-            maxVisible={6}
-          />
+        {/* Transcript with Tool Call Panels on sides */}
+        <div className="w-full flex items-center justify-center gap-6">
+          {/* Left Tool Call Panel - flex centered with padding */}
+          <div className="hidden md:flex items-center justify-end flex-shrink-0" style={{ minWidth: '180px' }}>
+            <ToolCallPanel
+              toolCalls={displayToolCalls}
+              position="left"
+              maxVisible={3}
+            />
+          </div>
+
+          {/* Transcript Cycler - CENTER */}
+          <div className="flex-1 max-w-md min-w-0">
+            <TranscriptCycler
+              messages={displayMessages}
+              toolCalls={displayToolCalls}
+              maxVisible={6}
+            />
+          </div>
+
+          {/* Right Tool Call Panel - flex centered with padding */}
+          <div className="hidden md:flex items-center justify-start flex-shrink-0" style={{ minWidth: '180px' }}>
+            <ToolCallPanel
+              toolCalls={displayToolCalls}
+              position="right"
+              maxVisible={3}
+            />
+          </div>
         </div>
 
-        {/* Input waveform - 25% smaller (48 → 36), below transcript */}
+        {/* Input waveform - synced to user's speech via inputVolume */}
         <div className="w-full max-w-sm h-9">
           <div style={{ opacity: displayAgentState === 'listening' ? 1 : 0, transition: 'opacity 0.3s' }}>
             <LiveWaveform
               active={displayAgentState === 'listening'}
+              volume={displayInputVolume}
               barColor="rgba(78, 234, 170, 0.7)"
               height={36}
             />

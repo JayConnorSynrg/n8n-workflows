@@ -1,5 +1,18 @@
 import { create } from 'zustand'
 
+// =============================================================================
+// STORE LOGGING SYSTEM
+// =============================================================================
+const storeLog = (action: string, data?: any) => {
+  const timestamp = new Date().toISOString().split('T')[1].slice(0, -1)
+  console.log(`[Store ${timestamp}] ${action}`, data || '')
+}
+
+const storeWarn = (action: string, data?: any) => {
+  const timestamp = new Date().toISOString().split('T')[1].slice(0, -1)
+  console.warn(`[Store ${timestamp}] ⚠️ ${action}`, data || '')
+}
+
 type AgentState = 'listening' | 'thinking' | 'speaking' | null
 
 interface Message {
@@ -65,31 +78,60 @@ export const useStore = create<VoiceAgentStore>((set) => ({
   messages: [],
   toolCalls: [],
 
-  // Actions
-  setSessionId: (sessionId) => set({ sessionId }),
-  setBotId: (botId) => set({ botId }),
-  setAgentConnected: (agentConnected) => set({ agentConnected }),
-  setAudioStatus: (audioStatus) => set({ audioStatus }),
-  setAgentState: (agentState) => set({ agentState }),
-  setInputVolume: (inputVolume) => set({ inputVolume }),
-  setOutputVolume: (outputVolume) => set({ outputVolume }),
+  // Actions with comprehensive logging
+  setSessionId: (sessionId) => {
+    storeLog('setSessionId', { sessionId })
+    set({ sessionId })
+  },
+
+  setBotId: (botId) => {
+    storeLog('setBotId', { botId })
+    set({ botId })
+  },
+
+  setAgentConnected: (agentConnected) => {
+    storeLog('setAgentConnected', { agentConnected })
+    set({ agentConnected })
+  },
+
+  setAudioStatus: (audioStatus) => {
+    storeLog('setAudioStatus', { audioStatus })
+    set({ audioStatus })
+  },
+
+  setAgentState: (agentState) => {
+    storeLog('setAgentState', { from: 'prev', to: agentState })
+    set({ agentState })
+  },
+
+  setInputVolume: (inputVolume) => set({ inputVolume }), // Don't log - too frequent
+  setOutputVolume: (outputVolume) => set({ outputVolume }), // Don't log - too frequent
 
   addMessage: (message) => {
-    console.log('[Store] addMessage called:', message)
+    storeLog('addMessage', { role: message.role, contentLength: message.content.length })
     set((state) => {
       const newMessage = {
         ...message,
         id: generateId(),
         timestamp: Date.now()
       }
-      console.log('[Store] New messages array length:', state.messages.length + 1)
+      storeLog('addMessage:complete', {
+        id: newMessage.id,
+        totalMessages: state.messages.length + 1
+      })
       return {
         messages: [...state.messages, newMessage]
       }
     })
   },
 
-  addToolCall: (toolCall) =>
+  addToolCall: (toolCall) => {
+    storeLog('addToolCall', {
+      id: toolCall.id,
+      name: toolCall.name,
+      status: toolCall.status,
+      hasArgs: !!toolCall.arguments
+    })
     set((state) => ({
       toolCalls: [
         ...state.toolCalls,
@@ -98,22 +140,35 @@ export const useStore = create<VoiceAgentStore>((set) => ({
           timestamp: Date.now()
         }
       ]
-    })),
+    }))
+  },
 
-  updateToolCall: (id, updates) =>
-    set((state) => ({
-      toolCalls: state.toolCalls.map((tc) =>
-        tc.id === id ? { ...tc, ...updates } : tc
-      )
-    })),
+  updateToolCall: (id, updates) => {
+    storeLog('updateToolCall', { id, updates })
+    set((state) => {
+      const existing = state.toolCalls.find(tc => tc.id === id)
+      if (!existing) {
+        storeWarn('updateToolCall:notFound', { id })
+        return state
+      }
+      return {
+        toolCalls: state.toolCalls.map((tc) =>
+          tc.id === id ? { ...tc, ...updates } : tc
+        )
+      }
+    })
+  },
 
-  clearConversation: () =>
+  clearConversation: () => {
+    storeLog('clearConversation')
     set({
       messages: [],
       toolCalls: []
-    }),
+    })
+  },
 
-  reset: () =>
+  reset: () => {
+    storeLog('reset')
     set({
       sessionId: null,
       botId: null,
@@ -125,4 +180,5 @@ export const useStore = create<VoiceAgentStore>((set) => ({
       messages: [],
       toolCalls: []
     })
+  }
 }))

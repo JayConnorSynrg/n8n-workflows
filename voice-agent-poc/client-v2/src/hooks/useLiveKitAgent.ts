@@ -86,9 +86,25 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
     try {
       const decoder = new TextDecoder()
       const jsonStr = decoder.decode(payload)
-      console.log('[DataReceived] Raw:', jsonStr, 'from:', (participant as any)?.identity, 'topic:', topic)
-      const message: AgentMessage = JSON.parse(jsonStr)
-      console.log('[DataReceived] Parsed:', message.type, message)
+
+      // Enhanced data message logging
+      const timestamp = new Date().toISOString().split('T')[1].slice(0, -1)
+      console.log(`[Data ${timestamp}] Raw payload (${jsonStr.length} bytes) from: ${(participant as any)?.identity || 'unknown'}`)
+
+      let message: AgentMessage
+      try {
+        message = JSON.parse(jsonStr)
+      } catch (parseErr) {
+        // Log malformed packets for debugging
+        console.error(`[Data ${timestamp}] ❌ JSON parse failed:`, {
+          error: parseErr,
+          rawPayload: jsonStr.slice(0, 200) + (jsonStr.length > 200 ? '...' : ''),
+          payloadLength: jsonStr.length
+        })
+        return
+      }
+
+      console.log(`[Data ${timestamp}] Parsed:`, message.type, message)
 
       switch (message.type) {
         case 'agent.state':
@@ -163,10 +179,19 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
           sampleRate: sharedAudioContext.sampleRate
         })
 
+        // Monitor AudioContext state transitions
+        sharedAudioContext.onstatechange = () => {
+          audioDiag.log('AudioContext state changed', {
+            state: sharedAudioContext.state,
+            currentTime: sharedAudioContext.currentTime
+          })
+        }
+
         // Resume if suspended (browser autoplay policy)
         if (sharedAudioContext.state === 'suspended') {
           audioDiag.log('Resuming suspended AudioContext...')
           await sharedAudioContext.resume()
+          audioDiag.log('AudioContext resumed', { state: sharedAudioContext.state })
         }
 
         // Create Room with webAudioMix enabled
@@ -206,7 +231,7 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
         // EVENT HANDLERS
         // =================================================================
         room.on(RoomEvent.Connected, () => {
-          audioDiag.log('Room connected', { name: room.name, sid: room.sid })
+          audioDiag.log('Room connected', { name: room.name })
           setConnectionState('connected')
           setSessionId(room.name || null)
           options.onConnect?.()

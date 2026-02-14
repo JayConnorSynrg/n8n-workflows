@@ -2,99 +2,67 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 
 interface LiveWaveformProps {
   active?: boolean
+  volume?: number // Use external volume instead of capturing audio
   barWidth?: number
   barGap?: number
   barColor?: string
   height?: number
   sensitivity?: number
-  smoothingTimeConstant?: number
-  fftSize?: number
   fadeEdges?: boolean
   className?: string
 }
 
+/**
+ * LiveWaveform - Visualizes audio input as animated bars
+ *
+ * IMPORTANT: This component uses external volume data (from useLiveKitAgent)
+ * instead of capturing audio directly. This prevents conflicts with:
+ * - LiveKit's audio capture
+ * - Recall.ai's meeting audio injection
+ * - Other components using getUserMedia
+ */
 export function LiveWaveform({
   active = false,
+  volume = 0,
   barWidth = 3,
   barGap = 2,
   barColor = 'rgba(139, 92, 246, 0.6)',
   height = 64,
   sensitivity = 1.2,
-  smoothingTimeConstant = 0.8,
-  fftSize = 256,
   fadeEdges = true,
   className = ''
 }: LiveWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const animationRef = useRef<number | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const volumeHistoryRef = useRef<number[]>([])
 
   const [dimensions, setDimensions] = useState({ width: 0, height })
 
   // Calculate number of bars based on container width
   const numBars = Math.floor(dimensions.width / (barWidth + barGap))
 
-  // Initialize audio context and analyser
-  const initAudio = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      })
-      streamRef.current = stream
-
-      const audioContext = new AudioContext()
-      audioContextRef.current = audioContext
-
-      const analyser = audioContext.createAnalyser()
-      analyser.fftSize = fftSize
-      analyser.smoothingTimeConstant = smoothingTimeConstant
-      analyserRef.current = analyser
-
-      const source = audioContext.createMediaStreamSource(stream)
-      source.connect(analyser)
-
-      return true
-    } catch (error) {
-      console.error('Failed to initialize audio:', error)
-      return false
-    }
-  }, [fftSize, smoothingTimeConstant])
-
-  // Cleanup audio resources
-  const cleanupAudio = useCallback(() => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current)
-      animationRef.current = null
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-    analyserRef.current = null
-  }, [])
-
-  // Draw waveform
+  // Draw waveform using volume history
   const draw = useCallback(() => {
     const canvas = canvasRef.current
-    const analyser = analyserRef.current
-    if (!canvas || !analyser) return
+    if (!canvas) return
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount)
-    analyser.getByteFrequencyData(dataArray)
+    // Update volume history (shift left, add new value)
+    const history = volumeHistoryRef.current
+    if (history.length >= numBars) {
+      history.shift()
+    }
+    // Add some variation to make it look more natural
+    const variation = (Math.random() - 0.5) * 0.2 * volume
+    history.push(Math.max(0, Math.min(1, volume + variation)))
+
+    // Pad history if not enough values
+    while (history.length < numBars) {
+      history.unshift(0)
+    }
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -106,13 +74,11 @@ export function LiveWaveform({
     const totalBarWidth = barWidth + barGap
     const startX = (canvas.width / dpr - numBars * totalBarWidth + barGap) / 2
 
-    // Draw bars
+    // Draw bars from history
     for (let i = 0; i < numBars; i++) {
-      // Sample from frequency data
-      const dataIndex = Math.floor((i / numBars) * dataArray.length)
-      const value = dataArray[dataIndex] / 255
+      const value = history[i] || 0
 
-      // Calculate bar height
+      // Calculate bar height with sensitivity
       const barHeight = Math.max(
         4,
         value * (canvas.height / dpr - 8) * sensitivity
@@ -142,7 +108,7 @@ export function LiveWaveform({
     }
 
     animationRef.current = requestAnimationFrame(draw)
-  }, [numBars, barWidth, barGap, barColor, sensitivity, fadeEdges])
+  }, [numBars, barWidth, barGap, barColor, sensitivity, fadeEdges, volume])
 
   // Handle resize
   useEffect(() => {
@@ -174,20 +140,26 @@ export function LiveWaveform({
     canvas.style.height = `${dimensions.height}px`
   }, [dimensions])
 
-  // Start/stop audio capture based on active prop
+  // Start/stop animation based on active prop
   useEffect(() => {
-    if (active) {
-      initAudio().then(success => {
-        if (success) {
-          draw()
-        }
-      })
+    if (active && dimensions.width > 0) {
+      // Clear history when becoming active
+      volumeHistoryRef.current = []
+      draw()
     } else {
-      cleanupAudio()
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
+      }
     }
 
-    return cleanupAudio
-  }, [active, initAudio, cleanupAudio, draw])
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
+      }
+    }
+  }, [active, draw, dimensions.width])
 
   // Idle animation when not active
   useEffect(() => {
