@@ -886,6 +886,18 @@
             "freshness_tier": "FRESH",
             "next_verification_due": "2026-03-28"
           }
+        },
+        "n8n-nodes-base.microsoftExcel": {
+          "file": "base/microsoft-excel.md",
+          "typeVersion": "2.2",
+          "last_verified": "2026-02-13",
+          "anti_memory": true,
+          "notes": "REQUIRES dataMode: 'define' (NOT 'defineBelow'), ResourceLocator mode: 'list', fieldValue property (NOT 'value')",
+          "known_issues": ["dataMode value confusion", "ResourceLocator format", "fieldValue property name"],
+          "validity": {
+            "freshness_tier": "FRESH",
+            "next_verification_due": "2026-05-13"
+          }
         }
       }
     }
@@ -920,7 +932,8 @@
     "n8n-nodes-base.microsoftTeams": ["latest-versions"],
     "n8n-nodes-base.postgres": ["postgres-query-replacement", "latest-versions"],
     "n8n-nodes-base.splitInBatches": ["loop-entry-expressions", "latest-versions"],
-    "n8n-nodes-base.executeWorkflow": ["latest-versions"]
+    "n8n-nodes-base.executeWorkflow": ["latest-versions"],
+    "n8n-nodes-base.microsoftExcel": ["latest-versions"]
   },
 
   "task_mappings": {

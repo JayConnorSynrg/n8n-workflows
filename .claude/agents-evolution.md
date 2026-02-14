@@ -24,6 +24,161 @@
 
 ---
 
+## AI Data Integrity Patterns
+
+## [2026-02-12] Workflow: Resume Analysis with AI Evaluation (PAYCOR TRIGGER) (MMaJkr8abEjnCM2h)
+
+### Anti-Pattern: AI Nodes Fabricating Data When Missing from Source
+**What Happened:** The workflow's AI nodes were inventing fake candidate data when resumes had missing fields:
+- Inventing placeholder names like "Jane Doe" or "John Doe" when no name was in resume
+- Creating fake email addresses like "john@example.com" or "candidate@email.com"
+- Fabricating phone numbers, job titles, and skills that weren't mentioned
+- Inferring experience levels without explicit date calculations
+
+**Impact:**
+- False candidate profiles created in recruitment database
+- Recruiters wasted time reviewing non-existent candidates
+- Hiring decisions based on fabricated data
+- Loss of trust in AI evaluation system
+- Manual cleanup required to remove fake records
+
+**Why It Failed:**
+- LLMs have a natural tendency to be "helpful" by filling gaps with plausible data
+- System prompts didn't explicitly prohibit data fabrication
+- No data integrity rules at prompt level
+- Attribute descriptions were permissive ("extract name") without strict extraction-only enforcement
+- Missing consequences explanation - AI didn't understand impact of fake data
+
+### Positive Pattern: Critical Data Integrity Guards for AI Extraction Nodes
+**Solution:** Prepend system prompts with explicit anti-fabrication rules using visual urgency markers and consequence explanations
+
+**Implementation:**
+
+1. **AI Recruiter Analysis Node** - Updated `parameters.options.systemMessage`:
+```markdown
+🔴 CRITICAL DATA INTEGRITY RULES - VIOLATION IS UNACCEPTABLE 🔴
+
+1. EXTRACT ONLY - Never invent, assume, or fabricate ANY data
+2. If a field is not explicitly stated in the resume, return "NOT FOUND" or empty - NEVER guess
+3. Names MUST come directly from the resume - NEVER use placeholders like "John Doe" or "Jane Doe"
+4. Contact info MUST be extracted verbatim - NEVER invent email addresses or phone numbers
+5. Skills MUST be explicitly mentioned - NEVER infer or assume skills
+6. Experience MUST be calculated from stated dates only - NEVER estimate
+7. If the resume is blank, malformed, or unreadable, return ALL fields as "INSUFFICIENT DATA"
+
+POSITIVE REINFORCEMENT:
+✅ DO extract exactly what is written
+✅ DO preserve original formatting of names, emails, phones
+✅ DO return "NOT FOUND" for missing fields
+✅ DO flag incomplete data rather than fill gaps
+
+❌ NEVER invent a name when none is provided
+❌ NEVER create placeholder contact information
+❌ NEVER assume skills not explicitly listed
+❌ NEVER fabricate job titles or experience
+
+This system processes REAL job candidates. Invented data sabotages hiring decisions and wastes human time reviewing fake profiles.
+
+---
+
+[Original system prompt continues below...]
+```
+
+2. **Extract Candidate Info Node** - Updated `parameters.options.systemMessage` and all attribute descriptions:
+```markdown
+🔴 CRITICAL EXTRACTION RULES 🔴
+
+You are extracting data from real job candidate resumes. Accuracy is MANDATORY.
+
+RULES:
+1. Extract ONLY what is explicitly written - NEVER invent data
+2. If a field is missing, return 'NOT FOUND' - NEVER use placeholders
+3. Preserve exact formatting from source text
+4. If resume is blank or unreadable, return 'INSUFFICIENT DATA' for all fields
+5. NEVER use example names like 'John Doe', 'Jane Smith', etc.
+6. NEVER create placeholder emails like 'john@example.com'
+7. NEVER fabricate phone numbers
+
+This data directly impacts hiring decisions. Fake data wastes recruiter time and creates false candidate profiles.
+```
+
+Updated attribute descriptions to enforce strict extraction:
+- `full_name`: "Candidate's full name EXACTLY as written in resume. If no name is present, return 'NOT FOUND'. NEVER use placeholder names like 'John Doe' or 'Jane Doe'."
+- `email_address`: "Email address EXACTLY as written in resume. If no email is present, return 'NOT FOUND'. NEVER invent or create email addresses."
+- Similar strict rules for all other fields
+
+3. **MCP Operations Applied:**
+```javascript
+mcp__n8n-mcp__n8n_update_partial_workflow({
+  id: "MMaJkr8abEjnCM2h",
+  operations: [
+    { type: "updateNode", nodeName: "AI Recruiter Analysis", updates: {...} },
+    { type: "updateNode", nodeName: "Extract Candidate Info", updates: {...} }
+  ]
+})
+```
+
+**Result:**
+- 2 operations applied successfully
+- Workflow validation passed (no new errors introduced)
+- AI nodes now explicitly instructed to never fabricate data
+- Clear fallback values ("NOT FOUND", "INSUFFICIENT DATA") for missing fields
+- Real-world consequences explained to AI (hiring decisions, wasted time)
+
+**Reusable Pattern - AI Data Integrity Guard Template:**
+
+**ALWAYS apply to AI extraction nodes processing critical data:**
+
+```markdown
+🔴 CRITICAL DATA INTEGRITY RULES - VIOLATION IS UNACCEPTABLE 🔴
+
+1. EXTRACT ONLY - Never invent, assume, or fabricate ANY data
+2. If field not stated, return "NOT FOUND" - NEVER guess
+3. [Domain-specific prohibition: no placeholder names, emails, etc.]
+4. [Field-specific extraction rules: dates from explicit mentions only]
+5. If source is invalid, return "INSUFFICIENT DATA" for ALL fields
+
+POSITIVE REINFORCEMENT:
+✅ DO extract exactly what is written
+✅ DO preserve original formatting
+✅ DO return "NOT FOUND" for missing fields
+✅ DO flag incomplete data
+
+❌ NEVER invent data
+❌ NEVER use placeholders
+❌ NEVER infer missing information
+❌ NEVER [domain-specific prohibition]
+
+This data impacts [real-world consequence]. Fake data causes [specific harm].
+```
+
+**Key Elements of Effective Data Integrity Guards:**
+1. **Visual urgency** - 🔴 emoji and CAPS for critical words to grab attention
+2. **Numbered rules** - Clear, scannable list format
+3. **Explicit examples** - Show exactly what NOT to do ("John Doe", "john@example.com")
+4. **Positive reinforcement** - What TO do (✅)
+5. **Negative reinforcement** - What NOT to do (❌)
+6. **Consequence explanation** - Why accuracy matters (hiring decisions, wasted time)
+7. **Domain-specific rules** - Tailor to your data type (resumes vs support tickets vs financial records)
+
+**Apply Pattern To:**
+- Information Extractor nodes processing candidate resumes
+- AI Agents extracting customer data from support tickets
+- Document parsers processing legal/financial records
+- Any AI extraction where fabricated data causes downstream harm
+- Structured data extraction from unstructured sources
+
+**Testing Checklist:**
+- [ ] Test with complete source data - verify exact extraction
+- [ ] Test with missing critical field - verify "NOT FOUND" returned (not placeholder)
+- [ ] Test with blank/invalid source - verify "INSUFFICIENT DATA" for all fields
+- [ ] Test with ambiguous data - verify no inference or assumption
+- [ ] Monitor real-world outputs for any fabricated data patterns
+
+**Documentation:** Full fix details in `/workflows/development/onedrive-resume-processor/AI_NODE_DATA_INTEGRITY_FIX.md`
+
+---
+
 ## Node Selection Patterns
 
 ## [2025-11-22] Workflow: dev-marketing-image-quality-loop
@@ -618,6 +773,211 @@ The IF node conditions were structured without `leftValue` in the `options` obje
 **Result:** {measurable improvement or success}
 **Reusable Pattern:** {when to apply this pattern again}
 ```
+
+---
+
+## [2026-01-29] Workflow: Google Drive Document Repository (IamjzfFxjHviJvJg)
+
+### Anti-Pattern: Building Workflows Without Error Handling Properties
+**What Happened:** When validating the Google Drive Document Repository workflow after fixing a missing `operation: "search"` parameter, n8n's validator returned 35 warnings about missing error handling on nodes:
+- All Google Drive nodes (7 nodes) lacked `onError` property
+- All PostgreSQL nodes (14 nodes) lacked `onError` and `retryOnFail` properties
+- OpenAI Vision nodes (2 nodes) lacked `onError` and retry configuration
+- Switch/Route nodes (2 nodes) had error output connections but no `onError: "continueErrorOutput"` to enable them
+
+**Impact:**
+- When Google Drive has auth issues, voice agent gets no response or timeout instead of structured error
+- Database logging failures block critical path instead of gracefully continuing
+- OpenAI rate limits (429) immediately fail instead of retrying
+- Switch nodes with error branches don't route errors correctly
+
+**Why It Failed:**
+- Error handling properties are not required for workflow validation to pass
+- Building focused on "making it work" rather than "making it resilient"
+- No established pattern for which nodes need what type of error handling
+- Error handling added as afterthought instead of built-in from start
+
+### Positive Pattern: Error Handling by Node Category (Build Correct from Start)
+**Solution:** Apply error handling properties during initial workflow creation based on node category:
+
+**Implementation - Error Handling Matrix:**
+
+| Node Category | Error Property | Retry Config | Use Case |
+|--------------|----------------|--------------|----------|
+| **Switch/Route nodes** | `onError: "continueErrorOutput"` | N/A | Routes errors to connected error branches |
+| **External API (OpenAI, etc.)** | `onError: "continueRegularOutput"` | `retryOnFail: true, maxTries: 2, waitBetweenTries: 3000` | Handles rate limits and transient failures |
+| **Google Drive/OAuth APIs** | `onError: "continueRegularOutput"` | Optional retry | Auth failures should return gracefully |
+| **Critical Path DB (Search, Get)** | `onError: "continueRegularOutput"` | `retryOnFail: true, maxTries: 2` | Results needed by caller |
+| **Logging/Observability DB** | `onError: "continueRegularOutput"` | None | Don't block workflow if logging fails |
+| **Code nodes** | N/A (usually) | N/A | Input validation should prevent errors |
+
+**Node Configuration Templates:**
+
+```json
+// Switch/Route nodes with error branches
+{
+  "onError": "continueErrorOutput"
+}
+
+// External API nodes (OpenAI, etc.)
+{
+  "onError": "continueRegularOutput",
+  "retryOnFail": true,
+  "maxTries": 2,
+  "waitBetweenTries": 3000
+}
+
+// OAuth-based external services (Google Drive, etc.)
+{
+  "onError": "continueRegularOutput"
+}
+
+// Critical path database operations
+{
+  "onError": "continueRegularOutput",
+  "retryOnFail": true,
+  "maxTries": 2
+}
+
+// Logging/observability database operations
+{
+  "onError": "continueRegularOutput"
+}
+```
+
+**Result:**
+- Workflow warnings reduced from 35 to 9 (74% reduction)
+- Remaining 9 warnings are informational Code node notices
+- Voice agent will now receive structured errors instead of timeouts
+- Database logging won't block critical operations
+- OpenAI nodes will retry once before failing gracefully
+
+**Reusable Pattern:**
+
+**Build Resilience From Start - Error Handling Checklist:**
+
+Before completing ANY workflow build:
+1. [ ] Identify all Switch/Route nodes with error branches → add `onError: "continueErrorOutput"`
+2. [ ] Identify all external API nodes (OpenAI, HTTP Request) → add retry + graceful failure
+3. [ ] Identify all OAuth-based services (Google, Microsoft) → add graceful failure handling
+4. [ ] Categorize database operations: Critical path → retry, Logging → continue on error
+5. [ ] Validate workflow → confirm warning count is minimal (expect only Code node notices)
+
+**Key Learnings:**
+- **Build resilient from the start** - Adding error handling after the fact is inefficient
+- **Categorize nodes by risk** - Different nodes need different error handling strategies
+- **Logging should never block** - Observability is important but not critical path
+- **External APIs need retries** - Rate limits and transient failures are common
+- **Switch nodes need explicit error routing** - Having error connections isn't enough
+
+---
+
+## [2026-01-29] Workflow: Google Drive Document Repository (IamjzfFxjHviJvJg) - Part 2
+
+### Anti-Pattern: Using `onError: continueRegularOutput` Without Downstream Error Detection
+**What Happened:** After adding `onError: "continueRegularOutput"` to Google Drive nodes, we realized downstream Code nodes (Format List Response, Prepare DB Insert) would receive error objects instead of expected file data. Without modification, these nodes would:
+- Try to map non-existent file properties
+- Return empty arrays/malformed data
+- Log "SUCCESS" status for failed operations
+- Send confusing responses back to voice agent
+
+**Impact:**
+- Error handling that doesn't communicate errors is worse than no handling
+- Voice agent would receive empty results without understanding why
+- Database would have incorrect "SUCCESS" entries for failed operations
+
+**Why It Failed:**
+- `onError: "continueRegularOutput"` passes error data through the normal output
+- Downstream nodes must be modified to detect and handle error data
+- Error handling is a chain - every node in the flow must participate
+
+### Positive Pattern: Symbiotic Error Handling (Error Detection in Downstream Nodes)
+**Solution:** When using `onError: "continueRegularOutput"`, ALL downstream processing nodes must include error detection at the start of their logic.
+
+**Implementation - Error Detection Template:**
+
+```javascript
+// At the START of any Code node downstream of an error-handled node:
+const input = $input.first()?.json || {};
+
+// Detect error response (from onError: continueRegularOutput)
+if (input.error || (!input.expectedField && !input.otherExpectedField)) {
+  const errorMsg = input.error?.message || input.message || 'Operation failed';
+  return [{ json: { error: true, message: errorMsg, /* graceful defaults */ } }];
+}
+
+// Normal success path continues below...
+```
+
+**Updated Format List Response:**
+```javascript
+// Handle both success and error cases
+const input = $input.all();
+
+// Check if this is an error response
+if (input.length === 0 || (input[0].json && input[0].json.error)) {
+  const errorMsg = input[0]?.json?.error?.message || 'Drive temporarily unavailable';
+  return [{ json: { error: true, message: errorMsg, files: [], count: 0 } }];
+}
+
+// Normal success path
+const files = input.map(item => ({
+  id: item.json.id,
+  name: item.json.name,
+  // ...
+}));
+return [{ json: { files, count: files.length } }];
+```
+
+**Updated Prepare DB Insert:**
+```javascript
+const downloadNodeData = $input.first()?.json || {};
+
+// Check if this is an error response
+if (downloadNodeData.error || (!downloadNodeData.id && !downloadNodeData.text)) {
+  const errorMsg = downloadNodeData.error?.message || 'Extraction failed';
+  return [{
+    json: {
+      drive_file_id: 'error',
+      extraction_status: 'FAILED',  // Mark as failed, not success
+      extracted_text: errorMsg,
+      // ... other fields with safe defaults
+    }
+  }];
+}
+
+// Normal success path continues...
+```
+
+**Result:**
+- Voice agent receives clear error messages when Drive is unavailable
+- Database correctly logs FAILED status for failed operations
+- Error handling flows through entire chain symbiotically
+- No silent failures or confusing empty results
+
+**Reusable Pattern:**
+
+**Symbiotic Error Handling Checklist:**
+
+When adding `onError: "continueRegularOutput"` to any node:
+1. [ ] Identify ALL downstream Code nodes in the flow
+2. [ ] Add error detection logic at START of each Code node
+3. [ ] Return graceful error response with clear message
+4. [ ] Mark status fields as "FAILED" not "SUCCESS"
+5. [ ] Test full flow with simulated errors
+
+**Error Detection Indicators:**
+- `input.error` exists (explicit error object)
+- Expected data fields are missing
+- Input is empty or null
+- `input.message` contains error text
+
+**Key Learnings:**
+- **Error handling is a chain** - One node's error becomes the next node's input
+- **Graceful degradation requires coordination** - All nodes must participate
+- **Voice agents need clear messages** - "Drive temporarily unavailable" > empty results
+- **Database must reflect reality** - Never log SUCCESS for failed operations
+- **Test the error path** - Simulated failures reveal gaps in error handling
 
 ---
 
@@ -2522,7 +2882,7 @@ mcp__n8n-mcp__validate_node({
 }
 ```
 - ✅ `modelId`: ResourceLocator format with `__rl: true` (required by n8n)
-- ✅ `text`: Expression with `={{ ... }}` format  
+- ✅ `text`: Expression with `={{ ... }}` format
 - ✅ `inputType`: Plain string `"base64"` (for binary data) or `"url"`
 - ❌ `binaryPropertyName`: **NEVER** use `"=data"` → **ALWAYS** use `"data"` (plain string, NO prefix)
 - ✅ `simplify`: Boolean `true` for cleaner output
@@ -2591,7 +2951,7 @@ Apply this checklist EVERY time you configure an OpenAI image node:
 
 **Root Cause:** **FALSE CONFIDENCE LOOP**
 ```
-Success → "I know this" → Skip validation → Memory degrades → 
+Success → "I know this" → Skip validation → Memory degrades →
 Error → Fix → Document → New context → "I know this" → REPEAT
 ```
 
@@ -3050,7 +3410,7 @@ Delegation Protocol Flow:
 
 **What Happened:** While refactoring the Teams Voice Bot workflow, AI Agent nodes kept breaking. Investigation revealed that documentation files contained contradictory information:
 
-- `pattern-index.json` documented typeVersion "3.1" 
+- `pattern-index.json` documented typeVersion "3.1"
 - `agent.md` documented typeVersion 3.1 with explicit parameters
 - Working reference workflow `gjYSN6xNjLw8qsA1` actually uses typeVersion 3 with minimal parameters
 - MCP `get_node` reports 3.1 as "latest" but this causes execution failures
@@ -3158,5 +3518,55 @@ Delegation Protocol Flow:
 - `.claude/patterns/pattern-index.json` - Fixed typeVersion, added reference_workflow
 - `.claude/node-reference/README.md` - Updated table with correct version
 - `.claude/patterns/workflow-architecture/ai-agent-typeversion.md` - Added anti-pattern section
+
+---
+
+## [2026-02-13] Workflow: Resume Analysis with AI Evaluation (MMaJkr8abEjnCM2h)
+
+### Anti-Pattern: Microsoft Excel 365 Node — Wrong dataMode and ResourceLocator Configuration
+**What Happened:** Claude applied `dataMode: "defineBelow"` (which doesn't exist) instead of `"define"`, used `workbook.mode: "id"` instead of `"list"` ResourceLocator format, and omitted required upsert parameters `columnToMatchOn` and `valueToMatchOn`. This broke the node — no columns were mapped and no data was written to the Excel sheet.
+
+**Impact:**
+- Excel sheet completely empty despite workflow showing "success"
+- Node configuration was invalid — had to be manually restored by user
+- Multiple debug cycles wasted
+
+**Why It Failed:** Knowledge gap — no existing documentation for Microsoft Excel 365 node's manual mapping mode. Claude guessed parameter names (`defineBelow`) instead of researching the actual node schema. The MCP `get_node` and `validate_node` tools were not consulted before the first implementation attempt.
+
+### Positive Pattern: Microsoft Excel 365 UPSERT with Manual Column Mapping
+**Solution:** Used MCP `get_node` (mode: info, detail: full) and `validate_node` to discover the correct schema. Key discoveries: `dataMode` must be `"define"` (not `"defineBelow"`), ResourceLocator must use `mode: "list"` with full cached metadata, upsert requires `columnToMatchOn` + `valueToMatchOn`, and field values use `fieldValue` property (not `value`).
+
+**Implementation:**
+1. Get full node schema: `mcp__n8n-mcp__get_node({ nodeType: "n8n-nodes-base.microsoftExcel", mode: "info", detail: "full" })`
+2. Validate config before applying: `mcp__n8n-mcp__validate_node({ nodeType, config, mode: "full" })`
+3. Use `dataMode: "define"` with `fieldsUi.values[]` containing `{ column, fieldValue }` pairs
+4. Preserve full ResourceLocator format (`__rl`, `mode: "list"`, `cachedResultName`, `cachedResultUrl`)
+5. Include `columnToMatchOn` and `valueToMatchOn` for upsert operations
+
+**Result:**
+- All 32 Excel columns populated correctly
+- Upsert correctly matches on compositeKey (candidateId_jobId)
+- Node reference created at `.claude/node-reference/base/microsoft-excel.md`
+
+**Reusable Pattern:**
+When configuring ANY Microsoft Excel 365 node:
+1. ALWAYS check `.claude/node-reference/base/microsoft-excel.md` first (ANTI-MEMORY node)
+2. NEVER guess parameter values — use MCP `get_node` + `validate_node`
+3. `dataMode` is `"define"` NOT `"defineBelow"`
+4. ResourceLocator must preserve `mode: "list"` with cached metadata
+5. Field mapping uses `fieldValue` NOT `value`
+
+**Reference Files:**
+- Node reference: `.claude/node-reference/base/microsoft-excel.md`
+- Workflow: `MMaJkr8abEjnCM2h` (Append New Record node)
+
+### Also Fixed: AI Agent Output Parsing
+**What Happened:** The AI Recruiter Analysis agent was producing markdown-wrapped JSON with syntax errors. The Structured Output Parser failed, passing raw strings to downstream nodes. All AI fields (overall_score, candidate_strengths, etc.) were empty in Excel.
+
+**Solution:**
+1. Enhanced prompt with explicit "CRITICAL OUTPUT FORMAT RULES" — no markdown fences, verify brace matching
+2. Added defensive string parsing in Validate Data Completeness code node — detects string vs object, strips markdown, attempts JSON.parse with fallback
+
+**Result:** AI fields now correctly populate in both email and Excel output.
 
 ---

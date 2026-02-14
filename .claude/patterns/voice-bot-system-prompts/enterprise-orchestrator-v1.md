@@ -380,4 +380,3 @@ const systemPrompt = generateEnterpriseSystemPrompt(context, transcript, convers
 - The `${variableName}` placeholders indicate dynamic content
 - Conversation context should be populated from the Logging Agent's records
 - Response timing values come from the Process Transcript node
-
