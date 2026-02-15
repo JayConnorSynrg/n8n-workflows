@@ -181,12 +181,124 @@ await mcp__n8n-mcp__n8n_validate_workflow({ id: workflowId });
 
 ---
 
+## Phase 4.75: Post-Update Independent Verification (MANDATORY - HARDCODED)
+
+**ZERO TRUST: The agent that made changes CANNOT verify its own work.**
+
+After ANY workflow update, a SEPARATE sub-agent MUST independently fetch the workflow
+and confirm the changes are actually present. If verification fails, the update failed
+and MUST loop until confirmed.
+
+**Why This Exists:**
+- `updateNode` REPLACES parameters — partial updates silently erase fields
+- Sub-agents report "success" based on API 200 response, not actual state verification
+- MCP update operations can succeed (no error) but produce incorrect results
+- Trusting unverified "success" reports is how false beliefs propagate
+
+**Protocol:**
+
+```javascript
+// MANDATORY: After EVERY update operation
+async function postUpdateVerification(workflowId, expectedChanges, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // Step 1: INDEPENDENT agent fetches current workflow state
+    const verificationAgent = Task({
+      subagent_type: "n8n-mcp-delegate",
+      prompt: `INDEPENDENT VERIFICATION - Do NOT trust previous reports.
+        Fetch workflow ${workflowId} using mcp__n8n-mcp__n8n_get_workflow (mode: full).
+        For EACH expected change below, confirm it EXISTS in the actual workflow:
+        ${JSON.stringify(expectedChanges)}
+
+        Return for EACH change:
+        - CONFIRMED: The exact value found matches expected
+        - MISSING: The field/value does not exist
+        - WRONG: A different value exists (report what you found)`,
+      model: "haiku"
+    });
+
+    // Step 2: Evaluate verification results
+    if (allChangesConfirmed(verificationAgent.results)) {
+      return { status: 'VERIFIED', attempt };
+    }
+
+    // Step 3: If verification FAILS — the update did NOT work
+    // Re-apply the update with corrected approach
+    console.log(`Verification FAILED (attempt ${attempt}/${maxRetries})`);
+    console.log(`Missing/wrong changes: ${verificationAgent.failures}`);
+
+    // Re-attempt the update
+    await reapplyUpdate(workflowId, expectedChanges, verificationAgent.failures);
+  }
+
+  // Step 4: If all retries exhausted — HALT and report to user
+  return {
+    status: 'FAILED_AFTER_RETRIES',
+    message: 'Update could not be verified after max retries. Manual intervention needed.'
+  };
+}
+```
+
+**Expected Changes Format:**
+
+```javascript
+// Define what MUST be true after the update
+const expectedChanges = [
+  {
+    node: "AI Agent",
+    field: "parameters.promptType",
+    expected: "define",
+    description: "promptType must be 'define' not missing"
+  },
+  {
+    node: "AI Agent",
+    field: "parameters.text",
+    expected: "={{ $('Get chat message')... }}",
+    description: "User prompt expression must exist"
+  },
+  {
+    node: "AI Agent",
+    field: "parameters.options.systemMessage",
+    contains: "senior talent intelligence",
+    description: "System prompt must contain key phrase"
+  }
+];
+```
+
+**Verification Loop Flow:**
+
+```
+Update Applied
+      │
+      ▼
+INDEPENDENT Agent fetches workflow ◄────────────┐
+      │                                          │
+      ▼                                          │
+Compare actual state vs expected changes         │
+      │                                          │
+      ├─ ALL CONFIRMED → VERIFIED ✅              │
+      │                                          │
+      ├─ MISSING/WRONG → Re-apply update ────────┘
+      │   (max 3 retries)
+      │
+      └─ MAX RETRIES EXHAUSTED → HALT ❌
+         Report to user, do NOT proceed
+```
+
+**HARD RULES:**
+1. The update agent and verification agent MUST be different sub-agent invocations
+2. NEVER trust API response codes alone — verify actual state
+3. NEVER skip this phase — every update gets independently verified
+4. If verification fails 3 times, HALT and involve the user
+
+---
+
 ## Phase 5: Verification Gate (MANDATORY)
 
 **NEVER proceed to documentation until verified:**
 
 ```
 Verification Checklist:
+- [ ] Phase 4.75 independent verification PASSED
 - [ ] Workflow validation passes (0 critical errors)
 - [ ] No blocking warnings
 - [ ] All node configurations validate

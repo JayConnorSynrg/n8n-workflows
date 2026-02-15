@@ -24,6 +24,162 @@
 
 ---
 
+## [2026-02-15] Workflow: Microsoft Teams AIAgent v2 Optimized (AQjMRh9pqK5PebFq)
+
+### Anti-Pattern: Missing Error Handling on Teams Message Fetch
+**What Happened:** The "Get chat message" node had no error handling. When Microsoft Teams triggers fire for ephemeral events (deleted messages, typing indicators, system notifications), the message may not exist by the time the GET request fires (even after 300ms wait). This crashed the entire workflow with "The message you are trying to get doesn't exist".
+
+**Impact:**
+- Workflow execution #5383 failed completely
+- No error feedback sent to user in Teams chat
+- Silent failure — user sees no response at all
+
+**Why It Failed:** Error handling was only applied to the AI Agent node downstream, not to upstream Teams API nodes that are equally susceptible to transient failures. Teams change notifications can fire for events that don't produce retrievable messages.
+
+### Positive Pattern: Dual Error Routing on Teams Message Fetch
+**Solution:** Added `onError: "continueErrorOutput"` to the "Get chat message" node with error output routed to the existing Error Message node.
+
+**Implementation:**
+1. Set `onError: "continueErrorOutput"` on "Get chat message" node
+2. Connected error output (main[1]) to "Error Message" node
+3. User receives "Error database unavailable." feedback instead of silence
+
+**Result:**
+- Workflow no longer crashes on phantom/deleted Teams messages
+- User always gets feedback (either AI response or error message)
+- Normal flow (main[0] → Exclude AI Bot) unchanged
+
+**Reusable Pattern:**
+Apply `onError: "continueErrorOutput"` to ALL Microsoft Teams API nodes (Get chat message, Get Chat Details, Create chat message) — not just downstream processing nodes. Teams webhook triggers can fire for events that produce non-retrievable messages. Always route error outputs to a user-facing error message node so users are never left without feedback.
+
+---
+
+## [2026-02-15] Workflow: Microsoft Teams - AIAgent v2 (AQjMRh9pqK5PebFq)
+
+### Anti-Pattern: HTML contentType ignores newline characters in Teams messages
+**What Happened:** AI Agent produced properly structured responses with `\n` line breaks, but Microsoft Teams rendered them as one continuous paragraph. The "Create chat message" node uses `contentType: "html"`, and HTML ignores `\n` characters entirely.
+
+**Impact:**
+- All formatting (section headers, candidate separations, search suggestions) collapsed into unreadable wall of text
+- Multiple iteration cycles wasted adjusting system prompts when the issue was rendering, not generation
+
+**Why It Failed:** Knowledge gap — no documentation existed for Teams HTML rendering behavior with n8n nodes.
+
+### Positive Pattern: Format Enforcer Code node converts newlines to HTML breaks
+**Solution:** Insert a Code node ("Format Enforcer") between AI Agent and Create chat message that converts `\n\n` to `<br><br>` and `\n` to `<br>`. Also strips markdown artifacts (asterisks, backticks, hashes) since Teams renders HTML, not markdown.
+
+**Implementation:**
+1. Add Code node (n8n-nodes-base.code v2) between AI Agent and Teams reply
+2. Convert double newlines to `<br><br>` (paragraph spacing)
+3. Convert single newlines to `<br>` (line breaks)
+4. Strip all markdown: `*`, `_`, backticks, `#` headings, bullet points
+5. Normalize ALL CAPS section headers
+
+**Result:**
+- Line breaks render correctly in Microsoft Teams chat
+- Section headers (TALENT POOL ASSESSMENT, STRONGEST MATCHES, RECOMMENDED NEXT SEARCH) display on separate lines
+- Candidate names separated from descriptions visually
+
+**Reusable Pattern:** Apply whenever using AI Agent → Microsoft Teams chat with contentType "html". Always convert newlines to `<br>` tags before sending.
+
+---
+
+### Anti-Pattern: LLM token limit too low truncates structured responses
+**What Happened:** Setting maxTokens to 450 caused the AI Agent to truncate responses — cutting off after 1 candidate instead of providing all 3 sections (TALENT POOL ASSESSMENT, STRONGEST MATCHES, RECOMMENDED NEXT SEARCH).
+
+**Impact:**
+- Incomplete responses missing RECOMMENDED NEXT SEARCH section entirely
+- Only 1 of 2-3 candidates included
+
+**Why It Failed:** The structured format with section labels, candidate insights, and search suggestions requires ~110-130 words / ~400-500 tokens. A 450 limit left no margin.
+
+### Positive Pattern: Calibrated LLM settings for structured Teams responses
+**Solution:** Set maxTokens to 600 with temperature 0.3 and topP 0.9 for consistent, complete structured output.
+
+**Implementation:**
+1. maxTokens: 600 (sufficient for 3-section format with 2-3 candidates)
+2. temperature: 0.3 (consistent formatting adherence)
+3. topP: 0.9 (tighter token selection, faster generation)
+
+**Result:**
+- All three sections consistently produced
+- 2-3 candidates with specific insights from vector search data
+- Search refinement suggestions always included
+
+**Reusable Pattern:** For structured multi-section AI responses, set maxTokens to at least 1.3x the expected output length. Temperature 0.3 improves format compliance.
+
+---
+
+### Anti-Pattern: Generic AI responses not grounded in retrieved data
+**What Happened:** System prompt allowed AI to generate generic descriptions ("organizational design and change management skills") instead of synthesizing actual candidate data from the vector search tool results.
+
+**Impact:**
+- Responses read like AI-generated filler instead of expert analysis
+- No specific skills, certifications, or experience referenced from actual candidate profiles
+
+**Why It Failed:** System prompt lacked explicit instruction to ground every claim in the retrieved vector search data.
+
+### Positive Pattern: Data-grounded system prompt with synthesis directive
+**Solution:** System prompt explicitly requires: "Reference specific skills, certifications, and experience from each candidate profile. Do not use generic descriptions — every claim must be grounded in the retrieved data."
+
+**Implementation:**
+1. Add synthesis directive to system prompt
+2. Include 2 reference examples using actual candidate data points
+3. Mandate ALL THREE sections in every response
+4. Closing instruction: "Reference specific candidate data — never use generic descriptions"
+
+**Result:**
+- Responses reference actual skills from vector search (e.g., "HRIS systems fluency", "data collection and analysis skills")
+- Each candidate insight tied to specific profile data
+- Executive-level synthesis rather than generic summaries
+
+**Reusable Pattern:** When AI Agent uses retrieval tools (vector search, database), always include explicit data-grounding directive in system prompt with examples showing how to reference specific retrieved data points.
+
+---
+
+### Positive Pattern: Immediate feedback message before long-running AI operations
+**Solution:** Add a "Searching Message" Teams node before the AI Agent that immediately sends "Searching applicant database now..." to give users instant feedback while the AI processes.
+
+**Implementation:**
+1. Insert Microsoft Teams "Create chat message" node before AI Agent
+2. Message: "Searching applicant database now..." (contentType: "text")
+3. Same chatId expression as reply node: `={{ $('Get IDs').item.json.chatId }}`
+
+**Result:**
+- Users see immediate response instead of silence during 3-5 second AI processing
+- Improved perceived responsiveness without actual speed change
+
+**Reusable Pattern:** For any AI Agent workflow with >2 second processing time, insert a feedback message node before the agent. Use contentType "text" (not html) for simple status messages.
+
+---
+
+### Positive Pattern: Error handler with user-friendly fallback message
+**Solution:** Configure AI Agent with `onError: "continueErrorOutput"` and route error output to a Teams message node that sends "Error database unavailable."
+
+**Implementation:**
+1. Set AI Agent `onError: "continueErrorOutput"` (dual output: success[0] + error[1])
+2. Add "Error Message" Teams node connected to error output (index 1)
+3. Message: "Error database unavailable." (contentType: "text")
+
+**Result:**
+- Vector search failures produce user-friendly error instead of silent failure
+- Success path unaffected — Format Enforcer → Create chat message continues normally
+
+**Reusable Pattern:** For user-facing AI Agent workflows, always configure `onError: "continueErrorOutput"` with a human-readable error message on the error path. Never let errors silently fail in chat interfaces.
+
+---
+
+### Reference Configuration (Verified Working - 2026-02-15)
+
+**Workflow:** AQjMRh9pqK5PebFq
+**LLM:** z-ai/glm-4.7-flash via OpenRouter (temp: 0.3, maxTokens: 600, topP: 0.9)
+**Flow:** Filter → Searching Message → AI Agent → Format Enforcer → Create chat message
+**Error:** AI Agent error[1] → Error Message
+**Format Enforcer:** Strips markdown, converts \n to <br>, normalizes headers
+**User-approved format:** 3 sections (TALENT POOL ASSESSMENT, STRONGEST MATCHES, RECOMMENDED NEXT SEARCH), ALL CAPS labels, 100-150 words, plain text only
+
+---
+
 ## AI Data Integrity Patterns
 
 ## [2026-02-12] Workflow: Resume Analysis with AI Evaluation (PAYCOR TRIGGER) (MMaJkr8abEjnCM2h)
@@ -3568,5 +3724,253 @@ When configuring ANY Microsoft Excel 365 node:
 2. Added defensive string parsing in Validate Data Completeness code node — detects string vs object, strips markdown, attempts JSON.parse with fallback
 
 **Result:** AI fields now correctly populate in both email and Excel output.
+
+---
+
+## [2026-02-15] Workflow: Resume Analysis with AI Evaluation (MMaJkr8abEjnCM2h)
+
+### Anti-Pattern: Using Merge node "combine" mode for simple item concatenation
+**What Happened:** The Merge node "Merge Processed IDs + Candidates" was configured with `mode: "combine"` and `joinMode: "keepEverything"` to combine candidates from Paycor API with processed IDs from Excel. This produced the error: "You need to define at least one pair of fields in 'Fields to Match' to match on." The combine mode requires matching fields (for join operations), but the downstream Code node handles deduplication itself.
+
+**Impact:**
+- Workflow could not execute past the Merge node
+- All downstream processing (AI analysis, email sending) was blocked
+- Required 3 debug iterations to find correct mode
+
+**Why It Failed:** LLM Error - Claude used `mode: "combine"` (which is a JOIN operation requiring match fields) when the actual requirement was simple concatenation of two item lists. The downstream "Filter New Candidates (Fast)" Code node already handles deduplication logic by separating items by data structure (compositeKey vs id+jobId).
+
+### Positive Pattern: Use Merge node "append" mode for item concatenation
+**Solution:** Changed Merge node to `mode: "append"` which simply concatenates all items from both inputs into a single list. No matching fields needed - the downstream Code node handles the logic.
+
+**Implementation:**
+1. Set Merge node parameters to `{ "mode": "append" }`
+2. Remove all other parameters (mergeByFields, joinMode, options)
+3. Verify downstream Code node receives items from both inputs
+
+**Result:**
+- Merge node validation error resolved
+- Both candidate items and processed ID items pass through to Filter
+- Downstream deduplication logic works correctly
+
+**Reusable Pattern:**
+When merging two data streams for downstream code-based processing:
+- Use `mode: "append"` if downstream Code node handles the logic
+- Use `mode: "combine"` ONLY if you need the Merge node itself to join/match records
+- The `combine` mode ALWAYS requires `mergeByFields` with at least one field pair
+
+### Anti-Pattern: Merge node input wiring - both inputs on same index
+**What Happened:** Both "Split Candidates" and "Load All Processed IDs" were connected to Merge input index 0. This meant only one data source reached the Merge node.
+
+**Impact:**
+- Filter received 0 items because only processed IDs arrived (no candidates)
+- Entire downstream processing chain was dead
+
+**Why It Failed:** Connection wiring error during initial workflow configuration.
+
+### Positive Pattern: Merge node requires distinct input indices
+**Solution:** Connect Input 1 (Split Candidates) to index 0 and Input 2 (Load All Processed IDs) to index 1.
+
+**Reusable Pattern:**
+n8n Merge node v3.x requires two SEPARATE inputs on distinct indices (0 and 1). Both inputs on the same index means only one source is processed. Always verify: Input A → index 0, Input B → index 1.
+
+### Anti-Pattern: Parallel n8n workflow updates via multiple agents
+**What Happened:** Two agents simultaneously modified workflow MMaJkr8abEjnCM2h - one fixing Merge connections, the other updating error email templates. The second agent's write overwrote changes from the first, corrupting the workflow.
+
+**Impact:**
+- Split node connections were damaged
+- Required additional debug cycle to identify and fix
+
+**Why It Failed:** Race condition - both agents read the workflow state simultaneously, each modified different aspects, but the second write replaced the entire workflow state (including the first agent's changes).
+
+### Positive Pattern: Sequential single-agent workflow modifications
+**Solution:** ALL n8n workflow modifications must be done by a SINGLE agent in a SINGLE `n8n_update_partial_workflow` call with multiple operations. Never use parallel agents to modify the same workflow.
+
+**Implementation:**
+1. Identify ALL changes needed across multiple nodes
+2. Bundle ALL operations into ONE `n8n_update_partial_workflow` call
+3. Never split workflow modifications across parallel agents
+4. Validate after the single atomic update
+
+**Reusable Pattern:**
+n8n workflow updates are NOT idempotent or merge-safe. Always use a single sequential agent with all operations bundled into one API call. Parallel agent workflow updates WILL cause data loss.
+
+**Reference Files:**
+- Workflow: MMaJkr8abEjnCM2h
+- Node reference: `.claude/node-reference/base/microsoft-excel.md`
+
+---
+
+## [2026-02-15] Workflow: Resume Analysis with AI Evaluation - PAYCOR TRIGGER (MMaJkr8abEjnCM2h)
+
+**Debug Session Summary:** 7 fixes across 4 debug iterations to resolve AI evaluation fields arriving empty at email nodes. Cascading root cause traced from field name mismatch → markdown output → parser failure → empty fields → missing return fields → missing schema fields.
+
+---
+
+### Anti-Pattern 1: AI Agent field reference mismatch with upstream Set node
+**What Happened:** AI Agent prompt referenced `$('Standardize Resume Data').item.json.candidateResume` but the Standardize Resume Data (Set) node outputs the field as `resumeText`. The AI Agent received "Resume text not available" and took a shortcut path producing markdown instead of JSON.
+
+**Impact:**
+- AI saw no resume data despite it being present upstream
+- Cascaded into markdown output instead of JSON
+- Structured Output Parser failed, passing raw string
+- ALL downstream AI fields arrived empty
+
+**Why It Failed:** Knowledge Gap — when the Standardize Resume Data node was created, it renamed fields, but the AI Agent prompt was written referencing the original Paycor field name (`candidateResume`) instead of the standardized name (`resumeText`).
+
+### Positive Pattern 1: Verify field names across node boundaries
+**Solution:** Always trace field names from source node through Set/Code transformations to consuming node. Use the exact output field name from the immediate upstream node, not the original source field name.
+
+**Implementation:**
+1. Check the output schema of the node referenced in expressions
+2. Verify field names match EXACTLY (case-sensitive)
+3. When Set nodes rename fields, ALL downstream references must use the NEW name
+
+**Reusable Pattern:**
+When an AI Agent or any node references `$('NodeName').item.json.fieldName`, verify that `fieldName` exists in NodeName's output schema. Field name mismatches are silent failures — the expression returns undefined/empty, not an error.
+
+---
+
+### Anti-Pattern 2: AI Agent producing markdown when JSON is required
+**What Happened:** When the AI Agent couldn't find resume data (due to Anti-Pattern 1), it fell back to producing a markdown-formatted response instead of the required JSON schema. The Structured Output Parser failed to parse markdown, and with `onError: continueRegularOutput`, the raw markdown string passed through to VDC.
+
+**Impact:**
+- VDC received a string instead of a parsed JSON object
+- Original VDC parsing only handled JSON formats
+- All AI analysis fields extracted as empty strings
+
+**Why It Failed:** Knowledge Gap — no explicit JSON output format requirement in the system prompt. The AI defaulted to its natural markdown format when it couldn't produce a complete analysis.
+
+### Positive Pattern 2: Mandatory JSON format directive in AI Agent system prompts + defensive 3-tier parsing
+**Solution:** Two-layer defense: (1) Add explicit JSON output requirement to system prompt, (2) Add 3-tier defensive parsing in downstream Code nodes to handle JSON code fences, raw JSON extraction, and markdown key-value parsing.
+
+**Implementation:**
+1. Add to system prompt: "Your ENTIRE response MUST be a valid JSON object. Do NOT use markdown formatting."
+2. List ALL required JSON keys explicitly in the system prompt
+3. Add 3-tier parsing in consuming Code node: JSON code fences → raw JSON extraction → markdown key-value fallback
+4. Always include field name fallback chains for nested vs flat structures
+
+**Reusable Pattern:**
+Any n8n AI Agent with a Structured Output Parser should have BOTH: (a) explicit JSON format instructions in the system prompt, and (b) defensive multi-format parsing in downstream nodes. The parser's `onError: continueRegularOutput` means raw strings WILL reach downstream nodes when parsing fails.
+
+---
+
+### Anti-Pattern 3: IF node with strict type validation on JS expression
+**What Happened:** Resume Quality Check IF node used `typeValidation: "strict"` with condition `{{ $json.resumeText && $json.resumeText.length > 50 && $json.resumeText !== 'Resume text not available' }}`. With strict validation, the JS expression returns the last truthy value (a string), not boolean `true`. String !== true evaluates to FALSE, routing valid resumes to the error path.
+
+**Impact:**
+- Valid candidates with proper resume data were routed to the error/skip path
+- Workflow appeared to work but produced no AI analysis
+
+**Why It Failed:** Knowledge Gap — n8n IF node with `typeValidation: "strict"` requires the expression to evaluate to exactly boolean `true`, not just a truthy value. JavaScript `&&` chains return the last truthy operand (a string), which fails strict boolean comparison.
+
+### Positive Pattern 3: Evaluate necessity of validation nodes; use boolean casting for strict IF conditions
+**Solution:** Removed the Resume Quality Check node entirely — it was redundant because the AI Agent and VDC already handle all quality scenarios (missing resume, incomplete data, error paths). When IF nodes with strict validation ARE needed, cast to boolean: `{{ Boolean($json.field && $json.field.length > 50) }}`.
+
+**Implementation:**
+1. Before adding validation IF nodes, check if downstream nodes already handle the scenarios
+2. If strict type validation is required, wrap expression in `Boolean()`
+3. Prefer `continueRegularOutput` error handling over gating IF nodes
+
+**Reusable Pattern:**
+n8n IF node `typeValidation: "strict"` requires explicit boolean values. JS expressions like `a && b && c` return the last truthy value (a string/number), NOT `true`. Always wrap in `Boolean()` for strict mode. Better yet: evaluate whether the IF node is needed at all — defensive downstream handling often makes validation gates redundant.
+
+---
+
+### Anti-Pattern 4: SplitInBatches "done" vs "loop" output index confusion
+**What Happened:** After removing the Resume Quality Check node, the `replaceConnections` operation incorrectly placed "Standardize Resume Data" on index 0 (the "done" output) instead of index 1 (the "loop" output) of the Loop One Candidate (SplitInBatches) node. The node output candidate data on index 1, but nothing was connected there.
+
+**Impact:**
+- Workflow stopped at Loop One Candidate — no candidates were processed
+- The node executed successfully but its loop output had no downstream connection
+
+**Why It Failed:** Knowledge Gap + Process Gap — the `replaceConnections` operation dropped the empty array placeholder `[]` for the done output, collapsing the loop connection from index 1 to index 0.
+
+### Positive Pattern 4: SplitInBatches connection format with explicit empty array placeholder
+**Solution:** SplitInBatches nodes MUST always have TWO entries in the `main` array: index 0 = done (empty or final node), index 1 = loop body. Always include the empty array placeholder.
+
+**Implementation:**
+```json
+"Loop Node Name": {
+  "main": [
+    [],  // index 0 = "done" output (fires when all items processed)
+    [{ "node": "ProcessingNode", "type": "main", "index": 0 }]  // index 1 = "loop" output
+  ]
+}
+```
+
+**Reusable Pattern:**
+When modifying SplitInBatches connections via API, ALWAYS include both array entries. The empty `[]` placeholder for the done output is REQUIRED — without it, the loop output shifts to index 0 and the workflow silently stops processing. This is especially dangerous with `replaceConnections` operations that rebuild the entire connections object.
+
+---
+
+### Anti-Pattern 5: Code node reads fields but omits them from return statement
+**What Happened:** Prepare Email Data Code node extracted `current_title`, `years_experience`, `key_skills`, `overall_score`, and `matched_job_title` into local variables but never included them in the `return` JSON object. Email templates referenced these via `$json.current_title` etc. and got undefined.
+
+**Impact:**
+- 5 fields visible as "Not specified" or empty in both email templates
+- Data existed upstream but was silently dropped at PED
+
+**Why It Failed:** Knowledge Gap — the return statement was manually constructed and these fields were accidentally omitted. No field-level validation exists between Code node output and downstream template references.
+
+### Positive Pattern 5: Return statement field audit against downstream consumers
+**Solution:** Added the 5 missing fields to the return statement. When building Code nodes that feed email templates or other consumers, audit the return object against ALL downstream field references.
+
+**Implementation:**
+1. List ALL `$json.fieldName` references in downstream nodes (email HTML, expressions, etc.)
+2. Verify EVERY referenced field exists in the Code node's return statement
+3. Add any missing fields with appropriate fallbacks
+
+**Reusable Pattern:**
+Code nodes are opaque boundaries — they consume ALL upstream fields and output ONLY what's in the return statement. Any field not explicitly included in `return [{ json: { ... } }]` is permanently lost. Always audit return statements against downstream `$json.*` references. Consider adding a comment listing expected downstream consumers.
+
+---
+
+### Anti-Pattern 6: Structured Output Parser schema missing required extraction fields
+**What Happened:** The Structured Output Parser's `jsonSchemaExample` defined fields for AI analysis (score, risk, strengths) but NOT for basic resume extraction (current_title, years_experience, key_skills). The AI Agent had no schema-level instruction to extract these fields, so they were never produced.
+
+**Impact:**
+- AI never extracted current title, experience, or skills
+- VDC fallback chains got empty values
+- Email templates showed "Not specified" for these fields
+
+**Why It Failed:** Knowledge Gap — the parser schema was designed for AI ANALYSIS fields but not for basic EXTRACTION fields. The assumption was that extraction fields would come from another source, but the VDC code expects them from the AI output.
+
+### Positive Pattern 6: Parser schema must include ALL fields that downstream nodes expect from AI output
+**Solution:** Added `current_title`, `years_experience`, and `key_skills` to both the parser schema AND the system prompt's MANDATORY OUTPUT FORMAT section.
+
+**Implementation:**
+1. Map ALL fields that VDC/downstream nodes read from `aiAnalysis` or AI output
+2. Ensure EVERY such field exists in the Structured Output Parser schema
+3. Add extraction instructions to the system prompt for each field
+4. Include clear fallback values ("NOT FOUND", "INSUFFICIENT DATA") for when data is unavailable
+
+**Reusable Pattern:**
+The Structured Output Parser schema is the CONTRACT between the AI Agent and all downstream processing. If a downstream node reads `aiAnalysis.fieldName`, that field MUST exist in the parser schema. Missing schema fields are silent failures — the AI simply doesn't produce them, and downstream nodes get undefined.
+
+---
+
+### Meta-Pattern: Cascading Root Cause Analysis in Multi-Node Pipelines
+
+**Observation:** This debug session revealed a cascading failure chain where the TRUE root cause (field name mismatch at node boundary) was 5 nodes upstream from the visible symptom (empty fields in emails). Each intermediate node masked the failure differently:
+
+```
+Root Cause: candidateResume → resumeText mismatch (Standardize Resume Data → AI Agent)
+  → AI Agent gets no resume → produces markdown instead of JSON
+    → Parser fails → onError passes raw string
+      → VDC gets string → parsing extracts partial/empty data
+        → Merge nodes pass through empty fields
+          → PED drops fields (missing from return)
+            → Emails show empty values (visible symptom)
+```
+
+**Reusable Pattern:**
+When email/output nodes show empty fields, trace BACKWARDS through the entire pipeline node-by-node. Don't stop at the first issue found — there may be cascading failures where fixing one reveals the next. In this case, 7 separate fixes were needed across the full chain.
+
+---
+
+**Reference Files:**
+- Workflow: MMaJkr8abEjnCM2h (n8n cloud)
+- Analysis: `WORKFLOW_MMaJkr8abEjnCM2h_COMPLETE_NODE_EXTRACTION.md`
+- Node configs: `NODE_Validate_Data_Completeness.json`, `NODE_Prepare_Email_Data.json`
 
 ---
