@@ -73,7 +73,7 @@ def get_composio_mcp_url(settings) -> Optional[tuple[str, dict]]:
         )
 
         mcp_url: str = session.mcp.url
-        mcp_headers: dict = session.mcp.headers or {}
+        mcp_headers: dict = getattr(session.mcp, "headers", None) or {}
 
         logger.info(
             f"Composio: SDK MCP session created for user_id={user_id!r} "
