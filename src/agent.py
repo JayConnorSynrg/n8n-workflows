@@ -251,8 +251,8 @@ async def entrypoint(ctx: JobContext):
     def init_llm():
         """Initialize Cerebras LLM with model validation and fallback.
 
-        Tries configured model first. If it fails (404 = model not found,
-        403 = no access), falls back to gpt-oss-120b (production model).
+        Validates model by making a tiny test completion (1 token).
+        If model returns 404/403, falls back to gpt-oss-120b.
         """
         import httpx
 
@@ -260,27 +260,35 @@ async def entrypoint(ctx: JobContext):
         fallback = settings.cerebras_fallback_model
         logger.info(f"Initializing Cerebras LLM: {model} (fallback: {fallback})")
 
-        # Validate model exists with a lightweight models list call
-        try:
-            resp = httpx.get(
-                "https://api.cerebras.ai/v1/models",
-                headers={"Authorization": f"Bearer {settings.cerebras_api_key}"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                available = {m["id"] for m in resp.json().get("data", [])}
-                if model not in available:
+        # Validate model with a real completion call (1 token, fast)
+        # Models can appear in /v1/models but fail on completion (e.g. preview models)
+        if model != fallback:
+            try:
+                resp = httpx.post(
+                    "https://api.cerebras.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.cerebras_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Model '{model}' validated OK")
+                else:
+                    error_msg = resp.json().get("message", resp.text[:100])
                     logger.warning(
-                        f"Model '{model}' not available. "
-                        f"Available: {sorted(available)}. Falling back to '{fallback}'"
+                        f"Model '{model}' failed validation (HTTP {resp.status_code}: {error_msg}). "
+                        f"Falling back to '{fallback}'"
                     )
                     model = fallback
-                else:
-                    logger.info(f"Model '{model}' confirmed available on Cerebras")
-            else:
-                logger.warning(f"Could not verify model availability (HTTP {resp.status_code}), proceeding with '{model}'")
-        except Exception as e:
-            logger.warning(f"Model validation failed ({e}), proceeding with '{model}'")
+            except Exception as e:
+                logger.warning(f"Model validation failed ({e}), falling back to '{fallback}'")
+                model = fallback
 
         return openai.LLM.with_cerebras(
             model=model,
