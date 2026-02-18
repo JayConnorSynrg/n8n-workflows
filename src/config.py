@@ -17,9 +17,12 @@ class Settings(BaseSettings):
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
 
     # Cerebras LLM (1M free tokens/day, ~1000 TPS)
-    # Note: llama-3.3-70b has better function calling support than 8b
+    # Production models with tool calling: gpt-oss-120b, llama3.1-8b
+    # Preview models (may require special access): zai-glm-4.7, qwen-3-235b-a22b-instruct-2507
+    # llama-3.3-70b was deprecated 2026-02-16
     cerebras_api_key: str = Field(..., alias="CEREBRAS_API_KEY")
-    cerebras_model: str = Field(default="llama-3.3-70b", alias="CEREBRAS_MODEL")
+    cerebras_model: str = Field(default="gpt-oss-120b", alias="CEREBRAS_MODEL")
+    cerebras_fallback_model: str = Field(default="gpt-oss-120b", alias="CEREBRAS_FALLBACK_MODEL")
     cerebras_temperature: float = Field(default=0.6, alias="CEREBRAS_TEMPERATURE")
     cerebras_max_tokens: int = Field(default=150, alias="CEREBRAS_MAX_TOKENS")
 

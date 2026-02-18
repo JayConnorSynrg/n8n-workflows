@@ -249,10 +249,41 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        """Initialize Cerebras LLM with GLM-4.7 (~1000 TPS, 1M tokens/day free)."""
-        logger.info(f"Initializing Cerebras LLM: {settings.cerebras_model}")
+        """Initialize Cerebras LLM with model validation and fallback.
+
+        Tries configured model first. If it fails (404 = model not found,
+        403 = no access), falls back to gpt-oss-120b (production model).
+        """
+        import httpx
+
+        model = settings.cerebras_model
+        fallback = settings.cerebras_fallback_model
+        logger.info(f"Initializing Cerebras LLM: {model} (fallback: {fallback})")
+
+        # Validate model exists with a lightweight models list call
+        try:
+            resp = httpx.get(
+                "https://api.cerebras.ai/v1/models",
+                headers={"Authorization": f"Bearer {settings.cerebras_api_key}"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                available = {m["id"] for m in resp.json().get("data", [])}
+                if model not in available:
+                    logger.warning(
+                        f"Model '{model}' not available. "
+                        f"Available: {sorted(available)}. Falling back to '{fallback}'"
+                    )
+                    model = fallback
+                else:
+                    logger.info(f"Model '{model}' confirmed available on Cerebras")
+            else:
+                logger.warning(f"Could not verify model availability (HTTP {resp.status_code}), proceeding with '{model}'")
+        except Exception as e:
+            logger.warning(f"Model validation failed ({e}), proceeding with '{model}'")
+
         return openai.LLM.with_cerebras(
-            model=settings.cerebras_model,
+            model=model,
             api_key=settings.cerebras_api_key,
             temperature=settings.cerebras_temperature,
         )
@@ -324,16 +355,17 @@ async def entrypoint(ctx: JobContext):
     mcp_servers = []
     mcp_url = settings.mcp_server_url.strip()
     if mcp_url:
-        # Composio MCP endpoint uses SSE transport but URL ends with /mcp,
-        # which causes LiveKit to auto-detect Streamable HTTP (wrong).
-        # Force SSE transport explicitly. timeout=10 for cold-start latency.
-        mcp_servers.append(mcp.MCPServerHTTP(
-            url=mcp_url,
-            transport_type="sse",
-            timeout=10,
-            sse_read_timeout=300,
-        ))
-        logger.info(f"MCP: Connecting (SSE) to {mcp_url[:60]}...")
+        # Composio MCP endpoint - let LiveKit auto-detect transport type.
+        # URL ending in /mcp → Streamable HTTP auto-detection.
+        # timeout=15 for cold-start latency on Composio's backend.
+        try:
+            mcp_servers.append(mcp.MCPServerHTTP(
+                url=mcp_url,
+                timeout=15,
+            ))
+            logger.info(f"MCP: Configured (auto-detect) {mcp_url[:60]}...")
+        except Exception as e:
+            logger.warning(f"MCP: Failed to configure server ({e}), continuing without MCP")
     else:
         logger.info("MCP: Disabled (MCP_SERVER_URL not configured)")
 
