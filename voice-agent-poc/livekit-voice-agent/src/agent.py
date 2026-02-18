@@ -347,23 +347,28 @@ async def entrypoint(ctx: JobContext):
     # Build tool list: n8n webhook tools + optional Composio Tool Router
     all_tools = list(ASYNC_TOOLS)
 
-    # Composio integration: Tool Router (recommended) or MCP (legacy)
+    # Composio integration: SDK MCP session (recommended) or legacy direct MCP URL
     mcp_servers = []
     if settings.composio_router_enabled and settings.composio_api_key:
-        # TOOL ROUTER MODE: Single meta-tool, dynamic discovery + execution
-        # Adds ~200 tokens to context instead of 10K-60K for all MCP schemas
-        from .tools.composio_router import composio_execute
-        all_tools.append(composio_execute)
-        logger.info("Composio: Tool Router enabled (1 meta-tool, dynamic discovery)")
+        # SDK MCP MODE: Official Composio SDK creates a scoped session per user.
+        # LiveKit connects to the resulting MCP URL - tools appear natively in LLM context.
+        from .tools.composio_router import get_composio_mcp_url
+        composio_result = get_composio_mcp_url(settings)
+        if composio_result:
+            composio_url, composio_headers = composio_result
+            mcp_servers.append(mcp.MCPServerHTTP(url=composio_url, timeout=15))
+            logger.info("Composio: SDK MCP session created (scoped toolkits)")
+        else:
+            logger.warning("Composio: Failed to create MCP session, continuing without extended tools")
     elif settings.mcp_server_url.strip():
-        # LEGACY MCP MODE: All tool schemas loaded into LLM context
+        # LEGACY DIRECT MCP URL: used when COMPOSIO_ROUTER_ENABLED=false
         mcp_url = settings.mcp_server_url.strip()
         try:
             mcp_servers.append(mcp.MCPServerHTTP(
                 url=mcp_url,
                 timeout=15,
             ))
-            logger.info(f"Composio: MCP mode (all tools in context) {mcp_url[:60]}...")
+            logger.info(f"Composio: Legacy direct MCP URL {mcp_url[:60]}...")
         except Exception as e:
             logger.warning(f"Composio: MCP failed ({e}), continuing without extended tools")
     else:

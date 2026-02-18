@@ -77,6 +77,7 @@ class Settings(BaseSettings):
         alias="COMPOSIO_BASE_URL"
     )
     composio_router_enabled: bool = Field(default=True, alias="COMPOSIO_ROUTER_ENABLED")
+    composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
     # MCP Integration (MODE 2 - only used if COMPOSIO_ROUTER_ENABLED=false)
     mcp_server_url: str = Field(default="", alias="MCP_SERVER_URL")
