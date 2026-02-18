@@ -164,6 +164,8 @@ livekit-*.yaml
 
 # Database Files
 *.sql
+!voice-agent-poc/database/*.sql
+!voice-agent-poc/database/migrations/*.sql
 *.dump
 *.sqlite
 *.sqlite3
