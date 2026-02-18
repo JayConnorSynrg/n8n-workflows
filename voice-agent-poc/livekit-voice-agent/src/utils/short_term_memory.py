@@ -76,20 +76,25 @@ TOOL_CATEGORIES = {
 
     # Email tools
     "send_email": ToolCategory.EMAIL,
+    "sendEmail": ToolCategory.EMAIL,
     "email_tool": ToolCategory.EMAIL,
 
     # Database tools
     "database_query_tool": ToolCategory.DATABASE,
     "query_database": ToolCategory.DATABASE,
+    "queryDatabase": ToolCategory.DATABASE,
 
     # Vector store tools
     "vector_database_tool": ToolCategory.VECTOR,
     "vector_store_async": ToolCategory.VECTOR,
     "store_knowledge": ToolCategory.VECTOR,
+    "storeKnowledge": ToolCategory.VECTOR,
+    "knowledgeBase": ToolCategory.VECTOR,
 
     # Context tools
     "session_history_tool": ToolCategory.CONTEXT,
     "query_context": ToolCategory.CONTEXT,
+    "checkContext": ToolCategory.CONTEXT,
     "get_session_summary": ToolCategory.CONTEXT,
 }
 

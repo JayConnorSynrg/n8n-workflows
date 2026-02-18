@@ -4,6 +4,7 @@ Architecture:
 - Tools return natural language summaries, never JSON
 - Descriptions guide LLM behavior for executive UX
 - Background execution with conversational result announcements
+- Tool names use camelCase (no underscores) to prevent TTS saying "underscore"
 """
 from typing import Optional
 
@@ -25,10 +26,8 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
 # =============================================================================
 
 @llm.function_tool(
-    name="send_email",
-    description="""Send an email. WRITE OPERATION - requires user confirmation.
-    Before calling: Confirm recipient, subject, and message with user.
-    After calling: Report sent status briefly.""",
+    name="sendEmail",
+    description="Send an email. Confirm recipient subject and message with user first.",
 )
 async def send_email_async(
     to: str,
@@ -43,7 +42,7 @@ async def send_email_async(
         return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
 
     await worker.dispatch(
-        tool_name="send_email",
+        tool_name="sendEmail",
         tool_func=email_tool.send_email_tool,
         kwargs={"to": to, "subject": subject, "body": body, "cc": cc},
     )
@@ -55,40 +54,32 @@ async def send_email_async(
 # =============================================================================
 
 @llm.function_tool(
-    name="search_drive",
-    description="""Search Google Drive for documents. READ OPERATION - execute immediately.
-    Returns matching documents directly. Summarize findings naturally for the user.""",
+    name="searchDrive",
+    description="Search Google Drive for documents by keyword or topic. Summarize findings for the user.",
 )
 async def search_documents_async(
     query: str,
     max_results: int = 5,
 ) -> str:
     """Search Drive documents - runs synchronously for immediate results."""
-    # READ operations run synchronously to give LLM immediate results
     return await google_drive_tool.search_documents_tool(query, max_results)
 
 
 @llm.function_tool(
-    name="get_file",
-    description="""Retrieve a specific file from Google Drive. READ OPERATION.
-    Requires file_id from a previous search.
-    Returns document content directly. Summarize content briefly for the user.""",
+    name="getFile",
+    description="Retrieve a specific file from Google Drive by file ID from a previous search.",
 )
 async def get_document_async(file_id: str) -> str:
     """Get document content - runs synchronously for immediate results."""
-    # READ operations run synchronously to give LLM immediate results
     return await google_drive_tool.get_document_tool(file_id)
 
 
 @llm.function_tool(
-    name="list_files",
-    description="""List files in Google Drive. READ OPERATION - execute immediately.
-    Returns file names directly. Summarize results naturally for the user.""",
+    name="listFiles",
+    description="List recent files in Google Drive. Summarize results naturally.",
 )
 async def list_drive_files_async(max_results: int = 10) -> str:
     """List Drive files - runs synchronously for immediate results."""
-    # READ operations run synchronously to give LLM immediate results
-    # This prevents the LLM from looping while waiting for async results
     return await google_drive_tool.list_drive_files_tool(max_results)
 
 
@@ -97,10 +88,8 @@ async def list_drive_files_async(max_results: int = 10) -> str:
 # =============================================================================
 
 @llm.function_tool(
-    name="knowledge_base",
-    description="""Search or store in knowledge base.
-    For action="search": READ - execute immediately, summarize findings.
-    For action="store": WRITE - requires user confirmation first.""",
+    name="knowledgeBase",
+    description="Search or store in the knowledge base. For search execute immediately. For store confirm with user first.",
 )
 async def vector_store_async(
     action: str,
@@ -108,17 +97,14 @@ async def vector_store_async(
     category: Optional[str] = None,
 ) -> str:
     """Knowledge base operations."""
-    # READ operations (search) run synchronously for immediate results
-    # WRITE operations (store) run async with confirmation
     if action.lower() in ["search", "find", "query"]:
         return await database_tool.query_database_tool(content)
     else:
-        # WRITE operation - use async for background execution
         worker = get_worker()
         if not worker:
             return await vector_store_tool.store_knowledge_tool(content, category or "general", None)
         await worker.dispatch(
-            tool_name="store_knowledge",
+            tool_name="storeKnowledge",
             tool_func=vector_store_tool.store_knowledge_tool,
             kwargs={"content": content, "category": category or "general", "source": None},
         )
@@ -130,13 +116,11 @@ async def vector_store_async(
 # =============================================================================
 
 @llm.function_tool(
-    name="query_db",
-    description="""Query the database. READ OPERATION - execute immediately.
-    Returns results directly. Summarize results conversationally for the user.""",
+    name="queryDatabase",
+    description="Query the database for records analytics or lookups. Returns results immediately.",
 )
 async def database_query_async(query: str) -> str:
     """Query database - runs synchronously for immediate results."""
-    # READ operations run synchronously to give LLM immediate results
     return await database_tool.query_database_tool(query)
 
 
@@ -145,16 +129,14 @@ async def database_query_async(query: str) -> str:
 # =============================================================================
 
 @llm.function_tool(
-    name="check_context",
-    description="""Check conversation context or history. READ OPERATION.
-    Returns context directly. Use to recall what was discussed earlier.""",
+    name="checkContext",
+    description="Check conversation context or session history to recall what was discussed earlier.",
 )
 async def query_context_async(
     context_type: str,
     query: Optional[str] = None,
 ) -> str:
     """Query session context - runs synchronously for immediate results."""
-    # READ operations run synchronously to give LLM immediate results
     return await agent_context_tool.query_context_tool(context_type, query)
 
 
@@ -164,9 +146,7 @@ async def query_context_async(
 
 @llm.function_tool(
     name="recall",
-    description="""Recall previously retrieved data from session memory. READ OPERATION.
-    Use to reference earlier search results, file listings, or document content
-    without making another API call.""",
+    description="Recall previously retrieved data from session memory without making another call.",
 )
 async def recall_data_async(
     category: Optional[str] = None,
@@ -223,8 +203,8 @@ def _format_recall(result: dict) -> str:
 
 
 @llm.function_tool(
-    name="memory_status",
-    description="""Get overview of data currently stored in session memory.""",
+    name="memoryStatus",
+    description="Get overview of data currently stored in session memory.",
 )
 async def memory_summary_async() -> str:
     """Memory summary."""
@@ -232,9 +212,8 @@ async def memory_summary_async() -> str:
 
 
 @llm.function_tool(
-    name="recall_drive",
-    description="""Recall previous Drive operation results from memory.
-    Use after list_files or search_drive to reference those results.""",
+    name="recallDrive",
+    description="Recall previous Drive search or listing results from memory.",
 )
 async def recall_drive_data_async(operation: Optional[str] = None) -> str:
     """Recall Drive data from memory."""
@@ -246,15 +225,8 @@ async def recall_drive_data_async(operation: Optional[str] = None) -> str:
 # =============================================================================
 
 @llm.function_tool(
-    name="add_contact",
-    description="""Add a new contact. WRITE OPERATION with multi-gate confirmation.
-    IMPORTANT: This uses a 3-step confirmation process:
-    1. First call: I'll spell the name phonetically - ask user to confirm
-    2. After name confirmed: I'll spell the email - ask user to confirm
-    3. After email confirmed: Contact is saved
-
-    You MUST repeat the spelling back to the user and wait for their confirmation
-    before calling with the next gate parameters.""",
+    name="addContact",
+    description="Add a new contact. Uses 3 step confirmation: spell name then confirm, spell email then confirm, then save.",
 )
 async def add_contact_async(
     name: str,
@@ -280,9 +252,8 @@ async def add_contact_async(
 
 
 @llm.function_tool(
-    name="get_contact",
-    description="""Look up a contact by name, email, or ID. READ OPERATION.
-    Execute immediately and announce the contact details to the user.""",
+    name="getContact",
+    description="Look up a contact by name email or ID. Returns contact details immediately.",
 )
 async def get_contact_async(
     query: Optional[str] = None,
@@ -300,9 +271,8 @@ async def get_contact_async(
 
 
 @llm.function_tool(
-    name="search_contacts",
-    description="""Search contacts by name, email, or company. READ OPERATION.
-    Execute immediately and summarize matching contacts for the user.""",
+    name="searchContacts",
+    description="Search contacts by name email or company. Returns matching contacts immediately.",
 )
 async def search_contacts_async(query: str) -> str:
     """Search contacts - runs synchronously for immediate results."""

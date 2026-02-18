@@ -29,10 +29,10 @@ const MOCK_MESSAGES = [
 ]
 
 const MOCK_TOOL_CALLS = [
-  { id: 'tc-1', name: 'send_email', status: 'completed' as const, timestamp: Date.now() - 4000 },
-  { id: 'tc-2', name: 'query_db', status: 'executing' as const, timestamp: Date.now() - 500 },
-  { id: 'tc-3', name: 'list_files', status: 'pending' as const, timestamp: Date.now() - 200 },
-  { id: 'tc-4', name: 'search_drive', status: 'completed' as const, timestamp: Date.now() - 6000 },
+  { id: 'tc-1', name: 'sendEmail', status: 'completed' as const, timestamp: Date.now() - 4000 },
+  { id: 'tc-2', name: 'queryDatabase', status: 'executing' as const, timestamp: Date.now() - 500 },
+  { id: 'tc-3', name: 'listFiles', status: 'pending' as const, timestamp: Date.now() - 200 },
+  { id: 'tc-4', name: 'searchDrive', status: 'completed' as const, timestamp: Date.now() - 6000 },
 ]
 
 function App() {

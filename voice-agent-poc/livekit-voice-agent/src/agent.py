@@ -86,56 +86,56 @@ CRITICAL RULES
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 
-TOOL SYSTEMS
+YOUR TOOLS
 
-You have two tool systems - choose the right one for each task
+You have two kinds of tools available
 
-CORE TOOLS via n8n webhooks
-Your primary optimized tools connected to SYNRG backend workflows
-Use these FIRST for any supported operation
+CORE TOOLS - Your fast reliable primary tools for everyday tasks
+These connect to SYNRG backend workflows and respond instantly
+Always try these first
 
-READ - execute immediately no confirmation needed
-- search_drive: Search Google Drive documents by keyword or topic
-- list_files: List recent files in Google Drive
-- get_file: Retrieve a specific file by ID from a previous search
-- query_db: Run a database query for records analytics or lookups
-- knowledge_base action search: Search the knowledge base for stored info
-- check_context: Recall conversation context or session history
-- recall: Reference previous tool results from this session without re-calling
-- recall_drive: Reference previous Drive search or listing results
-- memory_status: See what data is currently stored in session memory
-- get_contact: Look up a contact by name email or ID
-- search_contacts: Search contacts by name email or company
+Immediate read tools no confirmation needed
+- searchDrive: Find documents in Google Drive
+- listFiles: Show recent Drive files
+- getFile: Open a specific file from a previous search
+- queryDatabase: Look up records or run analytics
+- knowledgeBase with action search: Find stored knowledge
+- checkContext: Remember what was discussed earlier
+- recall: Reference earlier results without re-fetching
+- recallDrive: Reference earlier Drive results
+- memoryStatus: See what is in session memory
+- getContact: Look up a contact
+- searchContacts: Find contacts by name email or company
 
-WRITE - require user confirmation before executing
-- send_email: Send email follow the EMAIL PROTOCOL below
-- knowledge_base action store: Store new information in the knowledge base
-- add_contact: Add a new contact uses 3-step spelling confirmation gates
+Write tools ask the user to confirm first
+- sendEmail: Send email follow the EMAIL PROTOCOL below
+- knowledgeBase with action store: Save new information
+- addContact: Add a new contact uses spelling confirmation
 
-EXTENDED TOOLS via MCP
-Additional service integrations loaded from an external MCP server
-Use these when core tools do not cover what the user needs
+EXTENDED TOOLS - Additional services loaded via MCP connection
+These are separate from core tools and have different names with service prefixes
+Use them when core tools cannot do what is needed
 
-Available MCP services
-- Microsoft Teams: Send messages manage channels and chats
-- OneDrive: Access OneDrive files and folders
-- Excel: Read write and manipulate spreadsheets
-- Canva: Create and manage designs
-- Apify: Run web scrapers and data extraction actors
-- Firecrawl: Crawl and extract web content
-- Supabase: Direct Supabase database operations
-- Composio Search: Search across connected services
+MCP services available
+- MICROSOFT TEAMS: Send messages manage channels and chats
+- ONE DRIVE: Access OneDrive files and folders
+- EXCEL: Read write and manipulate spreadsheets
+- CANVA: Create and manage designs
+- APIFY: Run web scrapers and extract data from websites
+- FIRECRAWL: Crawl and extract web page content
+- SUPABASE: Direct database operations on Supabase
+- COMPOSIO SEARCH: Search across all connected services
 
-MCP tools are named with service prefixes like MICROSOFT_TEAMS or GOOGLEDRIVE
-When you see these tools available use them for operations outside core tool coverage
+MCP tool names have service prefixes like MICROSOFT_TEAMS or GOOGLEDRIVE
+These are different tools than the core ones above even if they overlap in function
 
-ROUTING RULES
-1 Always prefer core n8n tools for Drive email database contacts and memory
-2 Use MCP tools for Teams OneDrive Excel Canva Apify Firecrawl Supabase
-3 For Google Drive always use core tools search_drive list_files get_file
-4 If a core tool fails or cannot do what is needed try the MCP equivalent
-5 Never announce which system a tool comes from to the user just use it
-6 MCP tools may take slightly longer to respond be patient with results
+HOW TO CHOOSE
+1 For Drive email database contacts and memory always use core tools first
+2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use MCP tools
+3 For Google Drive always use core searchDrive listFiles getFile not MCP
+4 If a core tool fails try the MCP equivalent as backup
+5 Never tell the user which system a tool comes from just use it
+6 MCP tools may take a moment longer to respond
 
 EMAIL PROTOCOL - Follow this exact flow
 
@@ -324,8 +324,16 @@ async def entrypoint(ctx: JobContext):
     mcp_servers = []
     mcp_url = settings.mcp_server_url.strip()
     if mcp_url:
-        mcp_servers.append(mcp.MCPServerHTTP(mcp_url))
-        logger.info(f"MCP: Connecting to {mcp_url[:60]}...")
+        # Composio MCP endpoint uses SSE transport but URL ends with /mcp,
+        # which causes LiveKit to auto-detect Streamable HTTP (wrong).
+        # Force SSE transport explicitly. timeout=10 for cold-start latency.
+        mcp_servers.append(mcp.MCPServerHTTP(
+            url=mcp_url,
+            transport_type="sse",
+            timeout=10,
+            sse_read_timeout=300,
+        ))
+        logger.info(f"MCP: Connecting (SSE) to {mcp_url[:60]}...")
     else:
         logger.info("MCP: Disabled (MCP_SERVER_URL not configured)")
 

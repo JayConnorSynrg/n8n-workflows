@@ -12,44 +12,53 @@ interface ToolCall {
 
 // n8n workflow mapping - tool name to workflow ID
 const TOOL_WORKFLOW_MAP: Record<string, { id: string; webhook: string }> = {
-  send_email: { id: 'kBuTRrXTJF1EEBEs', webhook: '/execute-gmail' },
-  search_drive: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
-  list_files: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
-  get_file: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
-  query_db: { id: 'z02K1a54akYXMkyj', webhook: '/database-query' },
-  knowledge_base: { id: 'jKMw735r3nAN6O7u', webhook: '/vector-store' },
-  check_context: { id: 'ouWMjcKzbj6nrYXz', webhook: '/agent-context-access' },
+  sendEmail: { id: 'kBuTRrXTJF1EEBEs', webhook: '/execute-gmail' },
+  searchDrive: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
+  listFiles: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
+  getFile: { id: 'IamjzfFxjHviJvJg', webhook: '/drive-document-repo' },
+  queryDatabase: { id: 'z02K1a54akYXMkyj', webhook: '/database-query' },
+  knowledgeBase: { id: 'jKMw735r3nAN6O7u', webhook: '/vector-store' },
+  checkContext: { id: 'ouWMjcKzbj6nrYXz', webhook: '/agent-context-access' },
   recall: { id: '', webhook: '' }, // Memory only
-  memory_status: { id: '', webhook: '' }, // Memory only
-  recall_drive: { id: '', webhook: '' }, // Memory only
+  memoryStatus: { id: '', webhook: '' }, // Memory only
+  recallDrive: { id: '', webhook: '' }, // Memory only
+  addContact: { id: '', webhook: '/contacts' },
+  getContact: { id: '', webhook: '/contacts' },
+  searchContacts: { id: '', webhook: '/contacts' },
 }
 
 // Tool display names
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  send_email: 'Email',
-  search_drive: 'Drive Search',
-  list_files: 'Drive Files',
-  get_file: 'Get Document',
-  query_db: 'Database',
-  knowledge_base: 'Knowledge Base',
-  check_context: 'Context',
+  sendEmail: 'Email',
+  searchDrive: 'Drive Search',
+  listFiles: 'Drive Files',
+  getFile: 'Get Document',
+  queryDatabase: 'Database',
+  knowledgeBase: 'Knowledge Base',
+  checkContext: 'Context',
   recall: 'Memory',
-  memory_status: 'Memory Status',
-  recall_drive: 'Drive Memory',
+  memoryStatus: 'Memory Status',
+  recallDrive: 'Drive Memory',
+  addContact: 'Add Contact',
+  getContact: 'Get Contact',
+  searchContacts: 'Search Contacts',
 }
 
-// Tool icons (using emoji for simplicity, can be replaced with SVG icons)
+// Tool icons
 const TOOL_ICONS: Record<string, string> = {
-  send_email: '✉️',
-  search_drive: '🔍',
-  list_files: '📁',
-  get_file: '📄',
-  query_db: '🗄️',
-  knowledge_base: '🧠',
-  check_context: '💭',
+  sendEmail: '✉️',
+  searchDrive: '🔍',
+  listFiles: '📁',
+  getFile: '📄',
+  queryDatabase: '🗄️',
+  knowledgeBase: '🧠',
+  checkContext: '💭',
   recall: '💾',
-  memory_status: '📊',
-  recall_drive: '💿',
+  memoryStatus: '📊',
+  recallDrive: '💿',
+  addContact: '👤',
+  getContact: '📇',
+  searchContacts: '🔎',
 }
 
 interface ToolCallCardProps {
