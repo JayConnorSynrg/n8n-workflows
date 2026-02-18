@@ -21,13 +21,16 @@ class Settings(BaseSettings):
     # Cerebras: Fast inference but limited context (8K-65K depending on model)
     llm_provider: str = Field(default="fireworks", alias="LLM_PROVIDER")
 
-    # Fireworks AI (Primary LLM - 128K context, solid tool calling)
-    # Models: accounts/fireworks/models/llama-v3p3-70b-instruct (default)
-    #         accounts/fireworks/models/deepseek-v3p1
-    #         accounts/fireworks/models/kimi-k2-instruct-0905
+    # Fireworks AI (Primary LLM - function calling + large context)
+    # IMPORTANT: Only use models with function calling support on Fireworks.
+    # llama-v3p3-70b-instruct does NOT support function calling on Fireworks!
+    # Models with FC: deepseek-v3p1 (163K, fastest TTFT)
+    #                 llama4-scout-instruct-basic (1M ctx, cheapest)
+    #                 llama-v3p1-70b-instruct (131K, battle-tested)
+    #                 kimi-k2-instruct-0905 (262K, agentic)
     fireworks_api_key: str = Field(default="", alias="FIREWORKS_API_KEY")
     fireworks_model: str = Field(
-        default="accounts/fireworks/models/llama-v3p3-70b-instruct",
+        default="accounts/fireworks/models/deepseek-v3p1",
         alias="FIREWORKS_MODEL"
     )
     fireworks_temperature: float = Field(default=0.6, alias="FIREWORKS_TEMPERATURE")
@@ -60,23 +63,17 @@ class Settings(BaseSettings):
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    # Composio Integration - Two modes:
-    #
-    # MODE 1: Tool Router (RECOMMENDED) - Only 1 tool in LLM context
-    #   Set COMPOSIO_API_KEY + COMPOSIO_ROUTER_ENABLED=true
-    #   Agent gets a single "composio" meta-tool that dynamically discovers + executes
-    #   Saves massive context window space vs loading all tool schemas
-    #
-    # MODE 2: Native MCP (legacy) - All tools dumped into LLM context
-    #   Set MCP_SERVER_URL to Composio MCP endpoint
-    #   Works but consumes 10K-60K tokens of context for tool schemas
-    #
+    # Composio Integration
+    # WARNING: The MCP approach dumps ALL toolkit actions as individual tool schemas
+    # into the LLM context (200-400 schemas from 8 toolkits). This overwhelms most
+    # models' function calling. Disabled by default until SDK-native integration
+    # is implemented (registering specific actions as LiveKit function_tools).
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")
     composio_base_url: str = Field(
         default="https://backend.composio.dev/api",
         alias="COMPOSIO_BASE_URL"
     )
-    composio_router_enabled: bool = Field(default=True, alias="COMPOSIO_ROUTER_ENABLED")
+    composio_router_enabled: bool = Field(default=False, alias="COMPOSIO_ROUTER_ENABLED")
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
     # MCP Integration (MODE 2 - only used if COMPOSIO_ROUTER_ENABLED=false)
