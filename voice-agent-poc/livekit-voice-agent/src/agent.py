@@ -17,6 +17,7 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
+    mcp,
     room_io,
 )
 from livekit.plugins import silero, deepgram, cartesia, openai
@@ -85,18 +86,56 @@ CRITICAL RULES
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 
-TOOLS
+TOOL SYSTEMS
 
-READ tools execute immediately no confirmation needed
-- list_files: List Drive files
-- search_drive: Search Drive documents
-- get_file: Retrieve specific file
-- query_db: Query database
-- recall: Access previous results from memory
+You have two tool systems - choose the right one for each task
 
-WRITE tools require structured confirmation flow
-- send_email: Follow EMAIL PROTOCOL below
-- knowledge_base with action store: Confirm content once then execute
+CORE TOOLS via n8n webhooks
+Your primary optimized tools connected to SYNRG backend workflows
+Use these FIRST for any supported operation
+
+READ - execute immediately no confirmation needed
+- search_drive: Search Google Drive documents by keyword or topic
+- list_files: List recent files in Google Drive
+- get_file: Retrieve a specific file by ID from a previous search
+- query_db: Run a database query for records analytics or lookups
+- knowledge_base action search: Search the knowledge base for stored info
+- check_context: Recall conversation context or session history
+- recall: Reference previous tool results from this session without re-calling
+- recall_drive: Reference previous Drive search or listing results
+- memory_status: See what data is currently stored in session memory
+- get_contact: Look up a contact by name email or ID
+- search_contacts: Search contacts by name email or company
+
+WRITE - require user confirmation before executing
+- send_email: Send email follow the EMAIL PROTOCOL below
+- knowledge_base action store: Store new information in the knowledge base
+- add_contact: Add a new contact uses 3-step spelling confirmation gates
+
+EXTENDED TOOLS via MCP
+Additional service integrations loaded from an external MCP server
+Use these when core tools do not cover what the user needs
+
+Available MCP services
+- Microsoft Teams: Send messages manage channels and chats
+- OneDrive: Access OneDrive files and folders
+- Excel: Read write and manipulate spreadsheets
+- Canva: Create and manage designs
+- Apify: Run web scrapers and data extraction actors
+- Firecrawl: Crawl and extract web content
+- Supabase: Direct Supabase database operations
+- Composio Search: Search across connected services
+
+MCP tools are named with service prefixes like MICROSOFT_TEAMS or GOOGLEDRIVE
+When you see these tools available use them for operations outside core tool coverage
+
+ROUTING RULES
+1 Always prefer core n8n tools for Drive email database contacts and memory
+2 Use MCP tools for Teams OneDrive Excel Canva Apify Firecrawl Supabase
+3 For Google Drive always use core tools search_drive list_files get_file
+4 If a core tool fails or cannot do what is needed try the MCP equivalent
+5 Never announce which system a tool comes from to the user just use it
+6 MCP tools may take slightly longer to respond be patient with results
 
 EMAIL PROTOCOL - Follow this exact flow
 
@@ -281,10 +320,22 @@ async def entrypoint(ctx: JobContext):
     set_worker(tool_worker)
     logger.info("AsyncToolWorker started - tools will execute in background")
 
-    # Define agent with ASYNC tools (non-blocking)
+    # Build MCP server list from config (graceful degradation: empty list = MCP disabled)
+    mcp_servers = []
+    mcp_url = settings.mcp_server_url.strip()
+    if mcp_url:
+        mcp_servers.append(mcp.MCPServerHTTP(mcp_url))
+        logger.info(f"MCP: Connecting to {mcp_url[:60]}...")
+    else:
+        logger.info("MCP: Disabled (MCP_SERVER_URL not configured)")
+
+    logger.info(f"Agent tools: {len(ASYNC_TOOLS)} n8n tools + {len(mcp_servers)} MCP server(s)")
+
+    # Define agent with n8n webhook tools + optional native MCP server(s)
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=ASYNC_TOOLS,  # Use async wrappers that dispatch to background worker
+        tools=ASYNC_TOOLS,
+        mcp_servers=mcp_servers if mcp_servers else None,
     )
 
     # Register event handlers BEFORE starting session
@@ -622,7 +673,7 @@ async def entrypoint(ctx: JobContext):
                                         max_rms = rms
                                     if rms < 100:  # Very quiet (below -50dB)
                                         silent_frames += 1
-                            except Exception:
+                            except Exception:  # nosec B110 - audio frame RMS calc is best-effort
                                 pass
 
                         # Log every 5 seconds

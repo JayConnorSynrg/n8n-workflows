@@ -1,52 +1,69 @@
 #!/bin/bash
 # Deploy LiveKit Voice Agent to Railway
 # Run this script from the livekit-voice-agent directory
+#
+# PREREQUISITES:
+#   1. Railway CLI installed: npm install -g @railway/cli
+#   2. Logged in: railway login
+#   3. Linked to project: railway link
+#   4. .env file populated with real credentials (copy from .env.example)
 
 set -e
 
-echo "🚀 Deploying LiveKit Voice Agent to Railway..."
+echo "Deploying LiveKit Voice Agent to Railway..."
 
 # Check if railway CLI is installed
 if ! command -v railway &> /dev/null; then
-    echo "❌ Railway CLI not installed. Install with: npm install -g @railway/cli"
+    echo "Railway CLI not installed. Install with: npm install -g @railway/cli"
     exit 1
 fi
 
 # Check if logged in
 if ! railway whoami &> /dev/null; then
-    echo "❌ Not logged into Railway. Run: railway login"
+    echo "Not logged into Railway. Run: railway login"
     exit 1
 fi
 
-# Link to project if not already linked
-echo "📋 Checking Railway project link..."
+# Check if linked to project
+echo "Checking Railway project link..."
 if ! railway status &> /dev/null; then
     echo "Please link to your Railway project first:"
     echo "  railway link"
     exit 1
 fi
 
-# Set environment variables
-echo "🔐 Setting environment variables..."
+# Load .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env..."
+    set -a
+    source .env
+    set +a
+else
+    echo "WARNING: No .env file found. Railway env vars must already be set."
+fi
+
+# Set environment variables from .env (only if values are present)
+echo "Setting environment variables on Railway..."
 railway variables set \
-    LIVEKIT_URL="wss://synrg-voice-agent-gqv10vbf.livekit.cloud" \
-    LIVEKIT_API_KEY="API3DKs8E7CmRkE" \
-    LIVEKIT_API_SECRET="W77hapOtBQNH1lU1s542LjS9usBffH5o30cTCVLyj1h" \
-    DEEPGRAM_API_KEY="4197230172af958f472c56f1a59458bc50464b66" \
-    DEEPGRAM_MODEL="nova-3" \
-    GROQ_API_KEY="${GROQ_API_KEY}" \
-    GROQ_MODEL="llama-3.1-8b-instant" \
-    GROQ_TEMPERATURE="0.7" \
-    GROQ_MAX_TOKENS="256" \
-    CARTESIA_API_KEY="sk_car_DaqnaCDij1Ms4aruoVqxjZ" \
-    CARTESIA_MODEL="sonic-3" \
-    CARTESIA_VOICE="5ee9feff-1265-424a-9d7f-8e4d431a12c7" \
-    N8N_WEBHOOK_BASE_URL="https://jayconnorexe.app.n8n.cloud/webhook" \
-    AGENT_NAME="Voice Assistant" \
-    LOG_LEVEL="INFO"
+    LIVEKIT_URL="${LIVEKIT_URL}" \
+    LIVEKIT_API_KEY="${LIVEKIT_API_KEY}" \
+    LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET}" \
+    DEEPGRAM_API_KEY="${DEEPGRAM_API_KEY}" \
+    DEEPGRAM_MODEL="${DEEPGRAM_MODEL:-nova-3}" \
+    CEREBRAS_API_KEY="${CEREBRAS_API_KEY}" \
+    CEREBRAS_MODEL="${CEREBRAS_MODEL:-zai-glm-4.7}" \
+    CEREBRAS_TEMPERATURE="${CEREBRAS_TEMPERATURE:-0.7}" \
+    CEREBRAS_MAX_TOKENS="${CEREBRAS_MAX_TOKENS:-150}" \
+    CARTESIA_API_KEY="${CARTESIA_API_KEY}" \
+    CARTESIA_MODEL="${CARTESIA_MODEL:-sonic-3}" \
+    CARTESIA_VOICE="${CARTESIA_VOICE}" \
+    N8N_WEBHOOK_BASE_URL="${N8N_WEBHOOK_BASE_URL}" \
+    MCP_SERVER_URL="${MCP_SERVER_URL:-}" \
+    AGENT_NAME="${AGENT_NAME:-Voice Assistant}" \
+    LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 # Deploy
-echo "🚂 Deploying to Railway..."
+echo "Deploying to Railway..."
 railway up --detach
 
-echo "✅ Deployment started! Check status with: railway logs"
+echo "Deployment started! Check status with: railway logs"

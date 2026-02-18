@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # MCP Integration (Native LiveKit MCP - replaces Composio LangChain SDK)
+    # Set MCP_SERVER_URL to your MCP endpoint to enable native tool auto-discovery.
+    # Leave empty to run with only ASYNC_TOOLS (n8n webhooks) - graceful degradation.
+    # Example: https://backend.composio.dev/v3/mcp/{id}/mcp?user_id={uid}
+    mcp_server_url: str = Field(default="", alias="MCP_SERVER_URL")
+
+    # Composio Integration (kept for reference - credentials now consumed via MCP endpoint)
+    # These are no longer read by the agent directly; the MCP_SERVER_URL handles auth.
+    composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")
+    composio_toolkits: str = Field(default="", alias="COMPOSIO_TOOLKITS")
+    composio_user_id: str = Field(default="default", alias="COMPOSIO_USER_ID")
+
     @field_validator("livekit_url")
     @classmethod
     def validate_livekit_url(cls, v: str) -> str:
