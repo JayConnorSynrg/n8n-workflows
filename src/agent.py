@@ -112,30 +112,26 @@ Write tools ask the user to confirm first
 - knowledgeBase with action store: Save new information
 - addContact: Add a new contact uses spelling confirmation
 
-EXTENDED TOOLS - Additional services loaded via MCP connection
-These are separate from core tools and have different names with service prefixes
-Use them when core tools cannot do what is needed
+EXTENDED TOOLS - Composio Tool Router
+For services beyond core tools use composioExecute
+It dynamically finds and runs the right action on any connected service
 
-MCP services available
-- MICROSOFT TEAMS: Send messages manage channels and chats
-- ONE DRIVE: Access OneDrive files and folders
+Available services through composioExecute
+- MICROSOFT_TEAMS: Send messages manage channels and chats
+- ONEDRIVE: Access OneDrive files and folders
 - EXCEL: Read write and manipulate spreadsheets
 - CANVA: Create and manage designs
 - APIFY: Run web scrapers and extract data from websites
 - FIRECRAWL: Crawl and extract web page content
 - SUPABASE: Direct database operations on Supabase
-- COMPOSIO SEARCH: Search across all connected services
-
-MCP tool names have service prefixes like MICROSOFT_TEAMS or GOOGLEDRIVE
-These are different tools than the core ones above even if they overlap in function
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
-2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use MCP tools
-3 For Google Drive always use core searchDrive listFiles getFile not MCP
-4 If a core tool fails try the MCP equivalent as backup
+2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use composioExecute
+3 For Google Drive always use core searchDrive listFiles getFile not composioExecute
+4 If a core tool fails try composioExecute as backup
 5 Never tell the user which system a tool comes from just use it
-6 MCP tools may take a moment longer to respond
+6 composioExecute may take a moment longer to respond
 
 EMAIL PROTOCOL - Follow this exact flow
 
@@ -249,51 +245,40 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        """Initialize Cerebras LLM with model validation and fallback.
+        """Initialize LLM based on LLM_PROVIDER setting.
 
-        Validates model by making a tiny test completion (1 token).
-        If model returns 404/403, falls back to gpt-oss-120b.
+        Supports:
+        - "fireworks": Fireworks AI (128K context, reliable tool calling)
+        - "cerebras": Cerebras (fast but limited context)
+
+        Falls back to Cerebras if Fireworks key is missing.
         """
-        import httpx
+        provider = settings.llm_provider.lower().strip()
 
-        model = settings.cerebras_model
-        fallback = settings.cerebras_fallback_model
-        logger.info(f"Initializing Cerebras LLM: {model} (fallback: {fallback})")
+        # Fireworks AI (primary)
+        if provider == "fireworks" and settings.fireworks_api_key:
+            model = settings.fireworks_model
+            logger.info(f"Initializing Fireworks AI LLM: {model}")
+            return openai.LLM.with_fireworks(
+                model=model,
+                api_key=settings.fireworks_api_key,
+                temperature=settings.fireworks_temperature,
+            )
 
-        # Validate model with a real completion call (1 token, fast)
-        # Models can appear in /v1/models but fail on completion (e.g. preview models)
-        if model != fallback:
-            try:
-                resp = httpx.post(
-                    "https://api.cerebras.ai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.cerebras_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "max_tokens": 1,
-                    },
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    logger.info(f"Model '{model}' validated OK")
-                else:
-                    error_msg = resp.json().get("message", resp.text[:100])
-                    logger.warning(
-                        f"Model '{model}' failed validation (HTTP {resp.status_code}: {error_msg}). "
-                        f"Falling back to '{fallback}'"
-                    )
-                    model = fallback
-            except Exception as e:
-                logger.warning(f"Model validation failed ({e}), falling back to '{fallback}'")
-                model = fallback
+        # Cerebras (fallback)
+        if settings.cerebras_api_key:
+            model = settings.cerebras_model
+            logger.info(f"Initializing Cerebras LLM: {model}")
+            return openai.LLM.with_cerebras(
+                model=model,
+                api_key=settings.cerebras_api_key,
+                temperature=settings.cerebras_temperature,
+            )
 
-        return openai.LLM.with_cerebras(
-            model=model,
-            api_key=settings.cerebras_api_key,
-            temperature=settings.cerebras_temperature,
+        # No valid provider configured
+        raise RuntimeError(
+            f"No LLM configured. Set FIREWORKS_API_KEY or CEREBRAS_API_KEY. "
+            f"LLM_PROVIDER='{provider}'"
         )
 
     def init_tts():
@@ -359,30 +344,37 @@ async def entrypoint(ctx: JobContext):
     set_worker(tool_worker)
     logger.info("AsyncToolWorker started - tools will execute in background")
 
-    # Build MCP server list from config (graceful degradation: empty list = MCP disabled)
+    # Build tool list: n8n webhook tools + optional Composio Tool Router
+    all_tools = list(ASYNC_TOOLS)
+
+    # Composio integration: Tool Router (recommended) or MCP (legacy)
     mcp_servers = []
-    mcp_url = settings.mcp_server_url.strip()
-    if mcp_url:
-        # Composio MCP endpoint - let LiveKit auto-detect transport type.
-        # URL ending in /mcp → Streamable HTTP auto-detection.
-        # timeout=15 for cold-start latency on Composio's backend.
+    if settings.composio_router_enabled and settings.composio_api_key:
+        # TOOL ROUTER MODE: Single meta-tool, dynamic discovery + execution
+        # Adds ~200 tokens to context instead of 10K-60K for all MCP schemas
+        from .tools.composio_router import composio_execute
+        all_tools.append(composio_execute)
+        logger.info("Composio: Tool Router enabled (1 meta-tool, dynamic discovery)")
+    elif settings.mcp_server_url.strip():
+        # LEGACY MCP MODE: All tool schemas loaded into LLM context
+        mcp_url = settings.mcp_server_url.strip()
         try:
             mcp_servers.append(mcp.MCPServerHTTP(
                 url=mcp_url,
                 timeout=15,
             ))
-            logger.info(f"MCP: Configured (auto-detect) {mcp_url[:60]}...")
+            logger.info(f"Composio: MCP mode (all tools in context) {mcp_url[:60]}...")
         except Exception as e:
-            logger.warning(f"MCP: Failed to configure server ({e}), continuing without MCP")
+            logger.warning(f"Composio: MCP failed ({e}), continuing without extended tools")
     else:
-        logger.info("MCP: Disabled (MCP_SERVER_URL not configured)")
+        logger.info("Composio: Disabled (no API key or MCP URL configured)")
 
-    logger.info(f"Agent tools: {len(ASYNC_TOOLS)} n8n tools + {len(mcp_servers)} MCP server(s)")
+    logger.info(f"Agent tools: {len(all_tools)} total ({len(ASYNC_TOOLS)} n8n + {len(all_tools) - len(ASYNC_TOOLS)} composio) + {len(mcp_servers)} MCP server(s)")
 
-    # Define agent with n8n webhook tools + optional native MCP server(s)
+    # Define agent with all tools
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=ASYNC_TOOLS,
+        tools=all_tools,
         mcp_servers=mcp_servers if mcp_servers else None,
     )
 
