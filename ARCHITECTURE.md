@@ -317,9 +317,249 @@ railway link
 
 ---
 
+## Provider Alternation Guide
+
+This section documents how to swap STT, LLM, and TTS providers. The modular architecture allows easy provider substitution.
+
+### STT (Speech-to-Text) Providers
+
+**Current: Deepgram Nova-3** (~150ms latency, $0.0044/min)
+
+| Provider | Plugin | Latency | Cost/min | Notes |
+|----------|--------|---------|----------|-------|
+| Deepgram Nova-3 | `livekit.plugins.deepgram` | ~150ms | $0.0044 | Best quality, interim results |
+| Deepgram Nova-2 | `livekit.plugins.deepgram` | ~120ms | $0.0036 | Faster, slightly lower quality |
+| AssemblyAI | `livekit.plugins.assemblyai` | ~200ms | $0.006 | Good accuracy, no streaming |
+| Google Cloud STT | `livekit.plugins.google` | ~180ms | $0.006 | Good multilingual support |
+| Azure Speech | `livekit.plugins.azure` | ~150ms | $0.01 | Enterprise compliance |
+| Whisper (local) | `livekit.plugins.openai` | ~500ms+ | Free | Offline, higher latency |
+
+**To switch STT:**
+
+```python
+# In src/agent.py - replace the STT initialization
+
+# Option 1: Deepgram Nova-2 (faster, cheaper)
+from livekit.plugins import deepgram
+stt = deepgram.STT(model="nova-2", language="en")
+
+# Option 2: AssemblyAI
+from livekit.plugins import assemblyai
+stt = assemblyai.STT(api_key=settings.assemblyai_api_key)
+
+# Option 3: Google Cloud STT
+from livekit.plugins import google
+stt = google.STT(credentials_info=settings.google_credentials)
+
+# Option 4: Azure Speech
+from livekit.plugins import azure
+stt = azure.STT(
+    speech_key=settings.azure_speech_key,
+    speech_region=settings.azure_speech_region
+)
+```
+
+**Environment variables to add:**
+```bash
+# For AssemblyAI
+ASSEMBLYAI_API_KEY=xxxxxxxx
+
+# For Google Cloud
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+
+# For Azure
+AZURE_SPEECH_KEY=xxxxxxxx
+AZURE_SPEECH_REGION=eastus
+```
+
+---
+
+### LLM (Language Model) Providers
+
+**Current: Groq LLaMA 3.1 8B** (~200ms latency, $0.0002/min)
+
+| Provider | Plugin | Latency | Cost/1K tokens | Notes |
+|----------|--------|---------|----------------|-------|
+| Groq LLaMA 3.1 8B | `livekit.plugins.groq` | ~200ms | $0.00005 | Fastest inference |
+| Groq LLaMA 3.1 70B | `livekit.plugins.groq` | ~350ms | $0.0006 | Better quality |
+| OpenAI GPT-4o-mini | `livekit.plugins.openai` | ~400ms | $0.0015 | Good balance |
+| OpenAI GPT-4o | `livekit.plugins.openai` | ~600ms | $0.03 | Best quality |
+| Anthropic Claude 3 Haiku | `livekit.plugins.anthropic` | ~350ms | $0.0025 | Fast, safe |
+| Anthropic Claude 3.5 Sonnet | `livekit.plugins.anthropic` | ~500ms | $0.015 | Better reasoning |
+| Together AI | `livekit.plugins.together` | ~250ms | Varies | Open models |
+
+**To switch LLM:**
+
+```python
+# In src/agent.py - replace the LLM initialization
+
+# Option 1: OpenAI GPT-4o-mini (good balance)
+from livekit.plugins import openai
+llm_instance = openai.LLM(
+    model="gpt-4o-mini",
+    api_key=settings.openai_api_key,
+    temperature=0.7
+)
+
+# Option 2: OpenAI GPT-4o (highest quality)
+from livekit.plugins import openai
+llm_instance = openai.LLM(
+    model="gpt-4o",
+    api_key=settings.openai_api_key,
+    temperature=0.7
+)
+
+# Option 3: Anthropic Claude 3 Haiku (fast, safe)
+from livekit.plugins import anthropic
+llm_instance = anthropic.LLM(
+    model="claude-3-haiku-20240307",
+    api_key=settings.anthropic_api_key
+)
+
+# Option 4: Anthropic Claude 3.5 Sonnet (better reasoning)
+from livekit.plugins import anthropic
+llm_instance = anthropic.LLM(
+    model="claude-3-5-sonnet-20241022",
+    api_key=settings.anthropic_api_key
+)
+
+# Option 5: Groq LLaMA 3.1 70B (higher quality Groq)
+from livekit.plugins import groq
+llm_instance = groq.LLM(
+    model="llama-3.1-70b-versatile",
+    api_key=settings.groq_api_key
+)
+```
+
+**Environment variables to add:**
+```bash
+# For OpenAI
+OPENAI_API_KEY=sk-xxxxxxxx
+
+# For Anthropic
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxx
+
+# For Together AI
+TOGETHER_API_KEY=xxxxxxxx
+```
+
+---
+
+### TTS (Text-to-Speech) Providers
+
+**Current: Cartesia Sonic-3** (~80ms latency, $0.0067/min)
+
+| Provider | Plugin | Latency | Cost/1K chars | Notes |
+|----------|--------|---------|---------------|-------|
+| Cartesia Sonic-3 | `livekit.plugins.cartesia` | ~80ms | $0.01 | Lowest latency, natural |
+| Cartesia Sonic-2 | `livekit.plugins.cartesia` | ~100ms | $0.007 | Good quality, cheaper |
+| ElevenLabs | `livekit.plugins.elevenlabs` | ~150ms | $0.018 | Most natural, expensive |
+| OpenAI TTS | `livekit.plugins.openai` | ~200ms | $0.015 | HD quality option |
+| Azure TTS | `livekit.plugins.azure` | ~120ms | $0.016 | Enterprise, many voices |
+| Google Cloud TTS | `livekit.plugins.google` | ~150ms | $0.016 | WaveNet voices |
+
+**To switch TTS:**
+
+```python
+# In src/agent.py - replace the TTS initialization
+
+# Option 1: ElevenLabs (most natural, higher latency)
+from livekit.plugins import elevenlabs
+tts = elevenlabs.TTS(
+    api_key=settings.elevenlabs_api_key,
+    voice="Rachel",  # or voice ID
+    model_id="eleven_turbo_v2"  # faster model
+)
+
+# Option 2: OpenAI TTS
+from livekit.plugins import openai
+tts = openai.TTS(
+    api_key=settings.openai_api_key,
+    voice="nova",  # alloy, echo, fable, onyx, nova, shimmer
+    model="tts-1"  # or tts-1-hd for higher quality
+)
+
+# Option 3: Azure TTS
+from livekit.plugins import azure
+tts = azure.TTS(
+    speech_key=settings.azure_speech_key,
+    speech_region=settings.azure_speech_region,
+    voice="en-US-JennyNeural"
+)
+
+# Option 4: Google Cloud TTS
+from livekit.plugins import google
+tts = google.TTS(
+    credentials_info=settings.google_credentials,
+    voice_name="en-US-Neural2-C"
+)
+```
+
+**Environment variables to add:**
+```bash
+# For ElevenLabs
+ELEVENLABS_API_KEY=xxxxxxxx
+
+# For OpenAI TTS
+OPENAI_API_KEY=sk-xxxxxxxx  # Same key as LLM
+
+# For Azure TTS
+AZURE_SPEECH_KEY=xxxxxxxx
+AZURE_SPEECH_REGION=eastus
+
+# For Google Cloud TTS
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+```
+
+---
+
+### Recommended Provider Combinations
+
+| Use Case | STT | LLM | TTS | Total Latency | Cost/min |
+|----------|-----|-----|-----|---------------|----------|
+| **Budget (Current)** | Deepgram Nova-3 | Groq LLaMA 3.1 8B | Cartesia Sonic-3 | ~450ms | ~$0.012 |
+| **Quality Focused** | Deepgram Nova-3 | GPT-4o | ElevenLabs | ~950ms | ~$0.05 |
+| **Enterprise** | Azure Speech | Claude 3.5 Sonnet | Azure TTS | ~770ms | ~$0.04 |
+| **Ultra Low Latency** | Deepgram Nova-2 | Groq LLaMA 3.1 8B | Cartesia Sonic-3 | ~400ms | ~$0.011 |
+| **Offline/Private** | Whisper (local) | Ollama (local) | Piper (local) | ~1500ms | Free |
+
+---
+
+### Sample Rate Considerations
+
+When switching providers, ensure sample rates are compatible:
+
+| Component | Expected Sample Rate | Notes |
+|-----------|---------------------|-------|
+| VAD (Silero) | 16000 Hz | Required - no flexibility |
+| STT Input | 16000 Hz | Most STT providers accept this |
+| TTS Output | 24000 Hz (default) | Some providers output 22050 or 44100 |
+
+**If TTS outputs different sample rate:**
+```python
+# LiveKit handles resampling automatically, but you can specify:
+tts = cartesia.TTS(
+    model="sonic-3",
+    voice=settings.cartesia_voice,
+    sample_rate=24000  # Explicitly set to 24kHz
+)
+
+# For room output (matches TTS):
+room_options=room_io.RoomOptions(
+    audio_output=room_io.AudioOutputOptions(
+        sample_rate=24000,  # Match TTS output
+        num_channels=1,
+    ),
+)
+```
+
+---
+
 ## Future Enhancements
 
 1. **Full callback server**: Implement proper callback handling in Railway for real-time gate control
 2. **Session context**: Use session_context table for cross-tool data sharing
 3. **Multiple voices**: Support for different Cartesia voices per context
 4. **Observability**: OpenTelemetry integration for latency tracking
+5. **Provider fallback**: Automatic fallback to backup providers on failure
+6. **A/B testing**: Compare provider quality metrics in production

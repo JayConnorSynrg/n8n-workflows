@@ -5,7 +5,7 @@ Comprehensive Pipeline Test Suite for LiveKit Voice Agent
 Tests all components of the voice pipeline:
 1. LiveKit Cloud connection
 2. Deepgram STT API
-3. Groq LLM API
+3. Cerebras LLM API (GLM-4.7)
 4. Cartesia TTS API
 5. Full pipeline integration
 """
@@ -144,24 +144,28 @@ class PipelineTestSuite:
                 message=f"Connection failed: {str(e)}"
             )
 
-    async def test_groq_api(self) -> TestResult:
-        """Test Groq LLM API connectivity and inference."""
+    async def test_cerebras_api(self) -> TestResult:
+        """Test Cerebras LLM API connectivity and inference."""
         start = time.perf_counter()
         try:
-            from groq import AsyncGroq
+            from openai import AsyncOpenAI
 
-            api_key = os.environ.get("GROQ_API_KEY", "")
-            model = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+            api_key = os.environ.get("CEREBRAS_API_KEY", "")
+            model = os.environ.get("CEREBRAS_MODEL", "zai-glm-4.7")
 
             if not api_key:
                 return TestResult(
-                    name="Groq LLM",
+                    name="Cerebras LLM",
                     passed=False,
                     latency_ms=(time.perf_counter() - start) * 1000,
-                    message="Missing GROQ_API_KEY"
+                    message="Missing CEREBRAS_API_KEY"
                 )
 
-            client = AsyncGroq(api_key=api_key)
+            # Cerebras uses OpenAI-compatible API
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://api.cerebras.ai/v1"
+            )
 
             # Test with a simple completion
             response = await client.chat.completions.create(
@@ -175,7 +179,7 @@ class PipelineTestSuite:
             content = response.choices[0].message.content
 
             return TestResult(
-                name="Groq LLM",
+                name="Cerebras LLM",
                 passed=True,
                 latency_ms=latency,
                 message=f"Inference successful. Response: '{content[:50]}'",
@@ -187,7 +191,7 @@ class PipelineTestSuite:
 
         except Exception as e:
             return TestResult(
-                name="Groq LLM",
+                name="Cerebras LLM",
                 passed=False,
                 latency_ms=(time.perf_counter() - start) * 1000,
                 message=f"API error: {str(e)}"
@@ -328,7 +332,7 @@ class PipelineTestSuite:
                 ("livekit_api_key", settings.livekit_api_key),
                 ("livekit_api_secret", settings.livekit_api_secret),
                 ("deepgram_api_key", settings.deepgram_api_key),
-                ("groq_api_key", settings.groq_api_key),
+                ("cerebras_api_key", settings.cerebras_api_key),
                 ("cartesia_api_key", settings.cartesia_api_key),
             ]
 
@@ -351,7 +355,7 @@ class PipelineTestSuite:
                 message="All required configuration fields present",
                 details={
                     "livekit_url": settings.livekit_url,
-                    "groq_model": settings.groq_model,
+                    "cerebras_model": settings.cerebras_model,
                     "cartesia_voice": settings.cartesia_voice
                 }
             )
@@ -370,7 +374,6 @@ class PipelineTestSuite:
         try:
             # Test imports
             from src.config import get_settings, Settings
-            from src.plugins.groq_llm import GroqLLM, GroqLLMStream
             from src.tools.email_tool import send_email_tool
             from src.tools.database_tool import query_database_tool
             from src.utils.logging import setup_logging
@@ -385,7 +388,7 @@ class PipelineTestSuite:
                 message="All modules imported successfully",
                 details={
                     "modules": [
-                        "config", "plugins.groq_llm", "tools.email_tool",
+                        "config", "tools.email_tool",
                         "tools.database_tool", "utils.logging", "utils.metrics"
                     ]
                 }
@@ -411,7 +414,7 @@ class PipelineTestSuite:
             ("Agent Imports", self.test_agent_imports),
             ("LiveKit Connection", self.test_livekit_connection),
             ("Deepgram STT", self.test_deepgram_api),
-            ("Groq LLM", self.test_groq_api),
+            ("Cerebras LLM", self.test_cerebras_api),
             ("Cartesia TTS", self.test_cartesia_api),
             ("n8n Webhook", self.test_n8n_webhook),
         ]
@@ -435,7 +438,7 @@ class PipelineTestSuite:
         print(f"⏱️  Total latency: {total_latency:.0f}ms")
 
         # Pipeline status
-        critical_tests = ["Config Validation", "LiveKit Connection", "Groq LLM", "Cartesia TTS"]
+        critical_tests = ["Config Validation", "LiveKit Connection", "Cerebras LLM", "Cartesia TTS"]
         critical_passed = all(
             r.passed for r in self.results if r.name in critical_tests
         )

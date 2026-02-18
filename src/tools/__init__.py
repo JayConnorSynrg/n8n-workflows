@@ -1,5 +1,29 @@
 """Tool implementations for the voice agent."""
 from .email_tool import send_email_tool
 from .database_tool import query_database_tool
+from .vector_store_tool import store_knowledge_tool
+from .google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool
+from .agent_context_tool import query_context_tool, get_session_summary_tool
+from .contact_tool import add_contact_tool, get_contact_tool, search_contacts_tool, get_contact_email
 
-__all__ = ["send_email_tool", "query_database_tool"]
+__all__ = [
+    # Communication
+    "send_email_tool",
+    # Knowledge Base
+    "query_database_tool",
+    "store_knowledge_tool",
+    # Documents
+    "search_documents_tool",
+    "get_document_tool",
+    "list_drive_files_tool",
+    # Context & History
+    "query_context_tool",
+    "get_session_summary_tool",
+    # Contacts
+    "add_contact_tool",
+    "get_contact_tool",
+    "search_contacts_tool",
+    "get_contact_email",
+    # NOTE: Composio tools are now loaded via native LiveKit MCP (MCPServerHTTP)
+    # configured through MCP_SERVER_URL. See src/agent.py and composio_tools.py (deprecated).
+]

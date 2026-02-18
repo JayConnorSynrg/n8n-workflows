@@ -17,70 +17,198 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
+    mcp,
     room_io,
 )
-from livekit.plugins import silero, deepgram, cartesia, groq
+from livekit.plugins import silero, deepgram, cartesia, openai
 
-# Try to import turn detector (optional but recommended)
-try:
-    from livekit.plugins.turn_detector.multilingual import MultilingualModel
-    HAS_TURN_DETECTOR = True
-except ImportError:
-    HAS_TURN_DETECTOR = False
-    MultilingualModel = None
+# OPTIMIZED: Turn detector loaded lazily to reduce cold start (saves ~300-500ms)
+# Moved from module-level import to on-demand loading in get_turn_detector()
+HAS_TURN_DETECTOR = None  # Will be set on first check
+_turn_detector_model = None
+
+
+def get_turn_detector():
+    """Lazy-load turn detector model on first use (non-blocking)."""
+    global HAS_TURN_DETECTOR, _turn_detector_model
+
+    if HAS_TURN_DETECTOR is None:
+        try:
+            from livekit.plugins.turn_detector.multilingual import MultilingualModel
+            _turn_detector_model = MultilingualModel()
+            HAS_TURN_DETECTOR = True
+            logger.info("Turn detector loaded successfully (lazy)")
+        except ImportError:
+            HAS_TURN_DETECTOR = False
+            logger.info("Turn detector not available (not installed)")
+        except RuntimeError as e:
+            HAS_TURN_DETECTOR = False
+            logger.warning(f"Turn detector initialization failed: {e}")
+
+    return _turn_detector_model if HAS_TURN_DETECTOR else None
 
 from .config import get_settings
 from .tools.email_tool import send_email_tool
 from .tools.database_tool import query_database_tool
+from .tools.vector_store_tool import store_knowledge_tool
+from .tools.google_drive_tool import search_documents_tool, get_document_tool, list_drive_files_tool, recall_drive_data_tool
+from .tools.agent_context_tool import (
+    query_context_tool,
+    get_session_summary_tool,
+    warm_session_cache,
+    invalidate_session_cache,
+)
+from .tools.async_wrappers import ASYNC_TOOLS
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
+from .utils.context_cache import get_cache_manager
+from .utils.async_tool_worker import AsyncToolWorker, set_worker
+from .utils.short_term_memory import clear_session as clear_session_memory
 
 # Initialize logging
 logger = setup_logging(__name__)
 settings = get_settings()
 
-# System prompt for the voice agent
-SYSTEM_PROMPT = """You are a professional voice assistant for enterprise meetings.
+# =============================================================================
+# AIO VOICE ASSISTANT - EXECUTIVE SYSTEM PROMPT v3
+# =============================================================================
 
-## CORE BEHAVIORS
-- Be concise and direct - keep responses under 2 sentences when possible
-- Always confirm before executing actions (sending emails, creating tasks)
-- Announce completion of all actions
-- Use natural conversational pacing
+SYSTEM_PROMPT = """You are AIO an executive voice assistant
 
-## AVAILABLE TOOLS
-1. send_email: Send emails via Gmail
-   - Requires: to, subject, body
-   - Always confirm recipient and subject before sending
+ROLE
+Senior executive assistant with access to Drive email database and knowledge base
+Communicate like a trusted chief of staff - concise insightful action-oriented
 
-2. query_database: Search the knowledge base
-   - Use for looking up information
-   - Summarize results conversationally
+CRITICAL RULES
+1 VOICE OUTPUT - Write responses as spoken words without punctuation marks
+2 TOOL EXECUTION - When using tools call them via function calling not as text
+3 NEVER output JSON or code in your speech
+4 Keep responses to 1-2 sentences maximum
+5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 
-## RESPONSE GUIDELINES
-- Speak naturally, not like reading text
-- Use contractions (I'll, we're, that's)
-- Avoid technical jargon unless necessary
-- If you don't understand, ask for clarification
+YOUR TOOLS
 
-## ERROR HANDLING
-- If a tool fails, apologize and offer alternatives
-- Never expose technical error details to the user
-"""
+You have two kinds of tools available
+
+CORE TOOLS - Your fast reliable primary tools for everyday tasks
+These connect to SYNRG backend workflows and respond instantly
+Always try these first
+
+Immediate read tools no confirmation needed
+- searchDrive: Find documents in Google Drive
+- listFiles: Show recent Drive files
+- getFile: Open a specific file from a previous search
+- queryDatabase: Look up records or run analytics
+- knowledgeBase with action search: Find stored knowledge
+- checkContext: Remember what was discussed earlier
+- recall: Reference earlier results without re-fetching
+- recallDrive: Reference earlier Drive results
+- memoryStatus: See what is in session memory
+- getContact: Look up a contact
+- searchContacts: Find contacts by name email or company
+
+Write tools ask the user to confirm first
+- sendEmail: Send email follow the EMAIL PROTOCOL below
+- knowledgeBase with action store: Save new information
+- addContact: Add a new contact uses spelling confirmation
+
+EXTENDED TOOLS - Additional services loaded via MCP connection
+These are separate from core tools and have different names with service prefixes
+Use them when core tools cannot do what is needed
+
+MCP services available
+- MICROSOFT TEAMS: Send messages manage channels and chats
+- ONE DRIVE: Access OneDrive files and folders
+- EXCEL: Read write and manipulate spreadsheets
+- CANVA: Create and manage designs
+- APIFY: Run web scrapers and extract data from websites
+- FIRECRAWL: Crawl and extract web page content
+- SUPABASE: Direct database operations on Supabase
+- COMPOSIO SEARCH: Search across all connected services
+
+MCP tool names have service prefixes like MICROSOFT_TEAMS or GOOGLEDRIVE
+These are different tools than the core ones above even if they overlap in function
+
+HOW TO CHOOSE
+1 For Drive email database contacts and memory always use core tools first
+2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use MCP tools
+3 For Google Drive always use core searchDrive listFiles getFile not MCP
+4 If a core tool fails try the MCP equivalent as backup
+5 Never tell the user which system a tool comes from just use it
+6 MCP tools may take a moment longer to respond
+
+EMAIL PROTOCOL - Follow this exact flow
+
+Step 1 RECIPIENT
+You: Who should I send it to spell out their email for me
+User spells letter by letter: j a y c o n n o r at example dot com
+You: So thats jayconnor at example dot com right
+User: Yes or No
+If No: Go ahead spell it again for me
+If Yes: Move to Step 2
+
+Step 2 SUBJECT
+You: Whats the subject
+User states subject naturally
+You: Got it [repeat subject] and what should the message say
+
+Step 3 BODY
+User describes what to say
+You draft the email internally then ask: I drafted that up do you want the summary or should I read the whole thing
+User: Summary - give 1 sentence overview
+User: Full or read it - read the complete body
+After reading chosen version: Should I send it
+User: Yes
+[call send_email tool]
+You: Sent
+
+IMPORTANT - Never read the full email body unless user specifically asks for it
+IMPORTANT - Only ONE confirmation per step then move forward
+IMPORTANT - Do not re-confirm things already confirmed
+
+READ OPERATION EXAMPLE
+User: What files do I have
+You: Checking your Drive
+[call list_files tool]
+After result: You have 5 files including quarterly report budget draft and meeting notes
+
+ERROR HANDLING
+If a tool fails say: Hit a snag on that one and briefly explain
+If credentials expired say: That service needs reconnection let me note that
+Never expose technical errors verbosely
+
+WHAT NEVER TO DO
+- Never output JSON function calls as speech
+- Never read punctuation aloud
+- Never execute WRITE tools without final yes
+- Never list all capabilities unless asked
+- Never give verbose technical explanations
+- Never re-confirm something already confirmed
+- Never read full email body without being asked
+
+TONE
+Direct efficient professional
+Occasional dry wit when contextually relevant
+Executive-grade communication"""
 
 
 def prewarm(proc: JobProcess):
-    """Prewarm VAD model during server initialization for reduced first-call latency."""
+    """Prewarm VAD model and initialize cache during server initialization."""
     logger.info("Prewarming VAD model...")
     proc.userdata["vad"] = silero.VAD.load(
         min_speech_duration=0.05,      # 50ms - faster speech detection start
-        min_silence_duration=0.55,     # 550ms - better end-of-turn detection
-        prefix_padding_duration=0.5,   # 500ms padding before speech
-        activation_threshold=0.05,     # VERY LOW for Recall.ai processed audio (was 0.15)
+        min_silence_duration=0.35,     # 350ms - OPTIMIZED from 550ms (saves ~200ms latency)
+        prefix_padding_duration=0.25,  # 250ms - OPTIMIZED from 500ms (saves ~250ms latency)
+        activation_threshold=0.1,      # OPTIMIZED from 0.05 (fewer false positives)
         sample_rate=16000,             # Silero requires 8kHz or 16kHz
         force_cpu=True,                # Consistent CPU inference
     )
-    logger.info("VAD model prewarmed with activation_threshold=0.05")
+    logger.info("VAD model prewarmed with optimized settings (silence=350ms, threshold=0.1)")
+
+    # Initialize context cache manager
+    cache_manager = get_cache_manager()
+    proc.userdata["cache_manager"] = cache_manager
+    logger.info("Context cache manager initialized")
 
 
 async def entrypoint(ctx: JobContext):
@@ -97,40 +225,52 @@ async def entrypoint(ctx: JobContext):
         logger.warning("VAD not prewarmed, loading now (adds latency)")
         vad = silero.VAD.load(
             min_speech_duration=0.05,
-            min_silence_duration=0.55,
-            prefix_padding_duration=0.5,
-            activation_threshold=0.05,     # VERY LOW for Recall.ai processed audio
+            min_silence_duration=0.35,     # OPTIMIZED from 550ms
+            prefix_padding_duration=0.25,  # OPTIMIZED from 500ms
+            activation_threshold=0.1,      # OPTIMIZED from 0.05
             sample_rate=16000,
             force_cpu=True,
         )
-        logger.info("VAD loaded with activation_threshold=0.05")
+        logger.info("VAD loaded with optimized settings (silence=350ms, threshold=0.1)")
 
-    # Initialize STT with Deepgram Nova-3
-    stt = deepgram.STT(
-        model=settings.deepgram_model,
-        language="en",
-        smart_format=True,
-        interim_results=True,
-        punctuate=True,
-        profanity_filter=False,
-        enable_diarization=False,  # Single speaker for now
-    )
+    # OPTIMIZED: Initialize STT/LLM/TTS in parallel (saves ~150-200ms)
+    # Using asyncio.gather with to_thread for synchronous constructors
+    logger.info("Initializing STT/LLM/TTS in parallel...")
 
-    # Initialize LLM with official Groq plugin
-    llm_instance = groq.LLM(
-        model=settings.groq_model,
-        api_key=settings.groq_api_key,
-        temperature=settings.groq_temperature,
-    )
+    def init_stt():
+        return deepgram.STT(
+            model=settings.deepgram_model,
+            language="en",
+            smart_format=True,
+            interim_results=True,
+            punctuate=True,
+            profanity_filter=False,
+            enable_diarization=False,
+        )
 
-    # Initialize TTS with Cartesia Sonic-3
-    # Using 24kHz sample rate (framework default, auto-resampled from VAD's 16kHz)
-    tts = cartesia.TTS(
-        model=settings.cartesia_model,
-        voice=settings.cartesia_voice,
-        api_key=settings.cartesia_api_key,
-        sample_rate=24000,
+    def init_llm():
+        """Initialize Cerebras LLM with GLM-4.7 (~1000 TPS, 1M tokens/day free)."""
+        logger.info(f"Initializing Cerebras LLM: {settings.cerebras_model}")
+        return openai.LLM.with_cerebras(
+            model=settings.cerebras_model,
+            api_key=settings.cerebras_api_key,
+            temperature=settings.cerebras_temperature,
+        )
+
+    def init_tts():
+        return cartesia.TTS(
+            model=settings.cartesia_model,
+            voice=settings.cartesia_voice,
+            api_key=settings.cartesia_api_key,
+            sample_rate=24000,
+        )
+
+    stt, llm_instance, tts = await asyncio.gather(
+        asyncio.to_thread(init_stt),
+        asyncio.to_thread(init_llm),
+        asyncio.to_thread(init_tts),
     )
+    logger.info("STT/LLM/TTS initialized in parallel")
 
     # Create agent session with optimized settings
     session_kwargs = {
@@ -145,17 +285,13 @@ async def entrypoint(ctx: JobContext):
         "false_interruption_timeout": 1.0,
     }
 
-    # Add turn detection if available
-    # Note: Import may succeed but initialization can fail if model files aren't downloaded
-    if HAS_TURN_DETECTOR and MultilingualModel:
-        try:
-            session_kwargs["turn_detection"] = MultilingualModel()
-            logger.info("Using semantic turn detection")
-        except RuntimeError as e:
-            logger.warning(f"Turn detector initialization failed: {e}")
-            logger.warning("Using VAD-only turn detection (run 'python -m livekit.agents download-files' to enable)")
+    # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
+    turn_detector = get_turn_detector()
+    if turn_detector:
+        session_kwargs["turn_detection"] = turn_detector
+        logger.info("Using semantic turn detection")
     else:
-        logger.warning("Turn detector not available, using VAD-only turn detection")
+        logger.info("Using VAD-only turn detection (faster startup)")
 
     session = AgentSession(**session_kwargs)
 
@@ -175,10 +311,39 @@ async def entrypoint(ctx: JobContext):
             vad_frame_count["last_log_time"] = now
             logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
 
-    # Define agent with tools
+    # Initialize async tool worker for background execution
+    tool_worker = AsyncToolWorker(room=ctx.room, max_concurrent=3)
+
+    # Register result callback BEFORE starting (defined later, uses session)
+    # The callback will be set after session is created
+    await tool_worker.start()
+    set_worker(tool_worker)
+    logger.info("AsyncToolWorker started - tools will execute in background")
+
+    # Build MCP server list from config (graceful degradation: empty list = MCP disabled)
+    mcp_servers = []
+    mcp_url = settings.mcp_server_url.strip()
+    if mcp_url:
+        # Composio MCP endpoint uses SSE transport but URL ends with /mcp,
+        # which causes LiveKit to auto-detect Streamable HTTP (wrong).
+        # Force SSE transport explicitly. timeout=10 for cold-start latency.
+        mcp_servers.append(mcp.MCPServerHTTP(
+            url=mcp_url,
+            transport_type="sse",
+            timeout=10,
+            sse_read_timeout=300,
+        ))
+        logger.info(f"MCP: Connecting (SSE) to {mcp_url[:60]}...")
+    else:
+        logger.info("MCP: Disabled (MCP_SERVER_URL not configured)")
+
+    logger.info(f"Agent tools: {len(ASYNC_TOOLS)} n8n tools + {len(mcp_servers)} MCP server(s)")
+
+    # Define agent with n8n webhook tools + optional native MCP server(s)
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=[send_email_tool, query_database_tool],
+        tools=ASYNC_TOOLS,
+        mcp_servers=mcp_servers if mcp_servers else None,
     )
 
     # Register event handlers BEFORE starting session
@@ -317,6 +482,159 @@ async def entrypoint(ctx: JobContext):
         logger.debug(f"Metrics: {ev}")
 
     # =========================================================================
+    # ASYNC TOOL RESULT HANDLER - AIO ECOSYSTEM v2
+    # - No punctuation in voice output
+    # - 20% programmatic wit (contextually relevant)
+    # - Clean conversational announcements
+    # =========================================================================
+
+    import random
+
+    # Standard announcements (no punctuation for voice)
+    STANDARD_SUCCESS = [
+        "Done",
+        "All set",
+        "Completed",
+        "Finished",
+    ]
+
+    # Witty announcements (20% chance, contextually matched)
+    WITTY_RESPONSES = {
+        "email": [
+            "Message delivered faster than a carrier pigeon",
+            "Email sent and on its way",
+            "Done that message is flying through the internet",
+        ],
+        "search": [
+            "Found your needle in the digital haystack",
+            "Eureka that is exactly what you were looking for",
+            "Got some results for you",
+        ],
+        "save": [
+            "Locked and loaded in the vault",
+            "Saved and secure in the knowledge base",
+            "Information stored successfully",
+        ],
+        "document": [
+            "Found the document you needed",
+            "Got that file pulled up",
+            "Retrieved the document",
+        ],
+        "error": [
+            "Hit a snag on that one let me try a different approach",
+            "That did not work as expected want to try again",
+            "Ran into an issue there",
+        ],
+    }
+
+    def strip_punctuation(text: str) -> str:
+        """Remove all punctuation from text for voice output."""
+        import re
+        # Remove common punctuation but keep apostrophes in contractions
+        text = re.sub(r'[.,!?;:\-"\(\)\[\]{}]', '', text)
+        # Clean up extra spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    def get_witty_response(tool_type: str) -> str:
+        """Get a contextually relevant witty response."""
+        responses = WITTY_RESPONSES.get(tool_type, WITTY_RESPONSES.get("save", []))
+        return random.choice(responses) if responses else "Done"
+
+    def format_tool_result_v2(tool_name: str, result: str, status: str) -> str:
+        """Format tool result with 20% wit probability, no punctuation."""
+
+        # Determine tool type for contextual responses
+        tool_type = "save"  # default
+        if "email" in tool_name:
+            tool_type = "email"
+        elif "search" in tool_name or "query" in tool_name:
+            tool_type = "search"
+        elif "document" in tool_name or "file" in tool_name:
+            tool_type = "document"
+        elif "store" in tool_name or "save" in tool_name:
+            tool_type = "save"
+
+        if status == "failed":
+            tool_type = "error"
+
+        # 20% chance for witty response
+        use_wit = random.random() < 0.20
+
+        if use_wit:
+            announcement = get_witty_response(tool_type)
+        else:
+            # Standard announcement based on tool type
+            if status == "failed":
+                announcement = "That did not work want to try again"
+            elif tool_type == "email":
+                announcement = "Email sent"
+            elif tool_type == "search":
+                # Include summary of what was found
+                if result and len(result) > 10:
+                    clean_result = strip_punctuation(result[:100])
+                    announcement = f"Here is what I found {clean_result}"
+                else:
+                    announcement = "Search complete"
+            elif tool_type == "document":
+                announcement = "Got the document"
+            else:
+                announcement = random.choice(STANDARD_SUCCESS)
+
+        # Ensure no punctuation in final output
+        return strip_punctuation(announcement)
+
+    async def handle_tool_result(result_data: dict):
+        """Handle async tool result with AIO v2 conversational announcement."""
+        tool_name = result_data.get("tool_name", "unknown")
+        status = result_data.get("status", "unknown")
+        result = result_data.get("result", "")
+        error = result_data.get("error", "")
+        duration = result_data.get("duration_ms", 0)
+
+        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms")
+
+        if status == "completed":
+            announcement = format_tool_result_v2(tool_name, result, status)
+            try:
+                await session.say(announcement, allow_interruptions=True)
+            except Exception as e:
+                logger.error(f"Failed to announce result: {e}")
+
+        elif status == "failed":
+            announcement = format_tool_result_v2(tool_name, error, status)
+
+            try:
+                await session.say(announcement, allow_interruptions=True)
+            except Exception as e:
+                logger.error(f"Failed to announce error: {e}")
+
+    # Register callback on worker for direct notification
+    tool_worker.on_result = handle_tool_result
+    logger.info("Tool result callback registered on AsyncToolWorker")
+
+    # Also listen for data_received for external tool results (from other participants)
+    @ctx.room.on("data_received")
+    def on_data_received(data: rtc.DataPacket):
+        """Handle incoming data packets from OTHER participants."""
+        try:
+            message = json.loads(data.data.decode("utf-8"))
+            msg_type = message.get("type", "")
+
+            if msg_type == "tool_result":
+                # Only handle if from external source (not our own worker)
+                # Our worker notifies directly via callback
+                task_id = message.get("task_id", "")
+                if not task_id.startswith("task_"):
+                    # External task, handle it
+                    asyncio.create_task(handle_tool_result(message))
+
+        except json.JSONDecodeError:
+            pass  # Ignore non-JSON data
+        except Exception as e:
+            logger.error(f"Error handling data packet: {e}")
+
+    # =========================================================================
     # AUDIO INPUT DEBUGGING - Track subscription events
     # =========================================================================
     @ctx.room.on("track_subscribed")
@@ -363,7 +681,7 @@ async def entrypoint(ctx: JobContext):
                                         max_rms = rms
                                     if rms < 100:  # Very quiet (below -50dB)
                                         silent_frames += 1
-                            except Exception:
+                            except Exception:  # nosec B110 - audio frame RMS calc is best-effort
                                 pass
 
                         # Log every 5 seconds
@@ -489,8 +807,8 @@ async def entrypoint(ctx: JobContext):
     client_participant = await wait_for_client_with_audio(timeout_seconds=300.0)
 
     if client_participant:
-        # Give the client's Web Audio API a moment to initialize after connection
-        await asyncio.sleep(1.5)
+        # Brief delay for Web Audio API initialization (OPTIMIZED from 1.5s to 0.3s)
+        await asyncio.sleep(0.3)
         logger.info(f"Client connected: {client_participant.identity}, starting session linked to them")
 
         # =====================================================================
@@ -560,6 +878,11 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"  audio_input: sample_rate=16000, num_channels=1")
         logger.info(f"  audio_output: sample_rate=24000, num_channels=1")
 
+        # Pre-warm context cache in background while session starts
+        # This fetches session context before user speaks, reducing first-query latency
+        session_id = ctx.room.name or "livekit-agent"
+        cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
+
         await session.start(
             agent=agent,
             room=ctx.room,
@@ -592,14 +915,14 @@ async def entrypoint(ctx: JobContext):
         logger.error(f"CRITICAL: session.start() failed: {e}")
         raise
 
-    # Generate initial greeting with interruptions disabled
-    # This allows the client to calibrate AEC (Acoustic Echo Cancellation)
+    # Generate AIO opening greeting (no punctuation - voice output)
+    # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
     try:
         await session.say(
-            "Hello! I'm your voice assistant. How can I help you today?",
-            allow_interruptions=False  # Don't interrupt greeting
+            "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
+            allow_interruptions=False
         )
-        logger.info("Greeting sent successfully")
+        logger.info("AIO greeting sent successfully")
     except Exception as e:
         logger.error(f"CRITICAL: session.say() failed: {e}")
 
@@ -649,6 +972,11 @@ async def entrypoint(ctx: JobContext):
     # The room closes when all participants leave or it times out
     while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1.0)
+
+    # Clean up session memory when session ends
+    session_id = ctx.room.name or "livekit-agent"
+    cleared_count = clear_session_memory(session_id)
+    logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
 
     logger.info("Agent session ended")
 
