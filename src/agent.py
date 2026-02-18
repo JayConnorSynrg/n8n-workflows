@@ -356,7 +356,11 @@ async def entrypoint(ctx: JobContext):
         composio_result = get_composio_mcp_url(settings)
         if composio_result:
             composio_url, composio_headers = composio_result
-            mcp_servers.append(mcp.MCPServerHTTP(url=composio_url, timeout=15))
+            mcp_servers.append(mcp.MCPServerHTTP(
+                url=composio_url,
+                headers=composio_headers or None,
+                timeout=15,
+            ))
             logger.info("Composio: SDK MCP session created (scoped toolkits)")
         else:
             logger.warning("Composio: Failed to create MCP session, continuing without extended tools")
