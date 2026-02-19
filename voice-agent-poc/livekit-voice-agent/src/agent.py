@@ -17,6 +17,7 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
+    mcp,
     room_io,
 )
 from livekit.plugins import silero, deepgram, cartesia, openai
@@ -83,36 +84,89 @@ CRITICAL RULES
 2 TOOL EXECUTION - When using tools call them via function calling not as text
 3 NEVER output JSON or code in your speech
 4 Keep responses to 1-2 sentences maximum
+5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 
-TOOLS
+YOUR TOOLS
 
-READ tools execute immediately no confirmation needed
-- list_files: List Drive files
-- search_drive: Search Drive documents
-- get_file: Retrieve specific file
-- query_db: Query database
-- recall: Access previous results from memory
+You have two kinds of tools available
 
-WRITE tools require explicit user confirmation before executing
-- send_email: Send email - confirm recipient subject body first
-- knowledge_base with action store: Save to knowledge base - confirm content first
+CORE TOOLS - Your fast reliable primary tools for everyday tasks
+These connect to SYNRG backend workflows and respond instantly
+Always try these first
 
-EXECUTION PATTERNS
+Immediate read tools no confirmation needed
+- searchDrive: Find documents in Google Drive
+- listFiles: Show recent Drive files
+- getFile: Open a specific file from a previous search
+- queryDatabase: Look up records or run analytics
+- knowledgeBase with action search: Find stored knowledge
+- checkContext: Remember what was discussed earlier
+- recall: Reference earlier results without re-fetching
+- recallDrive: Reference earlier Drive results
+- memoryStatus: See what is in session memory
+- getContact: Look up a contact
+- searchContacts: Find contacts by name email or company
 
-READ operation example
-User: What files do I have
-You: Checking your Drive now
-[call list_files tool]
-After result: You have 5 files including quarterly report budget draft and meeting notes
+Write tools ask the user to confirm first
+- sendEmail: Send email follow the EMAIL PROTOCOL below
+- knowledgeBase with action store: Save new information
+- addContact: Add a new contact uses spelling confirmation
 
-WRITE operation example
-User: Email Sarah about the deadline
-You: What should I tell Sarah about the deadline
-User: Tell her its moved to Friday
-You: Got it emailing Sarah that the deadline moved to Friday should I send it
+EXTENDED TOOLS - Composio Tool Router
+For services beyond core tools use composioExecute
+It dynamically finds and runs the right action on any connected service
+
+Available services through composioExecute
+- MICROSOFT_TEAMS: Send messages manage channels and chats
+- ONEDRIVE: Access OneDrive files and folders
+- EXCEL: Read write and manipulate spreadsheets
+- CANVA: Create and manage designs
+- APIFY: Run web scrapers and extract data from websites
+- FIRECRAWL: Crawl and extract web page content
+- SUPABASE: Direct database operations on Supabase
+
+HOW TO CHOOSE
+1 For Drive email database contacts and memory always use core tools first
+2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use composioExecute
+3 For Google Drive always use core searchDrive listFiles getFile not composioExecute
+4 If a core tool fails try composioExecute as backup
+5 Never tell the user which system a tool comes from just use it
+6 composioExecute may take a moment longer to respond
+
+EMAIL PROTOCOL - Follow this exact flow
+
+Step 1 RECIPIENT
+You: Who should I send it to spell out their email for me
+User spells letter by letter: j a y c o n n o r at example dot com
+You: So thats jayconnor at example dot com right
+User: Yes or No
+If No: Go ahead spell it again for me
+If Yes: Move to Step 2
+
+Step 2 SUBJECT
+You: Whats the subject
+User states subject naturally
+You: Got it [repeat subject] and what should the message say
+
+Step 3 BODY
+User describes what to say
+You draft the email internally then ask: I drafted that up do you want the summary or should I read the whole thing
+User: Summary - give 1 sentence overview
+User: Full or read it - read the complete body
+After reading chosen version: Should I send it
 User: Yes
 [call send_email tool]
-After result: Done sent to Sarah
+You: Sent
+
+IMPORTANT - Never read the full email body unless user specifically asks for it
+IMPORTANT - Only ONE confirmation per step then move forward
+IMPORTANT - Do not re-confirm things already confirmed
+
+READ OPERATION EXAMPLE
+User: What files do I have
+You: Checking your Drive
+[call list_files tool]
+After result: You have 5 files including quarterly report budget draft and meeting notes
 
 ERROR HANDLING
 If a tool fails say: Hit a snag on that one and briefly explain
@@ -122,9 +176,11 @@ Never expose technical errors verbosely
 WHAT NEVER TO DO
 - Never output JSON function calls as speech
 - Never read punctuation aloud
-- Never execute WRITE tools without yes confirmation
+- Never execute WRITE tools without final yes
 - Never list all capabilities unless asked
 - Never give verbose technical explanations
+- Never re-confirm something already confirmed
+- Never read full email body without being asked
 
 TONE
 Direct efficient professional
@@ -189,12 +245,40 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        """Initialize Cerebras LLM with GLM-4.7 (~1000 TPS, 1M tokens/day free)."""
-        logger.info(f"Initializing Cerebras LLM: {settings.cerebras_model}")
-        return openai.LLM.with_cerebras(
-            model=settings.cerebras_model,
-            api_key=settings.cerebras_api_key,
-            temperature=settings.cerebras_temperature,
+        """Initialize LLM based on LLM_PROVIDER setting.
+
+        Supports:
+        - "fireworks": Fireworks AI (128K context, reliable tool calling)
+        - "cerebras": Cerebras (fast but limited context)
+
+        Falls back to Cerebras if Fireworks key is missing.
+        """
+        provider = settings.llm_provider.lower().strip()
+
+        # Fireworks AI (primary)
+        if provider == "fireworks" and settings.fireworks_api_key:
+            model = settings.fireworks_model
+            logger.info(f"Initializing Fireworks AI LLM: {model}")
+            return openai.LLM.with_fireworks(
+                model=model,
+                api_key=settings.fireworks_api_key,
+                temperature=settings.fireworks_temperature,
+            )
+
+        # Cerebras (fallback)
+        if settings.cerebras_api_key:
+            model = settings.cerebras_model
+            logger.info(f"Initializing Cerebras LLM: {model}")
+            return openai.LLM.with_cerebras(
+                model=model,
+                api_key=settings.cerebras_api_key,
+                temperature=settings.cerebras_temperature,
+            )
+
+        # No valid provider configured
+        raise RuntimeError(
+            f"No LLM configured. Set FIREWORKS_API_KEY or CEREBRAS_API_KEY. "
+            f"LLM_PROVIDER='{provider}'"
         )
 
     def init_tts():
@@ -260,10 +344,47 @@ async def entrypoint(ctx: JobContext):
     set_worker(tool_worker)
     logger.info("AsyncToolWorker started - tools will execute in background")
 
-    # Define agent with ASYNC tools (non-blocking)
+    # Build tool list: n8n webhook tools + optional Composio Tool Router
+    all_tools = list(ASYNC_TOOLS)
+
+    # Composio Tool Router: 3 meta-tools for on-demand discovery + execution
+    # Filters 25 Composio tools down to: search, execute, manage_connections
+    mcp_servers = []
+    if settings.composio_router_enabled and settings.composio_api_key:
+        from .tools.composio_router import get_composio_mcp_url, COMPOSIO_ALLOWED_TOOLS
+        composio_result = get_composio_mcp_url(settings)
+        if composio_result:
+            composio_url, composio_headers = composio_result
+            mcp_servers.append(mcp.MCPServerHTTP(
+                url=composio_url,
+                headers=composio_headers or None,
+                timeout=15,
+                allowed_tools=COMPOSIO_ALLOWED_TOOLS,
+            ))
+            logger.info(f"Composio: Tool Router active — {len(COMPOSIO_ALLOWED_TOOLS)} meta-tools loaded")
+        else:
+            logger.warning("Composio: Failed to create MCP session, continuing without extended tools")
+    elif settings.mcp_server_url.strip():
+        # LEGACY DIRECT MCP URL: used when COMPOSIO_ROUTER_ENABLED=false
+        mcp_url = settings.mcp_server_url.strip()
+        try:
+            mcp_servers.append(mcp.MCPServerHTTP(
+                url=mcp_url,
+                timeout=15,
+            ))
+            logger.info(f"Composio: Legacy direct MCP URL {mcp_url[:60]}...")
+        except Exception as e:
+            logger.warning(f"Composio: MCP failed ({e}), continuing without extended tools")
+    else:
+        logger.info("Composio: Disabled (no API key or MCP URL configured)")
+
+    logger.info(f"Agent tools: {len(all_tools)} total ({len(ASYNC_TOOLS)} n8n + {len(all_tools) - len(ASYNC_TOOLS)} composio) + {len(mcp_servers)} MCP server(s)")
+
+    # Define agent with all tools
     agent = Agent(
         instructions=SYSTEM_PROMPT,
-        tools=ASYNC_TOOLS,  # Use async wrappers that dispatch to background worker
+        tools=all_tools,
+        mcp_servers=mcp_servers if mcp_servers else None,
     )
 
     # Register event handlers BEFORE starting session
@@ -601,7 +722,7 @@ async def entrypoint(ctx: JobContext):
                                         max_rms = rms
                                     if rms < 100:  # Very quiet (below -50dB)
                                         silent_frames += 1
-                            except Exception:
+                            except Exception:  # nosec B110 - audio frame RMS calc is best-effort
                                 pass
 
                         # Log every 5 seconds
