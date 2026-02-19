@@ -1,0 +1,8 @@
+# HR Workflows
+
+Templates specific to Human Resources department.
+
+## Workflows
+
+- `paycor-resume-analysis` - Resume screening
+- `job-descriptions` - Job description generator

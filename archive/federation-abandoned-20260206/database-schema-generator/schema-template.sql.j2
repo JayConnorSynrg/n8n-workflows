@@ -1,0 +1,892 @@
+-- Federation Platform - Department Schema Template
+-- Generated for: {{ department_name }}
+-- Department ID: {{ department_id }}
+-- Schema: {{ department_schema }}
+-- Generated at: {{ timestamp }}
+-- Template Version: 1.0.0
+
+-- =============================================================================
+-- SCHEMA CREATION
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS {{ department_schema }};
+
+-- Set search path for this session
+SET search_path TO {{ department_schema }}, public;
+
+-- Grant schema permissions to department role
+GRANT USAGE ON SCHEMA {{ department_schema }} TO {{ department_role }};
+GRANT ALL ON ALL TABLES IN SCHEMA {{ department_schema }} TO {{ department_role }};
+GRANT ALL ON ALL SEQUENCES IN SCHEMA {{ department_schema }} TO {{ department_role }};
+
+-- =============================================================================
+-- TABLE 1: tool_calls
+-- Purpose: Track all tool function calls from voice agent
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    tool_call_id VARCHAR(100) UNIQUE NOT NULL,
+    session_id VARCHAR(100) NOT NULL,
+    intent_id VARCHAR(100),
+    function_name VARCHAR(100) NOT NULL,
+    parameters JSONB NOT NULL DEFAULT '{}',
+    status VARCHAR(20) NOT NULL DEFAULT 'EXECUTING',
+    result JSONB,
+    error_message TEXT,
+    voice_response TEXT,
+    callback_url TEXT,
+    execution_time_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT valid_status CHECK (
+        status IN ('EXECUTING', 'COMPLETED', 'FAILED', 'CANCELLED')
+    )
+);
+
+CREATE INDEX idx_tool_calls_session ON tool_calls(session_id);
+CREATE INDEX idx_tool_calls_status ON tool_calls(status);
+CREATE INDEX idx_tool_calls_created ON tool_calls(created_at DESC);
+CREATE INDEX idx_tool_calls_function ON tool_calls(function_name);
+CREATE INDEX idx_tool_calls_department ON tool_calls(department);
+
+-- RLS Policy: Department isolation
+ALTER TABLE tool_calls ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_tool_calls_isolation ON tool_calls
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 2: session_context
+-- Purpose: Store session-specific context data (TTL-based)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS session_context (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    context_type VARCHAR(50) NOT NULL,
+    context_key VARCHAR(255) NOT NULL,
+    context_value JSONB NOT NULL,
+    ttl_seconds INTEGER NOT NULL DEFAULT 3600,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ GENERATED ALWAYS AS (created_at + (ttl_seconds * INTERVAL '1 second')) STORED
+);
+
+CREATE INDEX idx_session_context_session ON session_context(session_id);
+CREATE INDEX idx_session_context_type ON session_context(context_type);
+CREATE INDEX idx_session_context_expires ON session_context(expires_at);
+CREATE INDEX idx_session_context_department ON session_context(department);
+
+ALTER TABLE session_context ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_session_context_isolation ON session_context
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 3: drive_document_repository
+-- Purpose: Google Drive file metadata and extracted content
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS drive_document_repository (
+    id BIGSERIAL PRIMARY KEY,
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    drive_file_id VARCHAR(255) UNIQUE NOT NULL,
+    drive_folder_id VARCHAR(255) NOT NULL,
+    file_name VARCHAR(255),
+    mime_type VARCHAR(100),
+    file_size_bytes BIGINT,
+    web_view_link TEXT,
+    drive_modified_time TIMESTAMPTZ,
+    extracted_text TEXT,
+    text_length INTEGER,
+    extraction_method VARCHAR(50),
+    extraction_status VARCHAR(50),
+    ai_analysis JSONB,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    first_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_drive_file_id ON drive_document_repository(drive_file_id);
+CREATE INDEX idx_drive_folder_id ON drive_document_repository(drive_folder_id);
+CREATE INDEX idx_drive_extraction_status ON drive_document_repository(extraction_status);
+CREATE INDEX idx_drive_created_at ON drive_document_repository(created_at DESC);
+CREATE INDEX idx_drive_department ON drive_document_repository(department);
+
+ALTER TABLE drive_document_repository ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_drive_repository_isolation ON drive_document_repository
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 4: drive_access_log
+-- Purpose: Audit log for Drive operations (sync, get, search)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS drive_access_log (
+    id BIGSERIAL PRIMARY KEY,
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    drive_folder_id VARCHAR(255) NOT NULL,
+    operation VARCHAR(50) NOT NULL,
+    files_found INTEGER,
+    files_processed INTEGER,
+    files_skipped INTEGER DEFAULT 0,
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_drive_access_log_folder ON drive_access_log(drive_folder_id);
+CREATE INDEX idx_drive_access_log_operation ON drive_access_log(operation);
+CREATE INDEX idx_drive_access_log_created ON drive_access_log(created_at DESC);
+CREATE INDEX idx_drive_access_log_department ON drive_access_log(department);
+
+ALTER TABLE drive_access_log ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_drive_access_log_isolation ON drive_access_log
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 5: email_logs
+-- Purpose: Track sent emails from voice agent
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS email_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    tool_call_id VARCHAR(100),
+    recipient_email VARCHAR(255) NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT,
+    attachments JSONB,
+    status VARCHAR(50) NOT NULL DEFAULT 'SENDING',
+    message_id VARCHAR(255),
+    error_message TEXT,
+    sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT valid_email_status CHECK (
+        status IN ('SENDING', 'SENT', 'FAILED', 'BOUNCED')
+    )
+);
+
+CREATE INDEX idx_email_logs_session ON email_logs(session_id);
+CREATE INDEX idx_email_logs_recipient ON email_logs(recipient_email);
+CREATE INDEX idx_email_logs_status ON email_logs(status);
+CREATE INDEX idx_email_logs_created ON email_logs(created_at DESC);
+CREATE INDEX idx_email_logs_department ON email_logs(department);
+
+ALTER TABLE email_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_email_logs_isolation ON email_logs
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 6: vector_store_embeddings
+-- Purpose: Store document embeddings for semantic search
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS vector_store_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    document_id VARCHAR(255) NOT NULL,
+    document_type VARCHAR(50) NOT NULL,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    chunk_text TEXT NOT NULL,
+    embedding_model VARCHAR(100) NOT NULL,
+    embedding_vector JSONB NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_document_chunk UNIQUE(document_id, chunk_index)
+);
+
+CREATE INDEX idx_vector_store_document ON vector_store_embeddings(document_id);
+CREATE INDEX idx_vector_store_type ON vector_store_embeddings(document_type);
+CREATE INDEX idx_vector_store_department ON vector_store_embeddings(department);
+
+ALTER TABLE vector_store_embeddings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_vector_store_isolation ON vector_store_embeddings
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 7: agent_context
+-- Purpose: Long-term agent memory and context
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS agent_context (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    context_category VARCHAR(50) NOT NULL,
+    context_data JSONB NOT NULL,
+    importance_score INTEGER DEFAULT 5,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT valid_importance CHECK (importance_score BETWEEN 1 AND 10)
+);
+
+CREATE INDEX idx_agent_context_session ON agent_context(session_id);
+CREATE INDEX idx_agent_context_category ON agent_context(context_category);
+CREATE INDEX idx_agent_context_importance ON agent_context(importance_score DESC);
+CREATE INDEX idx_agent_context_department ON agent_context(department);
+
+ALTER TABLE agent_context ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_agent_context_isolation ON agent_context
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 8: conversation_history
+-- Purpose: Store conversation transcripts
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS conversation_history (
+    id BIGSERIAL PRIMARY KEY,
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    turn_index INTEGER NOT NULL,
+    speaker VARCHAR(20) NOT NULL,
+    message_text TEXT NOT NULL,
+    audio_duration_ms INTEGER,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT valid_speaker CHECK (speaker IN ('user', 'agent', 'system'))
+);
+
+CREATE INDEX idx_conversation_session ON conversation_history(session_id);
+CREATE INDEX idx_conversation_timestamp ON conversation_history(timestamp DESC);
+CREATE INDEX idx_conversation_department ON conversation_history(department);
+
+ALTER TABLE conversation_history ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_conversation_isolation ON conversation_history
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 9: calendar_events
+-- Purpose: Calendar event metadata from Google Calendar
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    calendar_event_id VARCHAR(255) UNIQUE NOT NULL,
+    calendar_id VARCHAR(255) NOT NULL,
+    event_title VARCHAR(500),
+    event_description TEXT,
+    start_time TIMESTAMPTZ NOT NULL,
+    end_time TIMESTAMPTZ NOT NULL,
+    attendees JSONB,
+    location VARCHAR(500),
+    status VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_calendar_event_id ON calendar_events(calendar_event_id);
+CREATE INDEX idx_calendar_start_time ON calendar_events(start_time);
+CREATE INDEX idx_calendar_status ON calendar_events(status);
+CREATE INDEX idx_calendar_department ON calendar_events(department);
+
+ALTER TABLE calendar_events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_calendar_isolation ON calendar_events
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 10: contacts
+-- Purpose: Contact information from Google Contacts
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    contact_id VARCHAR(255) UNIQUE NOT NULL,
+    full_name VARCHAR(255),
+    email_addresses JSONB,
+    phone_numbers JSONB,
+    organization VARCHAR(255),
+    job_title VARCHAR(255),
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_contacts_full_name ON contacts(full_name);
+CREATE INDEX idx_contacts_organization ON contacts(organization);
+CREATE INDEX idx_contacts_department ON contacts(department);
+
+ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_contacts_isolation ON contacts
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 11: audit_trail
+-- Purpose: Security audit log for all operations
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS audit_trail (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    event_type VARCHAR(50) NOT NULL,
+    user_id VARCHAR(100),
+    session_id VARCHAR(100),
+    resource_type VARCHAR(50),
+    resource_id VARCHAR(255),
+    action VARCHAR(50) NOT NULL,
+    details JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_event_type ON audit_trail(event_type);
+CREATE INDEX idx_audit_created ON audit_trail(created_at DESC);
+CREATE INDEX idx_audit_session ON audit_trail(session_id);
+CREATE INDEX idx_audit_department ON audit_trail(department);
+
+ALTER TABLE audit_trail ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_audit_trail_isolation ON audit_trail
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 12: training_metrics
+-- Purpose: Track agent training data and performance
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS training_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    metric_type VARCHAR(50) NOT NULL,
+    metric_value NUMERIC(10,2),
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_training_metrics_session ON training_metrics(session_id);
+CREATE INDEX idx_training_metrics_type ON training_metrics(metric_type);
+CREATE INDEX idx_training_metrics_created ON training_metrics(created_at DESC);
+CREATE INDEX idx_training_metrics_department ON training_metrics(department);
+
+ALTER TABLE training_metrics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_training_metrics_isolation ON training_metrics
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 13: user_session_analytics
+-- Purpose: Analytics data for voice sessions
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_session_analytics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(100),
+    session_start TIMESTAMPTZ NOT NULL,
+    session_end TIMESTAMPTZ,
+    duration_seconds INTEGER,
+    total_turns INTEGER DEFAULT 0,
+    tool_calls_count INTEGER DEFAULT 0,
+    errors_count INTEGER DEFAULT 0,
+    satisfaction_score INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_session_analytics_session ON user_session_analytics(session_id);
+CREATE INDEX idx_user_session_analytics_start ON user_session_analytics(session_start DESC);
+CREATE INDEX idx_user_session_analytics_department ON user_session_analytics(department);
+
+ALTER TABLE user_session_analytics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_user_session_analytics_isolation ON user_session_analytics
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 14: file_attachments
+-- Purpose: Store metadata for file attachments
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS file_attachments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    tool_call_id VARCHAR(100),
+    file_name VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    mime_type VARCHAR(100),
+    file_size_bytes BIGINT,
+    storage_provider VARCHAR(50),
+    storage_id VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_file_attachments_session ON file_attachments(session_id);
+CREATE INDEX idx_file_attachments_tool_call ON file_attachments(tool_call_id);
+CREATE INDEX idx_file_attachments_department ON file_attachments(department);
+
+ALTER TABLE file_attachments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_file_attachments_isolation ON file_attachments
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 15: llm_usage_logs
+-- Purpose: Track LLM API usage and costs
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS llm_usage_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    request_duration_ms INTEGER,
+    cost_usd NUMERIC(10,6),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_llm_usage_session ON llm_usage_logs(session_id);
+CREATE INDEX idx_llm_usage_provider ON llm_usage_logs(provider);
+CREATE INDEX idx_llm_usage_created ON llm_usage_logs(created_at DESC);
+CREATE INDEX idx_llm_usage_department ON llm_usage_logs(department);
+
+ALTER TABLE llm_usage_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_llm_usage_logs_isolation ON llm_usage_logs
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 16: stt_usage_logs
+-- Purpose: Track STT (Deepgram) usage
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS stt_usage_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'deepgram',
+    model VARCHAR(100) NOT NULL,
+    audio_duration_seconds NUMERIC(10,2),
+    transcription_duration_ms INTEGER,
+    cost_usd NUMERIC(10,6),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_stt_usage_session ON stt_usage_logs(session_id);
+CREATE INDEX idx_stt_usage_created ON stt_usage_logs(created_at DESC);
+CREATE INDEX idx_stt_usage_department ON stt_usage_logs(department);
+
+ALTER TABLE stt_usage_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_stt_usage_logs_isolation ON stt_usage_logs
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 17: tts_usage_logs
+-- Purpose: Track TTS (Cartesia) usage
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS tts_usage_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'cartesia',
+    voice VARCHAR(100) NOT NULL,
+    text_length INTEGER,
+    audio_duration_seconds NUMERIC(10,2),
+    synthesis_duration_ms INTEGER,
+    cost_usd NUMERIC(10,6),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_tts_usage_session ON tts_usage_logs(session_id);
+CREATE INDEX idx_tts_usage_created ON tts_usage_logs(created_at DESC);
+CREATE INDEX idx_tts_usage_department ON tts_usage_logs(department);
+
+ALTER TABLE tts_usage_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_tts_usage_logs_isolation ON tts_usage_logs
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 18: workflow_executions
+-- Purpose: Track n8n workflow execution results
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS workflow_executions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100) NOT NULL,
+    tool_call_id VARCHAR(100),
+    workflow_id VARCHAR(100) NOT NULL,
+    workflow_name VARCHAR(255),
+    execution_id VARCHAR(255),
+    status VARCHAR(50) NOT NULL,
+    input_data JSONB,
+    output_data JSONB,
+    error_message TEXT,
+    execution_time_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_workflow_executions_session ON workflow_executions(session_id);
+CREATE INDEX idx_workflow_executions_workflow ON workflow_executions(workflow_id);
+CREATE INDEX idx_workflow_executions_status ON workflow_executions(status);
+CREATE INDEX idx_workflow_executions_department ON workflow_executions(department);
+
+ALTER TABLE workflow_executions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_workflow_executions_isolation ON workflow_executions
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 19: error_logs
+-- Purpose: Centralized error logging
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS error_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    session_id VARCHAR(100),
+    tool_call_id VARCHAR(100),
+    error_type VARCHAR(100) NOT NULL,
+    error_message TEXT NOT NULL,
+    stack_trace TEXT,
+    context JSONB,
+    severity VARCHAR(20) DEFAULT 'ERROR',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT valid_severity CHECK (
+        severity IN ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+    )
+);
+
+CREATE INDEX idx_error_logs_session ON error_logs(session_id);
+CREATE INDEX idx_error_logs_type ON error_logs(error_type);
+CREATE INDEX idx_error_logs_severity ON error_logs(severity);
+CREATE INDEX idx_error_logs_created ON error_logs(created_at DESC);
+CREATE INDEX idx_error_logs_department ON error_logs(department);
+
+ALTER TABLE error_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_error_logs_isolation ON error_logs
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 20: notifications
+-- Purpose: Store notification events
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    user_id VARCHAR(100) NOT NULL,
+    notification_type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT,
+    action_url TEXT,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_notifications_user ON notifications(user_id);
+CREATE INDEX idx_notifications_type ON notifications(notification_type);
+CREATE INDEX idx_notifications_read ON notifications(read_at);
+CREATE INDEX idx_notifications_created ON notifications(created_at DESC);
+CREATE INDEX idx_notifications_department ON notifications(department);
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_notifications_isolation ON notifications
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 21: scheduled_tasks
+-- Purpose: Recurring tasks and reminders
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    task_name VARCHAR(255) NOT NULL,
+    task_type VARCHAR(50) NOT NULL,
+    schedule_expression VARCHAR(100),
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ,
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    task_data JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT valid_task_status CHECK (
+        status IN ('ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED')
+    )
+);
+
+CREATE INDEX idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
+CREATE INDEX idx_scheduled_tasks_status ON scheduled_tasks(status);
+CREATE INDEX idx_scheduled_tasks_department ON scheduled_tasks(department);
+
+ALTER TABLE scheduled_tasks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_scheduled_tasks_isolation ON scheduled_tasks
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 22: user_preferences
+-- Purpose: Store per-user settings
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    user_id VARCHAR(100) NOT NULL,
+    preference_key VARCHAR(100) NOT NULL,
+    preference_value JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_user_preference UNIQUE(user_id, preference_key)
+);
+
+CREATE INDEX idx_user_preferences_user ON user_preferences(user_id);
+CREATE INDEX idx_user_preferences_key ON user_preferences(preference_key);
+CREATE INDEX idx_user_preferences_department ON user_preferences(department);
+
+ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_user_preferences_isolation ON user_preferences
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 23: api_keys
+-- Purpose: Manage external API keys per department
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    service_name VARCHAR(100) NOT NULL,
+    api_key_name VARCHAR(255) NOT NULL,
+    api_key_encrypted BYTEA NOT NULL,
+    scopes JSONB,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    rotated_at TIMESTAMPTZ,
+    CONSTRAINT unique_service_key UNIQUE(service_name, api_key_name)
+);
+
+CREATE INDEX idx_api_keys_service ON api_keys(service_name);
+CREATE INDEX idx_api_keys_expires ON api_keys(expires_at);
+CREATE INDEX idx_api_keys_department ON api_keys(department);
+
+ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_api_keys_isolation ON api_keys
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- TABLE 24: feature_flags
+-- Purpose: Feature toggles per department
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS feature_flags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    department VARCHAR(100) DEFAULT '{{ department_id }}',
+    feature_name VARCHAR(100) NOT NULL,
+    enabled BOOLEAN DEFAULT FALSE,
+    config JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_department_feature UNIQUE(department, feature_name)
+);
+
+CREATE INDEX idx_feature_flags_enabled ON feature_flags(enabled);
+CREATE INDEX idx_feature_flags_department ON feature_flags(department);
+
+ALTER TABLE feature_flags ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY {{ department_id }}_feature_flags_isolation ON feature_flags
+    FOR ALL
+    TO {{ department_role }}
+    USING (department = '{{ department_id }}');
+
+-- =============================================================================
+-- CLEANUP FUNCTIONS
+-- =============================================================================
+
+-- Expire old session context
+CREATE OR REPLACE FUNCTION cleanup_expired_session_context()
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM {{ department_schema }}.session_context
+    WHERE expires_at < NOW();
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Archive old conversation history (2 years retention)
+CREATE OR REPLACE FUNCTION archive_old_conversation_history()
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM {{ department_schema }}.conversation_history
+    WHERE timestamp < NOW() - INTERVAL '2 years';
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================================================
+-- UPDATED_AT TRIGGER
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Apply trigger to tables with updated_at column
+CREATE TRIGGER update_drive_document_repository_updated_at
+    BEFORE UPDATE ON drive_document_repository
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_calendar_events_updated_at
+    BEFORE UPDATE ON calendar_events
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_contacts_updated_at
+    BEFORE UPDATE ON contacts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_agent_context_updated_at
+    BEFORE UPDATE ON agent_context
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_user_preferences_updated_at
+    BEFORE UPDATE ON user_preferences
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_feature_flags_updated_at
+    BEFORE UPDATE ON feature_flags
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- =============================================================================
+-- SCHEMA VALIDATION
+-- =============================================================================
+
+-- Verify all tables created
+DO $$
+DECLARE
+    expected_tables TEXT[] := ARRAY[
+        'tool_calls', 'session_context', 'drive_document_repository', 'drive_access_log',
+        'email_logs', 'vector_store_embeddings', 'agent_context', 'conversation_history',
+        'calendar_events', 'contacts', 'audit_trail', 'training_metrics',
+        'user_session_analytics', 'file_attachments', 'llm_usage_logs', 'stt_usage_logs',
+        'tts_usage_logs', 'workflow_executions', 'error_logs', 'notifications',
+        'scheduled_tasks', 'user_preferences', 'api_keys', 'feature_flags'
+    ];
+    table_name TEXT;
+    missing_tables TEXT[] := ARRAY[]::TEXT[];
+BEGIN
+    FOREACH table_name IN ARRAY expected_tables
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = '{{ department_schema }}'
+            AND table_name = table_name
+        ) THEN
+            missing_tables := array_append(missing_tables, table_name);
+        END IF;
+    END LOOP;
+
+    IF array_length(missing_tables, 1) > 0 THEN
+        RAISE EXCEPTION 'Schema validation failed. Missing tables: %', array_to_string(missing_tables, ', ');
+    ELSE
+        RAISE NOTICE 'Schema validation passed. All 24 tables created successfully.';
+    END IF;
+END $$;
+
+-- =============================================================================
+-- COMPLETION MESSAGE
+-- =============================================================================
+
+DO $$
+BEGIN
+    RAISE NOTICE '========================================';
+    RAISE NOTICE 'Schema created: {{ department_schema }}';
+    RAISE NOTICE 'Department: {{ department_name }}';
+    RAISE NOTICE 'Department ID: {{ department_id }}';
+    RAISE NOTICE 'Generated at: {{ timestamp }}';
+    RAISE NOTICE 'Total tables: 24';
+    RAISE NOTICE 'RLS policies: 24 (all enabled)';
+    RAISE NOTICE '========================================';
+END $$;

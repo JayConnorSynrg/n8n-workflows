@@ -7,178 +7,49 @@
 ## SUPREME RULE: Mandatory Sub-Agent Execution
 
 **The orchestrator NEVER executes - it ONLY orchestrates.**
+- ONLY: PLAN → ROUTE → DELEGATE → COORDINATE → VALIDATE → EVOLVE
+- NEVER: Read large files, write code, call MCP, debug, research, or execute directly
+- **Agent Gap:** No agent exists → STOP → PROPOSE → WAIT → CREATE → DELEGATE
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  ORCHESTRATOR RESPONSIBILITIES (ONLY THESE)                       │
-├────────────────────────────────────────────────────────────────────┤
-│  ✓ PLAN     → Define objectives, break tasks into sub-tasks       │
-│  ✓ ROUTE    → Select appropriate sub-agent for each task          │
-│  ✓ DELEGATE → Invoke sub-agents via Task() tool                   │
-│  ✓ COORDINATE → Manage parallel execution, handle dependencies    │
-│  ✓ VALIDATE → Review sub-agent outputs, approve/reject            │
-│  ✓ EVOLVE   → Document patterns, propose improvements             │
-└────────────────────────────────────────────────────────────────────┘
+**Sub-Agent Selection:**
 
-┌────────────────────────────────────────────────────────────────────┐
-│  ORCHESTRATOR MUST NEVER (ZERO TOLERANCE)                         │
-├────────────────────────────────────────────────────────────────────┤
-│  ✗ READ large files directly     → Delegate to Explore agent      │
-│  ✗ WRITE code directly           → Delegate to specialist agent   │
-│  ✗ CALL MCP tools directly       → Delegate to *-mcp-delegate     │
-│  ✗ DEBUG errors directly         → Delegate to debugger agents    │
-│  ✗ RESEARCH directly             → Delegate to Explore/general    │
-│  ✗ EXECUTE any implementation    → ALWAYS delegate                │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-**Agent Gap Protocol:**
-If no suitable sub-agent exists for a task:
-1. **STOP** - Do NOT execute directly
-2. **PROPOSE** - Suggest new agent to user (name, purpose, tools, model)
-3. **WAIT** - Get user approval
-4. **CREATE** - Use `/synrg-swarm` or create in `.claude/agents/`
-5. **DELEGATE** - Then route the task to the new agent
-
-**Sub-Agent Selection Quick Reference:**
-
-| Task Category | Sub-Agent | Model |
-|---------------|-----------|-------|
-| n8n node issues | `n8n-node-validator` | haiku |
-| n8n connections | `n8n-connection-fixer` | haiku |
-| n8n versions | `n8n-version-researcher` | haiku |
-| n8n expressions | `n8n-expression-debugger` | haiku |
-| n8n patterns | `n8n-pattern-retriever` | haiku |
-| n8n complex | `n8n-workflow-expert` | sonnet |
-| n8n MCP calls | `n8n-mcp-delegate` | haiku |
-| GitHub MCP calls | `github-mcp-delegate` | haiku |
-| Codebase exploration | `Explore` | sonnet |
-| General research | `general-purpose` | sonnet |
-| Code implementation | `full-stack-dev-expert` | sonnet |
-| **NO AGENT EXISTS** | **PROPOSE NEW AGENT** | - |
+| Task Category | Sub-Agent | Model | Definition |
+|---------------|-----------|-------|------------|
+| n8n node issues | `n8n-node-validator` | haiku | `agents/n8n-node-validator.md` |
+| n8n connections | `n8n-connection-fixer` | haiku | `agents/n8n-connection-fixer.md` |
+| n8n versions | `n8n-version-researcher` | haiku | `agents/n8n-version-researcher.md` |
+| n8n expressions | `n8n-expression-debugger` | haiku | `agents/n8n-expression-debugger.md` |
+| n8n patterns | `n8n-pattern-retriever` | haiku | `agents/n8n-pattern-retriever.md` |
+| n8n complex | `n8n-workflow-expert` | sonnet | `agents/n8n-workflow-expert.md` |
+| n8n MCP calls | `n8n-mcp-delegate` | haiku | - |
+| GitHub MCP calls | `github-mcp-delegate` | haiku | - |
+| Codebase exploration | `Explore` | sonnet | - |
+| General research | `general-purpose` | sonnet | - |
+| Code implementation | `full-stack-dev-expert` | sonnet | - |
+| **NO AGENT EXISTS** | **PROPOSE NEW AGENT** | - | - |
 
 ---
 
 ## AIO Voice System (Priority Reference)
 
-**When user says "AIO Voice System"** - refers to the complete voice assistant ecosystem:
+**When user says "AIO Voice System"** - the complete voice assistant ecosystem.
+**Full architecture + diagrams + schema:** `.claude/aio-voice-system.md` (on-demand)
 
-### Service Architecture (Railway + External)
-
-| Service | Location | Purpose | Key Files |
-|---------|----------|---------|-----------|
-| **Client (Web UI)** | `voice-agent-poc/client-v2/` | React app with LiveKit connection | `src/hooks/useLiveKitAgent.ts`, `src/lib/store.ts` |
-| **LiveKit Agent** | `voice-agent-poc/livekit-voice-agent/` | Python voice agent | `src/agent.py`, `src/tools/` |
-| **Async Worker** | (in agent) | Background tool execution | `src/utils/async_tool_worker.py` |
-| **Database** | PostgreSQL on Railway | Tool call logging, session context | `database/schema.sql` |
-| **n8n Workflows** | `jayconnorexe.app.n8n.cloud` | Tool backends (Drive, Email, DB) | MCP tools |
-| **Recall.ai** | External | Meeting bot audio capture | - |
-| **LLM** | Cerebras `llama-3.3-70b` | Function calling + reasoning | - |
-| **STT** | Deepgram `nova-3` | Speech-to-text | - |
-| **TTS** | Cartesia `sonic-3` | Text-to-speech | - |
-
-### Data Flow Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  CLIENT (React)                                                              │
-│  useLiveKitAgent.ts → LiveKit Room → Data Channel messages                   │
-│  Message types: tool.call, tool.executing, tool.completed, tool.error        │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                    │ ▲
-                     LiveKit WebRTC │ │ Data Channel
-                                    ▼ │
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  LIVEKIT AGENT (Python)                                                      │
-│  agent.py → LLM (Cerebras) → Tool calls → async_tool_worker.py              │
-│  Publishes results to data channel topic: "tool_result"                      │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                     HTTP webhooks  │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  N8N WORKFLOWS                                                               │
-│  /execute-gmail, /drive-document-repo, /database-query, etc.                │
-│  Logs to PostgreSQL tool_calls table, returns voice_response for TTS         │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  POSTGRESQL DATABASE                                                         │
-│  Tables: tool_calls (gated execution), session_context, audit_trail          │
-│  tool_calls.status: EXECUTING → COMPLETED/FAILED/CANCELLED                   │
-│  tool_calls.voice_response: TTS text for agent announcement                  │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key Database Schema (tool_calls)
-
-```sql
-CREATE TABLE tool_calls (
-    tool_call_id VARCHAR(100) UNIQUE NOT NULL,  -- tc_xxx or lk_xxx format
-    session_id VARCHAR(100) NOT NULL,
-    function_name VARCHAR(100) NOT NULL,
-    parameters JSONB NOT NULL DEFAULT '{}',
-    status VARCHAR(20) NOT NULL DEFAULT 'EXECUTING',  -- EXECUTING, COMPLETED, FAILED, CANCELLED
-    result JSONB,
-    voice_response TEXT,  -- TTS text for agent to speak
-    callback_url TEXT,    -- For gated execution (multi-turn)
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    completed_at TIMESTAMPTZ
-);
-```
+| Service | Location | Purpose |
+|---------|----------|---------|
+| Client | `voice-agent-poc/client-v2/` | React + LiveKit |
+| Agent | `voice-agent-poc/livekit-voice-agent/` | Python voice agent |
+| n8n | `jayconnorexe.app.n8n.cloud` | Tool backends (Drive, Email, DB) |
+| DB | PostgreSQL on Railway | tool_calls, session_context |
+| LLM | Cerebras (see MEMORY.md for current models) | Function calling |
+| STT/TTS | Deepgram nova-3 / Cartesia sonic-3 | Audio I/O |
 
 **AIO Tools Registry:** `voice-agent-poc/livekit-voice-agent/docs/AIO-TOOLS-REGISTRY.md`
-- Security ratings for all voice agent tools
-- Modular format for adding new tools
-- Reference this when user mentions "AIO tools"
+**Key Workflows:** `IamjzfFxjHviJvJg` (Drive), `gjYSN6xNjLw8qsA1` (Teams VB v3), `ouWMjcKzbj6nrYXz` (Context), `kBuTRrXTJF1EEBEs` (Gmail gates)
 
-**Key Workflows:**
-- `IamjzfFxjHviJvJg` - Google Drive Document Repository
-- `gjYSN6xNjLw8qsA1` - Teams Voice Bot v3
-- `ouWMjcKzbj6nrYXz` - Agent Context Access
-- `kBuTRrXTJF1EEBEs` - Voice Tool: Send Gmail (multi-turn async gates)
+**MANDATORY:** When debugging AIO components, analyze the full ecosystem yourself (agent code, tools/, AIO Tools Registry, n8n workflows via MCP). DO NOT ask the user how components interact.
 
-**Health Check Command:** `railway logs` + n8n execution history
-
-**🔴 MANDATORY: AIO Ecosystem Analysis Protocol**
-When debugging or modifying ANY AIO Voice System component:
-1. **DO NOT ask the user** about how components interact
-2. **Analyze the full ecosystem yourself** by examining:
-   - LiveKit agent code: `voice-agent-poc/livekit-voice-agent/`
-   - Tool definitions: `voice-agent-poc/livekit-voice-agent/tools/`
-   - AIO Tools Registry: `voice-agent-poc/livekit-voice-agent/docs/AIO-TOOLS-REGISTRY.md`
-   - n8n workflow structures via MCP tools
-3. The agent IS configured for multi-turn gate callbacks - this has been verified working
-
-**Known Issues to Monitor:**
-- Google Drive OAuth expiration (credential: `ylMLH2SMUpGQpUUr`)
-- Gmail OAuth expiration (credential: `Wagsju9B8ofYq2Sl` - Jayconnor@synrgscaling.com) - **CHECK STATUS**
-- Cerebras tool calling with smaller models (use 70b+)
-
----
-
-## Agent Selection (Delegate via Task tool)
-
-**Agent Definitions:** `.claude/agents/`
-
-| Task | Agent | Model | Definition |
-|------|-------|-------|------------|
-| Invalid nodes | `n8n-node-validator` | haiku | `agents/n8n-node-validator.md` |
-| Connection errors | `n8n-connection-fixer` | haiku | `agents/n8n-connection-fixer.md` |
-| Version issues | `n8n-version-researcher` | haiku | `agents/n8n-version-researcher.md` |
-| Expression errors | `n8n-expression-debugger` | haiku | `agents/n8n-expression-debugger.md` |
-| Pattern lookup | `n8n-pattern-retriever` | haiku | `agents/n8n-pattern-retriever.md` |
-| Complex/multi-step | `n8n-workflow-expert` | sonnet | `agents/n8n-workflow-expert.md` |
-
-**Delegation Example:**
-```javascript
-Task({
-  subagent_type: "n8n-pattern-retriever",
-  prompt: "Retrieve patterns for @n8n/n8n-nodes-langchain.openAi",
-  model: "haiku"
-})
-```
+**Known Issues:** Google Drive OAuth (`ylMLH2SMUpGQpUUr`), Gmail OAuth (`Wagsju9B8ofYq2Sl`), Cerebras model compatibility (see MEMORY.md)
 
 ---
 
@@ -240,11 +111,7 @@ if (input.error || !input.expectedField) {
 
 ## Pattern Retrieval
 
-**Index:** `.claude/patterns/pattern-index.json`
-- `node_type_mappings` - Node type → pattern IDs
-- `task_mappings` - Task type → pattern IDs
-
-**Sub-agents read patterns before acting. Orchestrator delegates, doesn't implement.**
+**Index:** `.claude/patterns/pattern-index.json` (node_type_mappings, task_mappings). Sub-agents read patterns before acting.
 
 ---
 
@@ -296,6 +163,6 @@ Before ANY workflow creation:
 
 ## On-Demand Documentation
 - `.claude/ORCHESTRATOR-DETAILS.md` - Delegation examples, agent creation, MCP tools
-- `.claude/skills/n8n-debugging/SKILL.md` - Full debugging methodology (replaces /synrg-n8ndebug for sub-agents)
+- `.claude/aio-voice-system.md` - Full AIO architecture, data flow diagrams, DB schema
+- `.claude/skills/n8n-debugging/SKILL.md` - Full debugging methodology
 - `.claude/patterns/README.md` - Pattern library navigation
-- `.claude/CLAUDE.md.full-backup` - Complete 830-line reference

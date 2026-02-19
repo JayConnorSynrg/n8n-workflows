@@ -1,0 +1,63 @@
+{
+  "departmentId": "hr",
+  "departmentName": "Human Resources",
+  "environment": "prod",
+
+  "dockerRegistry": "ghcr.io/synrgscaling",
+  "imageVersion": "v1.0.0",
+
+  "n8nWebhookBase": "https://jayconnorexe.app.n8n.cloud/webhook",
+
+  "livekitUrl": "wss://livekit.example.com",
+  "livekitApiKey": "API_KEY_HERE",
+  "livekitApiSecret": "API_SECRET_HERE",
+
+  "cerebrasApiKey": "csk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "cerebrasModel": "llama-3.3-70b",
+  "cerebrasTemperature": "0.6",
+  "cerebrasMaxTokens": "150",
+
+  "deepgramApiKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "deepgramModel": "nova-3",
+
+  "cartesiaApiKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "cartesiaModel": "sonic-3",
+  "cartesiaVoice": "a167e0f3-df7e-4d52-a9c3-f949145efdab",
+
+  "enabledTools": [
+    "email",
+    "google_drive",
+    "database",
+    "vector_store",
+    "agent_context"
+  ],
+
+  "postgresStorage": 10,
+  "voiceAgentCpu": "2000m",
+  "voiceAgentMemory": "4096Mi",
+
+  "customDomain": "aio.synrg.io",
+  "costCenter": "DEPT-HR-001",
+
+  "oauthCredentials": {
+    "GOOGLE_CLIENT_ID": "xxxxx.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "GOCSPX-xxxxxxxxxxxxxxxxxxxxx",
+    "GOOGLE_REFRESH_TOKEN": "1//xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+
+  "autoscaling": {
+    "enabled": true,
+    "minInstances": 1,
+    "maxInstances": 3,
+    "cpuThreshold": 70,
+    "memoryThreshold": 80
+  },
+
+  "backup": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "retentionDays": 30,
+    "s3Bucket": "federation-backups-prod",
+    "s3Region": "us-east-1"
+  }
+}

@@ -1,0 +1,114 @@
+#!/bin/bash
+# ==============================================================================
+# AIO Voice Assistant - Monitoring Script
+# Department: {{ department_name }} ({{ department_id }})
+# ==============================================================================
+
+set -euo pipefail
+
+DEPARTMENT_ID="{{ department_id }}"
+INSTALL_DIR="{{ install_dir }}"
+COMPOSE_PROJECT="{{ compose_project_name }}"
+HEALTH_URL="http://localhost:{{ voice_agent_port | default('8080') }}/health"
+
+# Log function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Check if containers are running
+check_containers() {
+    local postgres_running=$(docker ps --filter "name=${DEPARTMENT_ID}_postgres" --filter "status=running" -q)
+    local agent_running=$(docker ps --filter "name=${DEPARTMENT_ID}_voice_agent" --filter "status=running" -q)
+
+    if [ -z "$postgres_running" ]; then
+        log "ERROR: PostgreSQL container not running"
+        return 1
+    fi
+
+    if [ -z "$agent_running" ]; then
+        log "ERROR: Voice agent container not running"
+        return 1
+    fi
+
+    log "INFO: All containers running"
+    return 0
+}
+
+# Check health endpoint
+check_health() {
+    local response=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+
+    if [ "$response" = "200" ]; then
+        log "INFO: Health check passed (HTTP $response)"
+        return 0
+    else
+        log "ERROR: Health check failed (HTTP $response)"
+        return 1
+    fi
+}
+
+# Check disk space
+check_disk_space() {
+    local usage=$(df -h "$INSTALL_DIR" | awk 'NR==2 {print $5}' | sed 's/%//')
+
+    if [ "$usage" -gt 80 ]; then
+        log "WARNING: Disk usage is ${usage}%"
+        return 1
+    fi
+
+    log "INFO: Disk usage is ${usage}%"
+    return 0
+}
+
+# Check memory usage
+check_memory() {
+    local total_mem=$(free -m | awk 'NR==2{print $2}')
+    local used_mem=$(free -m | awk 'NR==2{print $3}')
+    local usage=$((used_mem * 100 / total_mem))
+
+    if [ "$usage" -gt 90 ]; then
+        log "WARNING: Memory usage is ${usage}%"
+        return 1
+    fi
+
+    log "INFO: Memory usage is ${usage}%"
+    return 0
+}
+
+# Main monitoring logic
+main() {
+    log "Starting monitoring check for department: $DEPARTMENT_ID"
+
+    local errors=0
+
+    check_containers || errors=$((errors + 1))
+    check_health || errors=$((errors + 1))
+    check_disk_space || errors=$((errors + 1))
+    check_memory || errors=$((errors + 1))
+
+    if [ $errors -gt 0 ]; then
+        log "SUMMARY: Monitoring check completed with $errors error(s)"
+
+        # Attempt restart if health check failed
+        if ! check_health; then
+            log "INFO: Attempting service restart"
+            cd "$INSTALL_DIR"
+            docker compose restart voice_agent
+            sleep 30
+
+            if check_health; then
+                log "INFO: Service restart successful"
+            else
+                log "ERROR: Service restart failed"
+            fi
+        fi
+
+        return 1
+    else
+        log "SUMMARY: All checks passed"
+        return 0
+    fi
+}
+
+main

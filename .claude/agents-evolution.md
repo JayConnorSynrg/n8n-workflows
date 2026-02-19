@@ -1,3 +1,7 @@
+# DO NOT LOAD THIS FILE - 184KB / ~46,000 tokens
+# Patterns have been migrated to .claude/patterns/
+# This file is an append-only historical log. Use pattern-index.json instead.
+
 # N8N Workflow Development - Pattern Evolution
 
 **Purpose:** Document real anti-patterns (mistakes) and positive patterns (successful solutions) discovered during n8n workflow development.

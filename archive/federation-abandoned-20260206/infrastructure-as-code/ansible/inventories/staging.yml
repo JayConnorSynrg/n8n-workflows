@@ -1,0 +1,67 @@
+# ==============================================================================
+# Ansible Inventory - Staging Environment
+# ==============================================================================
+
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_python_interpreter: /usr/bin/python3
+    environment: staging
+
+    # Docker Registry
+    docker_registry: ghcr.io/synrgscaling
+    image_version: staging
+
+    # n8n Configuration
+    n8n_webhook_base: https://jayconnorexe.app.n8n.cloud/webhook
+
+    # LiveKit Configuration (use staging keys)
+    livekit_url: wss://staging-livekit.example.com
+    livekit_api_key: "{{ lookup('env', 'LIVEKIT_API_KEY_STAGING') }}"
+    livekit_api_secret: "{{ lookup('env', 'LIVEKIT_API_SECRET_STAGING') }}"
+
+    # LLM Configuration (Cerebras)
+    cerebras_api_key: "{{ lookup('env', 'CEREBRAS_API_KEY') }}"
+    cerebras_model: llama-3.1-70b  # Use older model for staging
+    cerebras_temperature: "0.6"
+    cerebras_max_tokens: "150"
+
+    # STT Configuration (Deepgram)
+    deepgram_api_key: "{{ lookup('env', 'DEEPGRAM_API_KEY') }}"
+    deepgram_model: nova-2  # Use older model for staging
+
+    # TTS Configuration (Cartesia)
+    cartesia_api_key: "{{ lookup('env', 'CARTESIA_API_KEY') }}"
+    cartesia_model: sonic-2  # Use older model for staging
+    cartesia_voice: a167e0f3-df7e-4d52-a9c3-f949145efdab
+
+    # Enabled Tools
+    enabled_tools: '["email","google_drive","database"]'
+
+    # Logging (more verbose for staging)
+    log_level: DEBUG
+
+  children:
+    vps_servers:
+      hosts:
+        staging-vps-01:
+          ansible_host: 198.51.100.10
+          ansible_port: 22
+
+    hr_vps:
+      hosts:
+        staging-vps-01:
+      vars:
+        department_id: hr-staging
+        department_name: HR Staging
+        voice_agent_port: 8080
+        postgres_port: 5432
+
+    sales_vps:
+      hosts:
+        staging-vps-01:
+      vars:
+        department_id: sales-staging
+        department_name: Sales Staging
+        voice_agent_port: 8081
+        postgres_port: 5433

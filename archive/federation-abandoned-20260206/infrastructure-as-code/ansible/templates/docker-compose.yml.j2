@@ -1,0 +1,68 @@
+version: '3.8'
+
+# ==============================================================================
+# AIO Voice Assistant - Docker Compose Configuration
+# Department: {{ department_name }} ({{ department_id }})
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: "{{ department_id }}_postgres"
+    environment:
+      POSTGRES_DB: "{{ department_id }}"
+      POSTGRES_USER: "{{ department_id }}"
+      POSTGRES_PASSWORD: "{{ postgres_password }}"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - aio_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ department_id }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    ports:
+      - "{{ postgres_port | default('5432') }}:5432"
+    labels:
+      com.federation.department: "{{ department_id }}"
+      com.federation.service: "postgres"
+
+  voice_agent:
+    image: "{{ aio_image }}"
+    container_name: "{{ department_id }}_voice_agent"
+    env_file: .env
+    ports:
+      - "{{ voice_agent_port | default('8080') }}:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - aio_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      com.federation.department: "{{ department_id }}"
+      com.federation.service: "voice_agent"
+      com.federation.version: "{{ image_version | default('latest') }}"
+
+volumes:
+  postgres_data:
+    name: "{{ department_id }}_postgres_data"
+
+networks:
+  aio_network:
+    name: "{{ department_id }}_network"
+    driver: bridge

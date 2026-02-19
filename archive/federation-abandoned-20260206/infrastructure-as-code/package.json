@@ -1,0 +1,57 @@
+{
+  "name": "@federation/infrastructure-as-code",
+  "version": "1.0.0",
+  "description": "Infrastructure as Code for Federation Platform - Automated department provisioning",
+  "main": "deploy-cli.ts",
+  "bin": {
+    "federation-deploy": "./deploy-cli.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "deploy:railway": "ts-node deploy-cli.ts deploy railway",
+    "deploy:vps": "ts-node deploy-cli.ts deploy vps",
+    "list": "ts-node deploy-cli.ts list",
+    "terraform:init": "cd terraform/railway && terraform init",
+    "terraform:plan": "cd terraform/railway && terraform plan",
+    "terraform:apply": "cd terraform/railway && terraform apply",
+    "terraform:destroy": "cd terraform/railway && terraform destroy",
+    "ansible:check": "cd ansible && ansible-playbook aio-vps.yml --check",
+    "ansible:deploy": "cd ansible && ansible-playbook aio-vps.yml",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write '**/*.{ts,json,md}'"
+  },
+  "keywords": [
+    "federation",
+    "infrastructure",
+    "terraform",
+    "ansible",
+    "railway",
+    "deployment",
+    "iac"
+  ],
+  "author": "SYNRG Scaling",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "commander": "^11.1.0",
+    "chalk": "^5.3.0",
+    "ora": "^8.0.1",
+    "inquirer": "^9.2.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/inquirer": "^9.0.7",
+    "@typescript-eslint/eslint-plugin": "^6.18.1",
+    "@typescript-eslint/parser": "^6.18.1",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

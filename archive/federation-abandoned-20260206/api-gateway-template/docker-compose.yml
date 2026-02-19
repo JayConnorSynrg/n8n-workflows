@@ -1,0 +1,97 @@
+# Federation API Gateway - Docker Compose
+# For local development and testing
+
+version: '3.8'
+
+services:
+  # API Gateway service
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: federation-api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      # Server configuration
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+
+      # JWT authentication
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-min-32-chars-long-change-this-in-production}
+
+      # Database connection
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/federation}
+
+      # Redis connection
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+
+      # Rate limiting configuration
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      CROSS_DEPT_RATE_LIMIT_WINDOW_MS: ${CROSS_DEPT_RATE_LIMIT_WINDOW_MS:-3600000}
+      CROSS_DEPT_RATE_LIMIT_MAX: ${CROSS_DEPT_RATE_LIMIT_MAX:-10}
+
+      # CORS configuration
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+    networks:
+      - federation-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis for rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: federation-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - federation-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PostgreSQL database (for local testing only)
+  postgres:
+    image: postgres:15-alpine
+    container_name: federation-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-federation}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    networks:
+      - federation-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  federation-network:
+    driver: bridge

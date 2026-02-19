@@ -1,0 +1,9 @@
+# Operations Workflows
+
+Templates for Operations department.
+
+## Workflows
+
+- `security-report-generator` - Security reports
+- `github-security-logs` - GitHub audit logs
+- `invoice-generator` - Invoice generation

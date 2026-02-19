@@ -1,0 +1,112 @@
+# ==============================================================================
+# Ansible Inventory - Production Environment
+# ==============================================================================
+
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_python_interpreter: /usr/bin/python3
+    environment: production
+
+    # Docker Registry
+    docker_registry: ghcr.io/synrgscaling
+    image_version: latest
+
+    # n8n Configuration
+    n8n_webhook_base: https://jayconnorexe.app.n8n.cloud/webhook
+
+    # LiveKit Configuration
+    livekit_url: wss://livekit.example.com
+    livekit_api_key: "{{ lookup('env', 'LIVEKIT_API_KEY') }}"
+    livekit_api_secret: "{{ lookup('env', 'LIVEKIT_API_SECRET') }}"
+
+    # LLM Configuration (Cerebras)
+    cerebras_api_key: "{{ lookup('env', 'CEREBRAS_API_KEY') }}"
+    cerebras_model: llama-3.3-70b
+    cerebras_temperature: "0.6"
+    cerebras_max_tokens: "150"
+
+    # STT Configuration (Deepgram)
+    deepgram_api_key: "{{ lookup('env', 'DEEPGRAM_API_KEY') }}"
+    deepgram_model: nova-3
+
+    # TTS Configuration (Cartesia)
+    cartesia_api_key: "{{ lookup('env', 'CARTESIA_API_KEY') }}"
+    cartesia_model: sonic-3
+    cartesia_voice: a167e0f3-df7e-4d52-a9c3-f949145efdab
+
+    # Enabled Tools
+    enabled_tools: '["email","google_drive","database","vector_store","agent_context"]'
+
+    # Logging
+    log_level: INFO
+
+  children:
+    # ==========================================================================
+    # VPS SERVERS
+    # ==========================================================================
+    vps_servers:
+      hosts:
+        vps-01:
+          ansible_host: 203.0.113.10
+          ansible_port: 22
+        vps-02:
+          ansible_host: 203.0.113.11
+          ansible_port: 22
+        vps-03:
+          ansible_host: 203.0.113.12
+          ansible_port: 22
+
+    # ==========================================================================
+    # DEPARTMENT ASSIGNMENTS
+    # ==========================================================================
+
+    # HR Department
+    hr_vps:
+      hosts:
+        vps-01:
+      vars:
+        department_id: hr
+        department_name: Human Resources
+        voice_agent_port: 8080
+        postgres_port: 5432
+
+    # Accounting Department
+    accounting_vps:
+      hosts:
+        vps-01:
+      vars:
+        department_id: accounting
+        department_name: Accounting
+        voice_agent_port: 8081
+        postgres_port: 5433
+
+    # Sales Department
+    sales_vps:
+      hosts:
+        vps-02:
+      vars:
+        department_id: sales
+        department_name: Sales
+        voice_agent_port: 8080
+        postgres_port: 5432
+
+    # Legal Department
+    legal_vps:
+      hosts:
+        vps-02:
+      vars:
+        department_id: legal
+        department_name: Legal
+        voice_agent_port: 8081
+        postgres_port: 5433
+
+    # Marketing Department
+    marketing_vps:
+      hosts:
+        vps-03:
+      vars:
+        department_id: marketing
+        department_name: Marketing
+        voice_agent_port: 8080
+        postgres_port: 5432

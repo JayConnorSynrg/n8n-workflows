@@ -1,0 +1,14 @@
+# Core Workflows (Universal)
+
+Templates in this directory are deployed to ALL departments.
+
+## Workflows
+
+- `google-drive-repository` - Google Drive search & sync
+- `agent-context-access` - Voice agent context queries
+- `file-download-email` - File download & email subworkflow
+- `teams-voice-bot` - Voice bot launcher
+- `send-gmail` - Gmail sending tool
+- `vector-db-add` - Add to vector database
+- `vector-db-query` - Query vector database
+- `manage-contacts` - Contact management

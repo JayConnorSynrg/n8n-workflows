@@ -1,0 +1,140 @@
+# Federation AIO Docker Template - Local Testing Compose
+# Version: 1.0.0
+# Purpose: Test Docker image locally before deployment
+
+version: '3.8'
+
+services:
+  # PostgreSQL database for testing
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: federation_test
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: federation_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./tests/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U federation_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # AIO Voice Agent (HR Department test)
+  aio-hr-test:
+    build:
+      context: .
+      dockerfile: aio-base.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Department config
+      DEPARTMENT_ID: "hr"
+      DEPARTMENT_NAME: "Human Resources"
+
+      # Database
+      POSTGRES_URL: "postgresql://federation_test:test_password@postgres:5432/federation_test"
+      DB_SCHEMA: "hr_tenant"
+
+      # n8n (mock endpoint for testing)
+      N8N_WEBHOOK_BASE: "https://httpbin.org/post"
+
+      # LiveKit (use test credentials)
+      LIVEKIT_URL: "${LIVEKIT_URL:-wss://test.livekit.cloud}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-test_key}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-test_secret}"
+
+      # LLM (Cerebras)
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-test_cerebras_key}"
+      CEREBRAS_MODEL: "llama-3.3-70b"
+      CEREBRAS_TEMPERATURE: "0.6"
+      CEREBRAS_MAX_TOKENS: "150"
+
+      # STT (Deepgram)
+      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-test_deepgram_key}"
+      DEEPGRAM_MODEL: "nova-3"
+
+      # TTS (Cartesia)
+      CARTESIA_API_KEY: "${CARTESIA_API_KEY:-test_cartesia_key}"
+      CARTESIA_MODEL: "sonic-3"
+      CARTESIA_VOICE: "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+
+      # Enabled tools
+      ENABLED_TOOLS: '["email","google_drive","database","vector_store","agent_context"]'
+
+      # Logging
+      LOG_LEVEL: "DEBUG"
+
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./tests/test-config:/app/config
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # AIO Voice Agent (Accounting Department test)
+  aio-accounting-test:
+    build:
+      context: .
+      dockerfile: aio-base.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Department config
+      DEPARTMENT_ID: "accounting"
+      DEPARTMENT_NAME: "Accounting"
+
+      # Database
+      POSTGRES_URL: "postgresql://federation_test:test_password@postgres:5432/federation_test"
+      DB_SCHEMA: "accounting_tenant"
+
+      # n8n (mock endpoint for testing)
+      N8N_WEBHOOK_BASE: "https://httpbin.org/post"
+
+      # LiveKit (use test credentials)
+      LIVEKIT_URL: "${LIVEKIT_URL:-wss://test.livekit.cloud}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-test_key}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-test_secret}"
+
+      # LLM (Cerebras)
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-test_cerebras_key}"
+
+      # STT (Deepgram)
+      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-test_deepgram_key}"
+
+      # TTS (Cartesia)
+      CARTESIA_API_KEY: "${CARTESIA_API_KEY:-test_cartesia_key}"
+
+      # Enabled tools (different from HR)
+      ENABLED_TOOLS: '["email","database","vector_store"]'
+
+      # Logging
+      LOG_LEVEL: "DEBUG"
+
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./tests/test-config:/app/config
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge

@@ -1,0 +1,129 @@
+# Example Terraform Variables File
+# Copy this file to terraform.tfvars and update with your values
+
+# ============================================================================
+# DEPARTMENT CONFIGURATION
+# ============================================================================
+
+department_name = "Human Resources"
+department_id   = "hr"
+environment     = "prod"
+cost_center     = "DEPT-HR-001"
+
+# ============================================================================
+# DOCKER CONFIGURATION
+# ============================================================================
+
+docker_registry = "ghcr.io/synrgscaling"
+image_version   = "v1.0.0"
+
+# ============================================================================
+# N8N CONFIGURATION
+# ============================================================================
+
+n8n_webhook_base = "https://jayconnorexe.app.n8n.cloud/webhook"
+
+# ============================================================================
+# LIVEKIT CONFIGURATION
+# ============================================================================
+
+livekit_url        = "wss://livekit.example.com"
+livekit_api_key    = "API_KEY_HERE"
+livekit_api_secret = "API_SECRET_HERE"
+
+# ============================================================================
+# LLM CONFIGURATION (Cerebras)
+# ============================================================================
+
+cerebras_api_key     = "csk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+cerebras_model       = "llama-3.3-70b"
+cerebras_temperature = "0.6"
+cerebras_max_tokens  = "150"
+
+# ============================================================================
+# STT CONFIGURATION (Deepgram)
+# ============================================================================
+
+deepgram_api_key = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+deepgram_model   = "nova-3"
+
+# ============================================================================
+# TTS CONFIGURATION (Cartesia)
+# ============================================================================
+
+cartesia_api_key = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+cartesia_model   = "sonic-3"
+cartesia_voice   = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+
+# ============================================================================
+# ENABLED TOOLS
+# ============================================================================
+
+enabled_tools = [
+  "email",
+  "google_drive",
+  "database",
+  "vector_store",
+  "agent_context"
+]
+
+# ============================================================================
+# RESOURCE ALLOCATION
+# ============================================================================
+
+# PostgreSQL
+postgres_cpu        = "1000m"  # 1 vCPU
+postgres_memory     = "2048Mi" # 2GB
+postgres_storage_gb = 10
+
+# Voice Agent
+voice_agent_cpu    = "2000m"  # 2 vCPUs
+voice_agent_memory = "4096Mi" # 4GB
+
+# ============================================================================
+# AUTOSCALING
+# ============================================================================
+
+autoscaling_enabled          = true
+autoscaling_min_instances    = 1
+autoscaling_max_instances    = 3
+autoscaling_cpu_threshold    = 70
+autoscaling_memory_threshold = 80
+
+# ============================================================================
+# NETWORKING
+# ============================================================================
+
+custom_domain = "aio.synrg.io" # Voice agent will be at hr.aio.synrg.io
+
+# ============================================================================
+# OAUTH CREDENTIALS (Optional)
+# ============================================================================
+
+oauth_credentials = {
+  GOOGLE_CLIENT_ID     = "xxxxx.apps.googleusercontent.com"
+  GOOGLE_CLIENT_SECRET = "GOCSPX-xxxxxxxxxxxxxxxxxxxxx"
+  GOOGLE_REFRESH_TOKEN = "1//xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+}
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
+log_level = "INFO"
+
+# ============================================================================
+# MONITORING
+# ============================================================================
+
+monitoring_enabled = false # Set to true for production
+
+# ============================================================================
+# BACKUP CONFIGURATION
+# ============================================================================
+
+backup_enabled         = true
+backup_schedule        = "0 2 * * *" # Daily at 2 AM UTC
+backup_retention_days  = 30
+backup_s3_bucket       = "federation-backups-prod"
+backup_s3_region       = "us-east-1"
