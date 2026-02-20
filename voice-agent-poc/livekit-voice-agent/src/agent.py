@@ -7,6 +7,7 @@ Based on LiveKit Agents 1.3.x documentation:
 import asyncio
 import json
 import logging
+import threading
 from typing import Optional
 
 from livekit import rtc
@@ -17,7 +18,6 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
-    mcp,
     room_io,
 )
 from livekit.plugins import silero, deepgram, cartesia, openai
@@ -41,7 +41,7 @@ def get_turn_detector():
         except ImportError:
             HAS_TURN_DETECTOR = False
             logger.info("Turn detector not available (not installed)")
-        except RuntimeError as e:
+        except Exception as e:
             HAS_TURN_DETECTOR = False
             logger.warning(f"Turn detector initialization failed: {e}")
 
@@ -113,100 +113,47 @@ Write tools ask the user to confirm first
 - knowledgeBase with action store: Save new information
 - addContact: Add a new contact uses spelling confirmation
 
-EXTENDED TOOLS - Additional Services
-For services beyond core tools you have tools that discover and execute actions on any connected service like Teams OneDrive Excel Canva and more
+Connection management
+- manageConnections with action status: See which external services are connected
+- manageConnections with action connect and service name: Set up a new service connection and send the auth link via Teams
 
-Step 1 DISCOVER - Call COMPOSIO_SEARCH_TOOLS first
-Pass a use_case string describing what you need like send a message in Teams or list OneDrive files
-Include session with generate_id true for new requests or id with the session id from a previous search to continue
-Include known_fields with any details you already have like channel name general or recipient email jay at example dot com
-This returns tool slugs schemas and an execution plan
+EXTENDED TOOLS - Connected Services via Composio
+For services beyond core tools you have direct access to connected external services
+Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG below
 
-Step 1b LOAD SCHEMAS - If search returns schemaRef instead of a full input_schema for any tool
-Call COMPOSIO_GET_TOOL_SCHEMAS with those tool slugs to get the complete parameter definitions
-Never guess parameters always use the actual schema
+{COMPOSIO_CATALOG}
 
-Step 1c PLAN COMPLEX WORKFLOWS - If the search response says to create a plan or if the task involves 3 or more tools
-Call COMPOSIO_CREATE_PLAN to get an ordered execution plan with dependency mapping
-Follow the plan step order exactly
-
-Step 2 EXECUTE - Use composioBatchExecute as the default execution tool
-Pass tools_json as a JSON array of tool objects each with tool_slug and arguments
-All tools run in the background and results are announced when complete
-
-DEPENDENCY RULES
-If tools are independent with no data flowing between them batch them together
-They run in parallel and finish faster
-Example send Teams message and list OneDrive files are independent
-
-If tools have ordering dependencies but later tools do NOT need specific output data
-Add a step field to control order tools with same step run in parallel higher steps wait
-Example [{tool_slug: GET_ISSUE, arguments: {id: 123}, step: 1}, {tool_slug: ADD_COMMENT, arguments: {id: 123, text: done}, step: 2}]
-
-If tool B needs SPECIFIC DATA from tool A results like an ID or content
-Do NOT batch them together
-Call composioExecute for tool A first with no background to get the result
-Then use that data in tool B arguments via composioBatchExecute
-Example search for a candidate then email their results you need the search data first
-
-WHEN TO USE EACH
-composioBatchExecute - DEFAULT for everything actions queries sends updates
-composioExecute - ONLY when you need the returned data to fill in a later tools arguments
-
-Step 3 AUTH - If a tool needs authentication call COMPOSIO_MANAGE_CONNECTIONS
-Pass the toolkit name and it returns an auth link for the user
-Then call COMPOSIO_WAIT_FOR_CONNECTION to wait until the user completes the auth flow
-
-IMPORTANT RULES FOR EXTENDED TOOLS
-- ALWAYS search first then execute never skip the search step
-- ALWAYS fill in arguments from the discovered schema never leave arguments empty
-- If search returns schemaRef call COMPOSIO_GET_TOOL_SCHEMAS before executing
-- NEVER batch tools where a later tool needs output data from an earlier tool
-- These tools take a moment longer than core tools which is normal
+HOW TO USE EXTENDED TOOLS
+Use composioBatchExecute with exact slugs from the catalog above
+Always use the EXACT full slug as listed never shorten or guess
+For single tools that you need data back from use composioExecute instead
+If tools are independent batch them in one composioBatchExecute call they run in parallel
+Add a step field 1 2 3 to control order when one tool depends on another
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
-2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use the extended tools
+2 For web search Teams OneDrive Sheets and other connected services use extended tools
 3 For Google Drive always use core searchDrive listFiles getFile not extended
-4 If a core tool fails try extended as backup
+4 If a service is not in the catalog above it is not connected and cannot be used
 5 Never tell the user which system a tool comes from just use it
-6 For multiple independent actions always batch them via composioBatchExecute
 
-PRESENTATION RULES - How you speak about your actions
-NEVER mention internal tool names tool slugs search processes or system names to the user
-NEVER say you are searching for tools discovering capabilities or loading schemas
-NEVER say Composio COMPOSIO_SEARCH_TOOLS composioBatchExecute or any internal function name
-NEVER describe the discover then execute process
-Instead speak as if you natively know how to perform the action
-Say what you ARE DOING not what tools you are using
+PRESENTATION RULES
+NEVER mention tool names slugs catalogs or technical processes to the user
+Speak as if you natively know how to perform the action
+Good: Searching the web for that now
 Good: Sending that Teams message now
 Good: Let me pull up your OneDrive files
-Good: Checking on that for you
 Bad: Let me search for a tool that can send Teams messages
-Bad: I found a tool called TEAMS_SEND_MESSAGE let me execute it
-Bad: Im going to use my extended tools to look that up
-When multiple steps happen behind the scenes just narrate the user facing action
-If discovery or schema loading takes a moment say something natural like one moment or working on that
+Bad: I need to discover the right tool first
+Bad: I am checking the catalog for available tools
 
-REQUEST DECOMPOSITION - Plan before you act
-When a user makes a request break it down into the specific tool calls needed
-Map the dependencies between tools before executing
-
-Three patterns
-PARALLEL - Tools are independent no data flows between them
-Batch them in one composioBatchExecute call they run at the same time
-Example send a Teams message and list OneDrive files
-
-ORDERED - Tools must run in sequence but later tools use known arguments not output data
-Use step numbers in composioBatchExecute step 1 runs first step 2 waits for it
-Example get an issue then add a comment to it when you already know the issue ID
-
-SEQUENTIAL - Tool B needs specific output data from tool A
-Call composioExecute for A first get the results then use that data for B
-Example look up a candidate in the database then email their details you need the candidate data first
-
-Always ask yourself does the next tool need data I can only get from the previous tools result
-If yes use sequential If no use parallel or ordered
+TASK COMPLETION - Always finish what you start
+When a user asks you to do something execute it fully without stopping for re-confirmation
+If a tool returns data use that data immediately in the next step
+If searching leads to results that need action take the action
+If you need to chain two tools do so in sequence without asking the user to repeat themselves
+Never stop mid-task to describe what you found unless the user needs to make a decision
+Complete the full request: search then act then confirm done
 
 CONTEXT RETENTION - Remember everything the user tells you
 Track all specifics mentioned in the conversation including names emails addresses data results and preferences
@@ -270,8 +217,9 @@ You: Checking your Drive
 After result: You have 5 files including quarterly report budget draft and meeting notes
 
 ERROR HANDLING
-If a tool returns 'I was not able to' or mentions 'do not retry' then STOP do NOT call that tool again
+If a tool returns 'I was not able to' or mentions 'do not retry' then STOP do NOT call that tool again with the same slug
 Instead tell the user what happened in plain language and ask if they want to try a different approach
+If a tool says it does not exist do NOT retry with different arguments it will not work
 If credentials expired say: That service needs reconnection let me note that
 Never expose technical errors verbosely
 Never retry a failed tool more than once
@@ -309,6 +257,24 @@ def prewarm(proc: JobProcess):
     proc.userdata["cache_manager"] = cache_manager
     logger.info("Context cache manager initialized")
 
+    # Pre-build Composio tool catalog in background thread (non-blocking).
+    # Worker registration proceeds immediately. If catalog finishes before
+    # first meeting, it gets injected into system prompt. If not, the lazy
+    # build on first composioBatchExecute call handles it.
+    proc.userdata["composio_catalog"] = ""  # default empty
+
+    def _build_catalog():
+        try:
+            from .tools.composio_router import prewarm_slug_index
+            proc.userdata["composio_catalog"] = prewarm_slug_index()
+        except Exception as e:
+            logger.warning(f"Composio catalog prewarm failed: {e}")
+
+    catalog_thread = threading.Thread(target=_build_catalog, daemon=True, name="composio-prewarm")
+    catalog_thread.start()
+    proc.userdata["_composio_thread"] = catalog_thread
+    logger.info("Composio catalog build started in background thread")
+
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
@@ -344,7 +310,6 @@ async def entrypoint(ctx: JobContext):
             interim_results=True,
             punctuate=True,
             profanity_filter=False,
-            enable_diarization=False,
         )
 
     def init_llm():
@@ -412,9 +377,8 @@ async def entrypoint(ctx: JobContext):
         # Handle background noise gracefully
         "resume_false_interruption": True,
         "false_interruption_timeout": 1.0,
-        # Allow multi-step tool flows (Composio: SEARCH → SCHEMA → EXECUTE → respond)
-        # Default is 3 which cuts off Composio discovery flow mid-execution
-        "max_tool_steps": 8,
+        # Allow multi-step tool flows (batch execution with dependencies)
+        "max_tool_steps": 5,
     }
 
     # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
@@ -457,48 +421,51 @@ async def entrypoint(ctx: JobContext):
     set_worker(tool_worker)
     logger.info("AsyncToolWorker started - tools will execute in background")
 
-    # Build tool list: n8n webhook tools + optional Composio Tool Router
+    # Build tool list: n8n webhook tools + Composio SDK execution wrappers
     all_tools = list(ASYNC_TOOLS)
 
-    # Composio Tool Router: 5 MCP meta-tools for discovery + auth + planning
-    # Execution goes through Python SDK wrappers (composioBatchExecute, composioExecute)
-    mcp_servers = []
-    if settings.composio_router_enabled and settings.composio_api_key:
-        from .tools.composio_router import get_composio_mcp_url, COMPOSIO_ALLOWED_TOOLS
-        composio_result = get_composio_mcp_url(settings)
-        if composio_result:
-            composio_url, composio_headers = composio_result
-            mcp_servers.append(mcp.MCPServerHTTP(
-                url=composio_url,
-                headers=composio_headers or None,
-                timeout=30,
-                client_session_timeout_seconds=30,
-                allowed_tools=COMPOSIO_ALLOWED_TOOLS,
-            ))
-            logger.info(f"Composio: Tool Router active — {len(COMPOSIO_ALLOWED_TOOLS)} meta-tools loaded")
-        else:
-            logger.warning("Composio: Failed to create MCP session, continuing without extended tools")
-    elif settings.mcp_server_url.strip():
-        # LEGACY DIRECT MCP URL: used when COMPOSIO_ROUTER_ENABLED=false
-        mcp_url = settings.mcp_server_url.strip()
-        try:
-            mcp_servers.append(mcp.MCPServerHTTP(
-                url=mcp_url,
-                timeout=15,
-            ))
-            logger.info(f"Composio: Legacy direct MCP URL {mcp_url[:60]}...")
-        except Exception as e:
-            logger.warning(f"Composio: MCP failed ({e}), continuing without extended tools")
+    # Read pre-built Composio catalog from prewarm (zero latency — no network calls here)
+    # If background thread is still running, proceed without catalog (lazy build handles it)
+    composio_thread = ctx.proc.userdata.get("_composio_thread")
+    if composio_thread and composio_thread.is_alive():
+        logger.info("Composio catalog still building in background, proceeding without")
+    composio_catalog = ctx.proc.userdata.get("composio_catalog", "")
+    if settings.composio_api_key:
+        logger.info(f"Composio: SDK enabled, catalog {'ready' if composio_catalog else 'empty'} ({len(all_tools)} tools)")
     else:
-        logger.info("Composio: Disabled (no API key or MCP URL configured)")
+        logger.info("Composio: Disabled (no COMPOSIO_API_KEY)")
 
-    logger.info(f"Agent tools: {len(all_tools)} total ({len(ASYNC_TOOLS)} n8n + {len(all_tools) - len(ASYNC_TOOLS)} composio) + {len(mcp_servers)} MCP server(s)")
+    logger.info(f"Agent tools: {len(all_tools)} total")
 
-    # Define agent with all tools
+    # Inject pre-loaded catalog into system prompt via {COMPOSIO_CATALOG} marker
+    active_prompt = SYSTEM_PROMPT
+    if composio_catalog:
+        active_prompt = active_prompt.replace(
+            "{COMPOSIO_CATALOG}",
+            composio_catalog,
+        )
+    else:
+        active_prompt = active_prompt.replace(
+            "{COMPOSIO_CATALOG}",
+            "Catalog loading. Call listComposioTools to see available services and exact slugs.",
+        )
+
+    # Inject current date/time context (no tool call needed)
+    from datetime import datetime, timezone, timedelta
+    est = timezone(timedelta(hours=-5))
+    now = datetime.now(est)
+    time_context = (
+        f"\n\nCURRENT DATE AND TIME\n"
+        f"{now.strftime('%Y-%m-%d %I:%M %p')} EST\n"
+        f"{now.strftime('%A, %B %d, %Y')}\n"
+        f"Always reference EST when discussing time"
+    )
+    active_prompt += time_context
+
+    # Define agent with all tools (no MCP servers)
     agent = Agent(
-        instructions=SYSTEM_PROMPT,
+        instructions=active_prompt,
         tools=all_tools,
-        mcp_servers=mcp_servers if mcp_servers else None,
     )
 
     # Register event handlers BEFORE starting session
