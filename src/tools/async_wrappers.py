@@ -411,7 +411,12 @@ async def composio_batch_execute_async(
 
     num_steps = len(step_groups)
 
-    # If single step (all parallel, no dependencies) — dispatch to background worker
+    # Single tool: execute synchronously so LLM gets real results back.
+    # Multi-tool: dispatch to background worker for parallel execution.
+    if len(tools) == 1:
+        return await batch_execute_composio_tools(tools)
+
+    # Multiple tools in single step — dispatch to background worker
     if num_steps == 1:
         worker = get_worker()
         if worker:
@@ -420,7 +425,7 @@ async def composio_batch_execute_async(
                 tool_func=batch_execute_composio_tools,
                 kwargs={"tools": tools},
             )
-            return f"Running {len(tools)} {'tool' if len(tools) == 1 else 'tools'} now {display}"
+            return f"Running {len(tools)} tools now {display}"
         return await batch_execute_composio_tools(tools)
 
     # Multi-step: dispatch ordered execution to background worker
