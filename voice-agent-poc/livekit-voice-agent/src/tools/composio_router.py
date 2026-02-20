@@ -17,7 +17,7 @@ from ..utils.room_publisher import (
     publish_tool_start,
     publish_tool_executing,
     publish_tool_completed,
-    publish_composio_event,
+    publish_tool_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,8 @@ _slug_index_built = False
 _slugs_by_service: dict[str, list[str]] = {}
 # Direct slug → toolkit mapping (most reliable for service key lookups)
 _slug_to_toolkit: dict[str, str] = {}
+# Slug → required params list (pre-fetched during index build for catalog hints)
+_slug_required_params: dict[str, list[str]] = {}
 
 # Dynamic prefix map: auto-generated from actual slug data at index build time.
 # Sorted longest-first to avoid partial matches. Empty until first build.
@@ -192,7 +194,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     4. Auto-generate prefix map from loaded slugs (zero hardcoded lists)
     5. No config file or env var — 100% driven by Composio state
     """
-    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES
+    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params
 
     if _slug_index_built:
         return
@@ -216,6 +218,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     all_slugs: list[str] = []
     slug_toolkit_map: dict[str, str] = {}
     by_service: dict[str, list[str]] = {}
+    required_params: dict[str, list[str]] = {}
 
     for toolkit in active_toolkits:
         try:
@@ -223,8 +226,12 @@ def _build_slug_index(client, user_id: str = "") -> None:
             slugs = [t.slug for t in tools]
             all_slugs.extend(slugs)
             by_service[toolkit] = slugs
-            for slug in slugs:
-                slug_toolkit_map[slug] = toolkit
+            for t in tools:
+                slug_toolkit_map[t.slug] = toolkit
+                # Extract required params from tool schema (zero extra API calls)
+                schema = getattr(t, "input_schema", None) or getattr(t, "args_schema", None) or getattr(t, "parameters", None)
+                if isinstance(schema, dict) and schema.get("required"):
+                    required_params[t.slug] = schema["required"]
             logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
         except Exception as exc:
             logger.warning(f"Composio: Failed to load toolkit {toolkit}: {exc}")
@@ -232,6 +239,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     _canonical_slugs = all_slugs
     _slug_to_toolkit = slug_toolkit_map
     _slugs_by_service = by_service
+    _slug_required_params = required_params
 
     # Auto-generate prefix map from actual slug data (replaces hardcoded list)
     _SERVICE_PREFIXES = _auto_generate_prefixes(by_service)
@@ -266,6 +274,13 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     if not _slugs_by_service:
         return "No tools available. Check Composio configuration and connected accounts."
 
+    def _format_slug(slug: str) -> str:
+        """Format a slug with inline required params hint."""
+        req = _slug_required_params.get(slug)
+        if req:
+            return f"  {slug} (requires: {', '.join(req)})"
+        return f"  {slug}"
+
     # Resolve service alias
     if service_filter:
         key = service_filter.lower().strip()
@@ -274,7 +289,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
         if slugs:
             lines = [f"=== {key.upper()} ({len(slugs)} tools) ==="]
             for slug in sorted(slugs):
-                lines.append(f"  {slug}")
+                lines.append(_format_slug(slug))
             return "\n".join(lines)
         # Check if partial match
         matches = {k: v for k, v in _slugs_by_service.items() if key in k}
@@ -283,7 +298,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
             for svc, slugs in sorted(matches.items()):
                 lines.append(f"=== {svc.upper()} ({len(slugs)} tools) ===")
                 for slug in sorted(slugs):
-                    lines.append(f"  {slug}")
+                    lines.append(_format_slug(slug))
             return "\n".join(lines)
         available = ", ".join(sorted(_slugs_by_service.keys()))
         return f"No tools found for service '{service_filter}'. Available services: {available}"
@@ -295,10 +310,11 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     action_slugs = {k: v for k, v in _slugs_by_service.items() if k not in _EXCLUDED_SERVICES}
     total = sum(len(v) for v in action_slugs.values())
     lines = [f"COMPOSIO TOOL CATALOG — {total} action tools"]
+    lines.append("Each tool shows required parameters in parentheses. Pass these as arguments_json keys.")
     for svc, slugs in sorted(action_slugs.items()):
         lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
         for slug in sorted(slugs):
-            lines.append(f"  {slug}")
+            lines.append(_format_slug(slug))
     return "\n".join(lines)
 
 
@@ -479,50 +495,82 @@ def _get_client(settings):
     return _composio_client
 
 
-def _friendly_name(tool_slug: str) -> str:
-    """Convert a tool slug like TEAMS_SEND_MESSAGE to a voice-friendly name.
+# Slug prefix → (service label, voice suffix)
+# Order matters: longer prefixes first to avoid partial matches
+_SERVICE_DISPLAY_MAP: dict[str, tuple[str, str]] = {
+    "MICROSOFT_TEAMS_": ("Teams", "in Teams"),
+    "MICROSOFTTEAMS_": ("Teams", "in Teams"),
+    "TEAMS_": ("Teams", "in Teams"),
+    "ONE_DRIVE_": ("OneDrive", "on OneDrive"),
+    "ONEDRIVE_": ("OneDrive", "on OneDrive"),
+    "GOOGLE_SHEETS_": ("Sheets", "in Sheets"),
+    "GOOGLESHEETS_": ("Sheets", "in Sheets"),
+    "GOOGLE_DOCS_": ("Docs", "in Docs"),
+    "GOOGLEDOCS_": ("Docs", "in Docs"),
+    "GOOGLECALENDAR_": ("Calendar", "on Calendar"),
+    "GOOGLE_CALENDAR_": ("Calendar", "on Calendar"),
+    "GOOGLEDRIVE_": ("Drive", "on Drive"),
+    "GOOGLE_DRIVE_": ("Drive", "on Drive"),
+    "EXCEL_": ("Excel", "in Excel"),
+    "SLACK_": ("Slack", "in Slack"),
+    "GMAIL_": ("Gmail", "via email"),
+    "GITHUB_": ("GitHub", "on GitHub"),
+    "CANVA_": ("Canva", "in Canva"),
+    "APIFY_": ("Apify", ""),
+    "FIRECRAWL_": ("Firecrawl", ""),
+    "SUPABASE_": ("Database", "in the database"),
+    "PINECONE_": ("Search", "in search index"),
+    "RECALLAI_": ("Recall", "via Recall"),
+    "PERPLEXITYAI_": ("Search", "via search"),
+    "GAMMA_": ("Gamma", "in Gamma"),
+    "COMPOSIO_SEARCH_": ("Web Search", ""),
+    "COMPOSIO_": ("Tools", ""),
+}
 
-    Strips common prefixes (service names) and produces natural phrases.
-    E.g. GOOGLESHEETS_BATCH_UPDATE -> batch update sheets
-         TEAMS_SEND_MESSAGE -> send message in Teams
+
+def _parse_slug(tool_slug: str) -> tuple[str, str]:
+    """Parse a slug into (service_label, action_text).
+
+    Returns ("Teams", "Send Message") for MICROSOFT_TEAMS_SEND_MESSAGE.
+    Falls back to ("Tools", "action name") for unknown prefixes.
     """
     slug = tool_slug.upper()
-    # Known service prefixes → natural suffix
-    # Order matters: longer prefixes first to avoid partial matches
-    service_map = {
-        "MICROSOFT_TEAMS_": "in Teams",
-        "MICROSOFTTEAMS_": "in Teams",
-        "TEAMS_": "in Teams",
-        "ONE_DRIVE_": "on OneDrive",
-        "ONEDRIVE_": "on OneDrive",
-        "GOOGLE_SHEETS_": "in Sheets",
-        "GOOGLESHEETS_": "in Sheets",
-        "GOOGLE_DOCS_": "in Docs",
-        "GOOGLEDOCS_": "in Docs",
-        "EXCEL_": "in Excel",
-        "SLACK_": "in Slack",
-        "GMAIL_": "via email",
-        "GITHUB_": "on GitHub",
-        "CANVA_": "in Canva",
-        "APIFY_": "",
-        "FIRECRAWL_": "",
-        "SUPABASE_": "in the database",
-        "PERPLEXITYAI_": "via search",
-        "GAMMA_": "in Gamma",
-    }
-    suffix = ""
-    action_part = slug
-    for prefix, svc_suffix in service_map.items():
+    for prefix, (label, _) in _SERVICE_DISPLAY_MAP.items():
         if slug.startswith(prefix):
-            action_part = slug[len(prefix):]
-            suffix = svc_suffix
-            break
+            action = slug[len(prefix):].replace("_", " ").title()
+            return label, action
+    # Unknown service — use first word as label, rest as action
+    parts = slug.split("_", 1)
+    if len(parts) == 2:
+        return parts[0].title(), parts[1].replace("_", " ").title()
+    return "Tools", slug.replace("_", " ").title()
 
-    # Convert ACTION_NAME to "action name"
-    action = action_part.replace("_", " ").lower().strip()
-    if suffix:
-        return f"{action} {suffix}"
-    return action
+
+def _display_name(tool_slug: str) -> str:
+    """Convert a slug to a UI display name: 'Teams: Send Message'.
+
+    Used for tool call cards in the client UI. Never includes 'composio'.
+    """
+    label, action = _parse_slug(tool_slug)
+    if action:
+        return f"{label}: {action}"
+    return label
+
+
+def _friendly_name(tool_slug: str) -> str:
+    """Convert a tool slug to a voice-friendly phrase.
+
+    E.g. MICROSOFT_TEAMS_SEND_MESSAGE -> 'send message in Teams'
+    Used for LLM error messages and speech context.
+    """
+    slug = tool_slug.upper()
+    for prefix, (_, voice_suffix) in _SERVICE_DISPLAY_MAP.items():
+        if slug.startswith(prefix):
+            action = slug[len(prefix):].replace("_", " ").lower().strip()
+            if voice_suffix:
+                return f"{action} {voice_suffix}"
+            return action
+    return slug.replace("_", " ").lower().strip()
 
 
 def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
@@ -638,9 +686,10 @@ async def refresh_slug_index() -> str:
 
     Returns the updated tool catalog string.
     """
-    global _slug_index_built
+    global _slug_index_built, _slug_required_params
     _slug_index_built = False
     _failed_slugs.clear()
+    _slug_required_params = {}
 
     from ..config import get_settings
     settings = get_settings()
@@ -702,7 +751,7 @@ async def get_tool_schema(tool_slug: str) -> str:
     tool_obj = await asyncio.to_thread(_fetch_schema)
 
     if not tool_obj:
-        return f"Could not find schema for {tool_slug}. Check the slug is correct using listComposioTools."
+        return f"Could not find schema for {tool_slug}. Check the slug is correct against the catalog in your instructions."
 
     # Extract parameters from the tool's input schema
     params = getattr(tool_obj, "parameters", None) or {}
@@ -810,20 +859,21 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             )
             return (
                 f"Tool {tool_slug} not found. Did you mean: {alt_text}? "
-                f"Call listComposioTools to see all available slugs."
+                f"Check the catalog in your instructions for available slugs."
             )
 
     if resolved_slug != slug_key:
         logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
 
     tool_display = _friendly_name(resolved_slug)
-    call_id = await publish_tool_start(f"composio:{resolved_slug}", {"slug": resolved_slug})
+    ui_name = _display_name(resolved_slug)
+    call_id = await publish_tool_start(ui_name, {k: str(v)[:60] for k, v in list(arguments.items())[:3]})
 
     try:
         user_id = settings.composio_user_id.strip()
         logger.info(f"Composio SDK execute: slug={resolved_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
 
-        await publish_composio_event("composio.executing", resolved_slug, call_id, f"Running {tool_display}")
+        await publish_tool_executing(call_id)
         start_ms = int(time.time() * 1000)
 
         result = await asyncio.to_thread(
@@ -844,14 +894,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             # Reset circuit breaker on success
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
-            await publish_composio_event("composio.completed", resolved_slug, call_id, voice_result[:100], duration_ms)
             await publish_tool_completed(call_id, voice_result[:100])
             return voice_result
         else:
             error = result.get("error", "unknown error")
             error_str = str(error)
             logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
-            await publish_composio_event("composio.error", resolved_slug, call_id, error_str[:100], duration_ms)
+            await publish_tool_error(call_id, error_str[:100])
 
             # Distinguish parameter errors (recoverable) from auth errors (not recoverable)
             error_lower = error_str.lower()
@@ -861,13 +910,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             ])
 
             if is_param_error:
-                # Parameter validation error — tell LLM what's wrong so it can self-correct
+                # Parameter validation error — auto-fetch schema and include in error response
+                # so LLM can retry immediately without a separate tool call.
                 # Do NOT increment circuit breaker — this is not a tool failure
-                logger.info(f"Composio: Parameter error for {resolved_slug} — allowing retry with corrected args")
-                return (
-                    f"Tool {resolved_slug} failed because of wrong arguments: {error_str}. "
-                    f"Call getToolSchema with this slug to see required parameters then retry with correct arguments."
-                )
+                logger.info(f"Composio: Parameter error for {resolved_slug} — fetching schema inline for LLM retry")
+                schema_str = ""
+                try:
+                    schema_info = await get_tool_schema(resolved_slug)
+                    schema_str = schema_info[:500]
+                except Exception:  # nosec B110 — best-effort schema lookup, fallback below
+                    pass
+                if schema_str:
+                    return (
+                        f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
+                        f"Required parameters: {schema_str}. Retry now with correct arguments."
+                    )
+                else:
+                    return (
+                        f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
+                        f"Retry with corrected parameters."
+                    )
             else:
                 # Auth, connection, or unknown error — suppress retries
                 _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
@@ -876,7 +938,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
         _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
-        await publish_composio_event("composio.error", resolved_slug, call_id, str(exc)[:100])
+        await publish_tool_error(call_id, str(exc)[:100])
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
 
@@ -991,9 +1053,11 @@ async def batch_execute_composio_tools(tools: list) -> str:
         return "No tools to execute"
 
     slugs = [t.get("tool_slug", "unknown") for t in tools if t.get("tool_slug")]
+    display_names = [_display_name(s) for s in slugs[:3]]
+    batch_label = " + ".join(display_names) if len(slugs) <= 3 else f"{display_names[0]} + {len(slugs) - 1} more"
     batch_call_id = await publish_tool_start(
-        f"composio:batch:{len(slugs)}",
-        {"tools": " + ".join(slugs[:3])},
+        batch_label,
+        {"count": str(len(slugs))},
     )
     await publish_tool_executing(batch_call_id)
     start_ms = int(time.time() * 1000)

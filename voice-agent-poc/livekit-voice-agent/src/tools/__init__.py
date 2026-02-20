@@ -24,6 +24,5 @@ __all__ = [
     "get_contact_tool",
     "search_contacts_tool",
     "get_contact_email",
-    # NOTE: Composio tools are now loaded via native LiveKit MCP (MCPServerHTTP)
-    # configured through MCP_SERVER_URL. See src/agent.py and composio_tools.py (deprecated).
+    # Composio tools: loaded dynamically via composio_router.py (SDK-only, zero config)
 ]

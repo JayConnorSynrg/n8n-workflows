@@ -61,44 +61,49 @@ const TOOL_ICONS: Record<string, string> = {
   searchContacts: '🔎',
 }
 
-// Composio service prefixes -> display names and icons
-const COMPOSIO_SERVICE_MAP: Record<string, { label: string; icon: string }> = {
-  TEAMS: { label: 'Teams', icon: '💬' },
-  MICROSOFTTEAMS: { label: 'Teams', icon: '💬' },
-  ONEDRIVE: { label: 'OneDrive', icon: '☁️' },
-  GOOGLESHEETS: { label: 'Sheets', icon: '📊' },
-  GOOGLEDOCS: { label: 'Docs', icon: '📝' },
-  GMAIL: { label: 'Gmail', icon: '📧' },
-  SLACK: { label: 'Slack', icon: '💬' },
-  GITHUB: { label: 'GitHub', icon: '🐙' },
-  CANVA: { label: 'Canva', icon: '🎨' },
-  EXCEL: { label: 'Excel', icon: '📊' },
+// Service label → icon mapping for server-side display names ("Teams: Send Message")
+const SERVICE_ICONS: Record<string, string> = {
+  'Teams': '💬',
+  'OneDrive': '☁️',
+  'Sheets': '📊',
+  'Docs': '📝',
+  'Calendar': '📅',
+  'Drive': '📁',
+  'Excel': '📊',
+  'Slack': '💬',
+  'Gmail': '📧',
+  'GitHub': '🐙',
+  'Canva': '🎨',
+  'Database': '🗄️',
+  'Search': '🔍',
+  'Web Search': '🌐',
+  'Gamma': '🎨',
+  'Recall': '🎤',
+  'Tools': '⚙️',
 }
 
-/** Resolve display name and icon for any tool, including dynamic Composio tools. */
+/** Resolve display name and icon for any tool. */
 function resolveToolDisplay(name: string): { displayName: string; icon: string } {
-  // Known core tools
+  // Known core tools (camelCase names from async_wrappers.py)
   if (TOOL_DISPLAY_NAMES[name]) {
     return { displayName: TOOL_DISPLAY_NAMES[name], icon: TOOL_ICONS[name] || '⚙️' }
   }
 
-  // Composio tools: "composio:SLUG" or "composio:batch:N"
-  if (name.startsWith('composio:')) {
-    const slug = name.replace('composio:', '').replace('batch:', '')
-    // Find matching service prefix
-    const upperSlug = slug.toUpperCase()
-    for (const [prefix, meta] of Object.entries(COMPOSIO_SERVICE_MAP)) {
-      if (upperSlug.startsWith(prefix)) {
-        const action = upperSlug.slice(prefix.length + 1).replace(/_/g, ' ').toLowerCase()
-        return { displayName: `${meta.label}${action ? ': ' + action : ''}`, icon: meta.icon }
-      }
-    }
-    // Batch indicator
-    if (name.startsWith('composio:batch:')) {
-      return { displayName: `Batch (${slug})`, icon: '⚡' }
-    }
-    // Unknown Composio tool
-    return { displayName: slug.replace(/_/g, ' ').toLowerCase(), icon: '🔌' }
+  // Server-side display names arrive as "Service: Action" or "Service A + Service B"
+  // Extract service label to find the right icon
+  const colonIdx = name.indexOf(':')
+  if (colonIdx > 0) {
+    const serviceLabel = name.slice(0, colonIdx).trim()
+    const icon = SERVICE_ICONS[serviceLabel] || '⚙️'
+    return { displayName: name, icon }
+  }
+
+  // Batch names: "Teams: Send Message + Calendar: Create Event"
+  if (name.includes(' + ')) {
+    const firstPart = name.split(' + ')[0]
+    const serviceLabel = firstPart.split(':')[0]?.trim()
+    const icon = SERVICE_ICONS[serviceLabel] || '⚡'
+    return { displayName: name, icon }
   }
 
   return { displayName: name, icon: '⚙️' }

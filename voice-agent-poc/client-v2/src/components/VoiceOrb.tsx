@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState, useMemo } from 'react'
-import { motion, useAnimationFrame } from 'framer-motion'
+import { useRef, useEffect, useMemo } from 'react'
+import { motion } from 'framer-motion'
 
 type AgentState = 'listening' | 'thinking' | 'speaking' | null
 
@@ -29,13 +29,14 @@ export function VoiceOrb({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const timeRef = useRef(0)
   const animationRef = useRef<number | null>(null)
+  const speedRef = useRef(0.8)
 
-  // Animation speed based on state
-  const speed = useMemo(() => {
-    if (agentState === 'speaking') return 1.5 + outputVolume * 2
-    if (agentState === 'listening') return 1.2 + inputVolume * 1.5
-    if (agentState === 'thinking') return 2
-    return 0.8 // idle
+  // Update speed ref without restarting RAF loop
+  useEffect(() => {
+    if (agentState === 'speaking') speedRef.current = 1.5 + outputVolume * 2
+    else if (agentState === 'listening') speedRef.current = 1.2 + inputVolume * 1.5
+    else if (agentState === 'thinking') speedRef.current = 2
+    else speedRef.current = 0.8
   }, [agentState, inputVolume, outputVolume])
 
   // Scale pulse based on audio
@@ -65,7 +66,7 @@ export function VoiceOrb({
     const radius = size * 0.38 // Orb takes ~76% of canvas
 
     const draw = () => {
-      timeRef.current += 0.016 * speed
+      timeRef.current += 0.016 * speedRef.current
 
       // Clear canvas
       ctx.clearRect(0, 0, size, size)
@@ -191,7 +192,7 @@ export function VoiceOrb({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [size, speed])
+  }, [size])  // Only restart loop on size change, speed is read from ref
 
   return (
     <div

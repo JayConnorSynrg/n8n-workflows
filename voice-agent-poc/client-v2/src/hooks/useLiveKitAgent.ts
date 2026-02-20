@@ -60,6 +60,7 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
   const roomRef = useRef<any>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioDiagRef = useRef(createAudioDiag())
+  const inputCleanupRef = useRef<(() => void) | null>(null)
 
   const {
     setSessionId,
@@ -135,30 +136,6 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
           break
         case 'tool.error':
           updateToolCall(message.call_id as string, { status: 'error', result: message.error })
-          break
-        // Composio-specific events — map to tool call lifecycle
-        case 'composio.searching':
-          addToolCall({
-            id: message.call_id as string,
-            name: `composio:${message.tool_slug || 'search'}`,
-            status: 'pending',
-            arguments: { detail: message.detail },
-          })
-          break
-        case 'composio.executing':
-          updateToolCall(message.call_id as string, { status: 'executing' })
-          break
-        case 'composio.completed':
-          updateToolCall(message.call_id as string, {
-            status: 'completed',
-            result: message.detail || `Done (${message.duration_ms || 0}ms)`,
-          })
-          break
-        case 'composio.error':
-          updateToolCall(message.call_id as string, {
-            status: 'error',
-            result: message.detail || 'Composio tool failed',
-          })
           break
         case 'error':
           setError(message.message as string)
@@ -343,8 +320,12 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
               // Note: Don't connect analyser to destination - webAudioMix already handles playback
 
               let outputActiveFrames = 0
+              let outputRafHandle: number | null = null
               const monitorOutput = () => {
-                if (track.mediaStreamTrack?.readyState !== 'live') return
+                if (track.mediaStreamTrack?.readyState !== 'live') {
+                  outputRafHandle = null
+                  return
+                }
 
                 analyser.getByteFrequencyData(dataArray)
                 const avg = dataArray.reduce((a, b) => a + b) / dataArray.length
@@ -358,9 +339,16 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
                   }
                 }
 
-                requestAnimationFrame(monitorOutput)
+                outputRafHandle = requestAnimationFrame(monitorOutput)
               }
               setTimeout(monitorOutput, 500)
+
+              // Store cleanup for track unsubscription
+              track._outputCleanup = () => {
+                if (outputRafHandle) cancelAnimationFrame(outputRafHandle)
+                outputRafHandle = null
+                try { source.disconnect() } catch (_) { /* already disconnected */ }
+              }
 
             } catch (err) {
               audioDiag.error('Track subscription failed', err)
@@ -372,6 +360,11 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
         room.on(RoomEvent.TrackUnsubscribed, (track: any) => {
           if (track.kind === 'audio') {
             audioDiag.log('Audio track unsubscribed', { trackSid: track.sid })
+            // Clean up RAF monitor loop and audio nodes
+            if (track._outputCleanup) {
+              track._outputCleanup()
+              track._outputCleanup = null
+            }
             track.detach().forEach((el: HTMLElement) => el.remove())
           }
         })
@@ -530,9 +523,11 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
           const monitorStartTime = Date.now()
           let hasLoggedNoAudioWarning = false
 
+          let inputRafHandle: number | null = null
           const monitorInput = () => {
             if (audioTrack.readyState !== 'live') {
               audioDiag.log('Input track ended')
+              inputRafHandle = null
               return
             }
 
@@ -555,9 +550,16 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
               }
             }
 
-            requestAnimationFrame(monitorInput)
+            inputRafHandle = requestAnimationFrame(monitorInput)
           }
           setTimeout(monitorInput, 500)
+
+          // Store cleanup in ref for disconnect handler
+          inputCleanupRef.current = () => {
+            if (inputRafHandle) cancelAnimationFrame(inputRafHandle)
+            inputRafHandle = null
+            try { inputSource.disconnect() } catch (_) { /* already disconnected */ }
+          }
 
         } catch (err) {
           audioDiag.error('Meeting audio capture failed', err)
@@ -586,6 +588,11 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
 
   // Disconnect from LiveKit room
   const disconnect = useCallback(() => {
+    // Clean up input monitor RAF loop
+    if (inputCleanupRef.current) {
+      inputCleanupRef.current()
+      inputCleanupRef.current = null
+    }
     if (roomRef.current) {
       roomRef.current.disconnect()
       roomRef.current = null
