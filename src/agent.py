@@ -461,7 +461,8 @@ async def entrypoint(ctx: JobContext):
             mcp_servers.append(mcp.MCPServerHTTP(
                 url=composio_url,
                 headers=composio_headers or None,
-                timeout=15,
+                timeout=30,
+                client_session_timeout_seconds=30,
                 allowed_tools=COMPOSIO_ALLOWED_TOOLS,
             ))
             logger.info(f"Composio: Tool Router active — {len(COMPOSIO_ALLOWED_TOOLS)} meta-tools loaded")

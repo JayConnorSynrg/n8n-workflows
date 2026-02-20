@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     composio_router_enabled: bool = Field(default=False, alias="COMPOSIO_ROUTER_ENABLED")
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
+    # Comma-separated list of Composio toolkits to load into the MCP session.
+    # Must include "composio" and "composio_search" for meta-tools, plus
+    # any app toolkits the user has connected on the Composio dashboard.
+    composio_toolkits: str = Field(
+        default="composio,composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,slack,supabase",
+        alias="COMPOSIO_TOOLKITS"
+    )
+
     # MCP Integration (MODE 2 - only used if COMPOSIO_ROUTER_ENABLED=false)
     mcp_server_url: str = Field(default="", alias="MCP_SERVER_URL")
 

@@ -21,12 +21,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Composio meta-toolkits — these load the Tool Router meta-tools,
-# NOT individual service schemas. External services (gmail, drive, etc.)
-# are controlled by connected accounts on the Composio dashboard.
-#   "composio"        → execute + manage_connections meta-tools
-#   "composio_search" → search meta-tool (discovers tools across all connected apps)
-COMPOSIO_TOOLKITS = ["composio", "composio_search"]
+# Composio toolkits loaded into the MCP session.
+# MUST include "composio" and "composio_search" for meta-tools.
+# MUST ALSO include each app toolkit the user has connected (e.g.
+# "microsoft_teams", "onedrive", "gmail") — without these, the session
+# returns "[Session Restriction] Toolkit X is not allowed for this session."
+# Configured via COMPOSIO_TOOLKITS env var (comma-separated).
+COMPOSIO_TOOLKITS: list[str] = []  # populated from settings at init time
 
 # MCP tools loaded into LLM context — discovery, auth, schema loading.
 # Execution is handled by the Python composioExecute wrapper, not MCP.
@@ -282,18 +283,29 @@ def get_composio_mcp_url(settings) -> Optional[tuple[str, dict]]:
     try:
         client = _get_client(settings)
 
-        # Tool Router: toolkits define searchable scope, NOT LLM context.
+        # Build toolkit list from config (env var COMPOSIO_TOOLKITS).
+        # Must include meta-toolkits + all app toolkits user has connected.
+        toolkits_str = getattr(settings, "composio_toolkits", "")
+        if toolkits_str and toolkits_str.strip():
+            toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()]
+        else:
+            toolkits = ["composio", "composio_search"]
+
+        # Update module-level list for reference
+        global COMPOSIO_TOOLKITS
+        COMPOSIO_TOOLKITS = toolkits
+
         session = client.create(
             user_id=user_id,
-            toolkits=COMPOSIO_TOOLKITS,
+            toolkits=toolkits,
         )
 
         mcp_url: str = session.mcp.url
         mcp_headers: dict = getattr(session.mcp, "headers", None) or {}
 
         logger.info(
-            f"Composio: MCP session created (search + auth) — "
-            f"user_id={user_id!r}, toolkits={len(COMPOSIO_TOOLKITS)}"
+            f"Composio: MCP session created — "
+            f"user_id={user_id!r}, toolkits={toolkits}"
         )
         return (mcp_url, mcp_headers)
 
