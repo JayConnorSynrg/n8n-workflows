@@ -859,12 +859,19 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
 
-    # DEBUG: Log room configuration
+    # DEBUG: Log room configuration (with timeout protection for room.sid)
     logger.info(f"=== ROOM DEBUG ===")
-    room_sid = await ctx.room.sid
+    try:
+        room_sid = await asyncio.wait_for(ctx.room.sid, timeout=5.0)
+    except (asyncio.TimeoutError, Exception) as e:
+        room_sid = f"unavailable ({type(e).__name__})"
+        logger.warning(f"room.sid failed: {e}")
     logger.info(f"Room SID: {room_sid}")
     logger.info(f"Room name: {ctx.room.name}")
-    logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
+    try:
+        logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
+    except Exception as e:
+        logger.warning(f"Local participant access failed: {e}")
     logger.info(f"Remote participants: {len(ctx.room.remote_participants)}")
 
     # Wait for Output Media client to connect BEFORE starting session
