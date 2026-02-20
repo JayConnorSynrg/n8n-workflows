@@ -116,6 +116,8 @@ Write tools ask the user to confirm first
 Connection management
 - manageConnections with action status: See which external services are connected
 - manageConnections with action connect and service name: Set up a new service connection and send the auth link via Teams
+- manageConnections with action refresh: Refresh your tool catalog after a new service is connected mid-session
+When a user says they connected a new service always call manageConnections with action refresh before trying to use it
 
 EXTENDED TOOLS - Connected Services via Composio
 For services beyond core tools you have direct access to connected external services

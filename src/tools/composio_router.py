@@ -43,25 +43,12 @@ _slug_index_built = False
 
 # Service-grouped slugs for catalog generation (zero-latency after index build)
 _slugs_by_service: dict[str, list[str]] = {}
+# Direct slug → toolkit mapping (most reliable for service key lookups)
+_slug_to_toolkit: dict[str, str] = {}
 
-# Ordered longest-prefix-first to avoid partial matches
-_SERVICE_PREFIXES: list[tuple[str, str]] = [
-    ("MICROSOFT_TEAMS_", "microsoft_teams"),
-    ("ONE_DRIVE_", "one_drive"),
-    ("COMPOSIO_SEARCH_", "composio_search"),
-    ("COMPOSIO_", "composio"),
-    ("GOOGLESHEETS_", "google_sheets"),
-    ("GOOGLEDOCS_", "google_docs"),
-    ("GMAIL_", "gmail"),
-    ("GITHUB_", "github"),
-    ("CANVA_", "canva"),
-    ("SUPABASE_", "supabase"),
-    ("SLACK_", "slack"),
-    ("EXCEL_", "excel"),
-    ("PINECONE_", "pinecone"),
-    ("RECALLAI_", "recallai"),
-    ("GAMMA_", "gamma"),
-]
+# Dynamic prefix map: auto-generated from actual slug data at index build time.
+# Sorted longest-first to avoid partial matches. Empty until first build.
+_SERVICE_PREFIXES: list[tuple[str, str]] = []
 
 # Tier constants for resolution confidence
 _TIER_EXACT = 1
@@ -134,41 +121,88 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
 
 
 def _extract_service_key(slug: str) -> str:
-    """Map a canonical slug to its service key using prefix table."""
+    """Map a canonical slug to its service key.
+
+    Uses direct toolkit mapping first (exact), then falls back
+    to dynamic prefix matching for newly-discovered slugs.
+    """
+    toolkit = _slug_to_toolkit.get(slug)
+    if toolkit:
+        return toolkit
     for prefix, key in _SERVICE_PREFIXES:
         if slug.startswith(prefix):
             return key
     return "other"
 
 
+def _common_prefix(strings: list[str]) -> str:
+    """Find the longest common prefix of a list of strings."""
+    if not strings:
+        return ""
+    prefix = strings[0]
+    for s in strings[1:]:
+        while not s.startswith(prefix):
+            prefix = prefix[:-1]
+            if not prefix:
+                return ""
+    return prefix
+
+
+def _auto_generate_prefixes(by_service: dict[str, list[str]]) -> list[tuple[str, str]]:
+    """Generate SERVICE_PREFIXES dynamically from toolkit slug groupings.
+
+    Finds the common prefix for all slugs in each toolkit.
+    Returns list of (PREFIX_, toolkit_key) sorted longest-first.
+    """
+    prefixes = []
+    for service_key, slugs in by_service.items():
+        if not slugs:
+            continue
+        if len(slugs) >= 2:
+            common = _common_prefix(slugs)
+            # Trim to last underscore boundary
+            last_us = common.rfind("_")
+            if last_us > 0:
+                prefix = common[:last_us + 1]
+                prefixes.append((prefix, service_key))
+        elif len(slugs) == 1:
+            # Single slug — use everything before the last segment
+            parts = slugs[0].split("_")
+            if len(parts) >= 2:
+                prefix = "_".join(parts[:-1]) + "_"
+                prefixes.append((prefix, service_key))
+    # Sort longest first to avoid partial matches
+    prefixes.sort(key=lambda x: -len(x[0]))
+    return prefixes
+
+
 def _build_slug_index(client, user_id: str = "") -> None:
     """Build canonical slug index from always-available + connected toolkits.
 
-    Called once at first tool execution. Populates _canonical_slugs
-    with every available tool slug from the Composio API.
+    Called at first tool execution and on manual refresh. Populates:
+    - _canonical_slugs: every available tool slug
+    - _slug_to_toolkit: slug → toolkit name mapping
+    - _slugs_by_service: toolkit → [slugs] grouping
+    - _SERVICE_PREFIXES: auto-detected prefix → toolkit mapping
 
     Strategy:
     1. Always load composio + composio_search (no connection required)
     2. Query Composio for user's connected apps (dynamic)
-    3. Load all connected toolkits
-    4. No config file or env var — 100% driven by Composio state
-
-    NOTE: The API returns max ~20 tools per toolkit call, so we must
-    load each toolkit individually and combine results.
+    3. Load all connected toolkits, tracking which toolkit each slug belongs to
+    4. Auto-generate prefix map from loaded slugs (zero hardcoded lists)
+    5. No config file or env var — 100% driven by Composio state
     """
-    global _canonical_slugs, _slug_index_built
+    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES
+
     if _slug_index_built:
         return
 
-    # These two toolkits are always available (no connection required)
     ALWAYS_AVAILABLE = ["composio", "composio_search"]
 
-    # Discover what the user actually has connected
     connected = set()
     if user_id:
         connected = set(_discover_connected_toolkits(client, user_id))
 
-    # Build active toolkit list: base + all connected
     active_toolkits = list(ALWAYS_AVAILABLE)
     for conn_toolkit in sorted(connected):
         if conn_toolkit not in ALWAYS_AVAILABLE:
@@ -180,30 +214,43 @@ def _build_slug_index(client, user_id: str = "") -> None:
         logger.info("Composio: No connected accounts found, loading base toolkits only")
 
     all_slugs: list[str] = []
+    slug_toolkit_map: dict[str, str] = {}
+    by_service: dict[str, list[str]] = {}
+
     for toolkit in active_toolkits:
         try:
             tools = client.tools.get_raw_composio_tools(toolkits=[toolkit])
             slugs = [t.slug for t in tools]
             all_slugs.extend(slugs)
+            by_service[toolkit] = slugs
+            for slug in slugs:
+                slug_toolkit_map[slug] = toolkit
             logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
         except Exception as exc:
             logger.warning(f"Composio: Failed to load toolkit {toolkit}: {exc}")
 
     _canonical_slugs = all_slugs
-    _slug_index_built = True
-
-    # Build service-grouped index for catalog generation
-    global _slugs_by_service
-    by_service: dict[str, list[str]] = {}
-    for slug in _canonical_slugs:
-        key = _extract_service_key(slug)
-        by_service.setdefault(key, []).append(slug)
+    _slug_to_toolkit = slug_toolkit_map
     _slugs_by_service = by_service
+
+    # Auto-generate prefix map from actual slug data (replaces hardcoded list)
+    _SERVICE_PREFIXES = _auto_generate_prefixes(by_service)
+
+    # Auto-extend service aliases for newly discovered toolkits
+    for toolkit in by_service:
+        parts = toolkit.split("_")
+        if len(parts) >= 2:
+            short = parts[-1]  # e.g., "teams" from "microsoft_teams"
+            if short not in _SERVICE_ALIASES and short != toolkit:
+                _SERVICE_ALIASES[short] = toolkit
+
+    _slug_index_built = True
 
     logger.info(
         f"Composio: Slug index built — {len(_canonical_slugs)} tools "
         f"from {len(active_toolkits)} active toolkits. "
-        f"Service grouping: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}"
+        f"Services: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}. "
+        f"Prefixes: {len(_SERVICE_PREFIXES)} auto-detected"
     )
 
 
@@ -582,6 +629,32 @@ async def ensure_slug_index() -> None:
     await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
 
 
+async def refresh_slug_index() -> str:
+    """Force rebuild of slug index to pick up newly connected services.
+
+    Resets the write-once lock, clears circuit breakers, and rebuilds
+    from scratch. Call this after a user connects a new service so the
+    agent can use it in the current session without restarting.
+
+    Returns the updated tool catalog string.
+    """
+    global _slug_index_built
+    _slug_index_built = False
+    _failed_slugs.clear()
+
+    from ..config import get_settings
+    settings = get_settings()
+    if not settings.composio_api_key or not settings.composio_user_id:
+        return "Composio not configured"
+
+    client = _get_client(settings)
+    user_id = settings.composio_user_id.strip()
+    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+
+    logger.info("Composio: Slug index refreshed (mid-session rebuild)")
+    return get_tool_catalog()
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -783,9 +856,10 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     display_name = _VOICE_NAMES.get(service_lower, service.title())
 
     # Try to initiate connection via Composio toolkit
+    # COMPOSIO_INITIATE_CONNECTION expects "toolkit" param, not "app_name"
     result = await execute_composio_tool(
         tool_slug="COMPOSIO_INITIATE_CONNECTION",
-        arguments={"app_name": service_lower},
+        arguments={"toolkit": service_lower},
     )
 
     # Check if result contains a URL (auth link)
