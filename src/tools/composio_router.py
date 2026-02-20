@@ -17,7 +17,15 @@ See docs/COMPOSIO-TOOL-ROUTER-APPROACH.md for full architecture.
 
 import asyncio
 import logging
+import time
 from typing import Optional
+
+from ..utils.room_publisher import (
+    publish_tool_start,
+    publish_tool_executing,
+    publish_tool_completed,
+    publish_composio_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,24 @@ COMPOSIO_ALLOWED_TOOLS = [
 
 # Cached Composio client (initialized on first use)
 _composio_client = None
+
+# Slug cache: recently-executed tool slugs with timestamp
+# Avoids redundant MCP discovery for tools used within TTL window
+_slug_cache: dict[str, float] = {}  # slug -> last_used_timestamp
+_SLUG_CACHE_TTL = 300  # 5 minutes
+
+
+def cache_slug(slug: str) -> None:
+    """Mark a tool slug as recently used."""
+    _slug_cache[slug] = time.time()
+
+
+def is_slug_cached(slug: str) -> bool:
+    """Check if a slug was recently used (within TTL)."""
+    ts = _slug_cache.get(slug)
+    if ts and (time.time() - ts) < _SLUG_CACHE_TTL:
+        return True
+    return False
 
 
 def _get_client(settings):
@@ -182,9 +208,15 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     except ImportError:
         return "I was not able to run this tool because the Composio package is not installed"
 
+    tool_display = _friendly_name(tool_slug)
+    call_id = await publish_tool_start(f"composio:{tool_slug}", {"slug": tool_slug})
+
     try:
         user_id = settings.composio_user_id.strip()
         logger.info(f"Composio SDK execute: slug={tool_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
+
+        await publish_composio_event("composio.executing", tool_slug, call_id, f"Running {tool_display}")
+        start_ms = int(time.time() * 1000)
 
         result = await asyncio.to_thread(
             lambda: client.tools.execute(
@@ -194,22 +226,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             )
         )
 
-        tool_display = _friendly_name(tool_slug)
+        duration_ms = int(time.time() * 1000) - start_ms
+        cache_slug(tool_slug)
 
         if result.get("successful"):
             data = result.get("data", {})
-            logger.info(f"[TOOL_CALL] Composio OK: {tool_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
-            # Extract meaningful content from the response
-            return _extract_voice_result(data, tool_slug, tool_display)
+            logger.info(f"[TOOL_CALL] Composio OK: {tool_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__} ({duration_ms}ms)")
+            voice_result = _extract_voice_result(data, tool_slug, tool_display)
+            await publish_composio_event("composio.completed", tool_slug, call_id, voice_result[:100], duration_ms)
+            await publish_tool_completed(call_id, voice_result[:100])
+            return voice_result
         else:
             error = result.get("error", "unknown error")
-            logger.warning(f"[TOOL_CALL] Composio FAIL: {tool_slug} error={error}")
+            logger.warning(f"[TOOL_CALL] Composio FAIL: {tool_slug} error={error} ({duration_ms}ms)")
+            await publish_composio_event("composio.error", tool_slug, call_id, str(error)[:100], duration_ms)
             # CRITICAL: Use "I was not able to" language so LLM does NOT retry
             return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
 
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {tool_slug} exception={exc}")
-        tool_display = _friendly_name(tool_slug)
+        await publish_composio_event("composio.error", tool_slug, call_id, str(exc)[:100])
         # CRITICAL: Use "I was not able to" language so LLM does NOT retry
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
@@ -219,11 +255,20 @@ async def batch_execute_composio_tools(tools: list) -> str:
 
     Each tool in the list must have 'tool_slug' and 'arguments' keys.
     Uses asyncio.gather for true parallel execution on Composio's servers.
+    Each individual tool publishes its own telemetry via execute_composio_tool().
 
     Returns a voice-friendly summary of all results.
     """
     if not tools:
         return "No tools to execute"
+
+    slugs = [t.get("tool_slug", "unknown") for t in tools if t.get("tool_slug")]
+    batch_call_id = await publish_tool_start(
+        f"composio:batch:{len(slugs)}",
+        {"tools": " + ".join(slugs[:3])},
+    )
+    await publish_tool_executing(batch_call_id)
+    start_ms = int(time.time() * 1000)
 
     tasks = [
         execute_composio_tool(
@@ -236,6 +281,7 @@ async def batch_execute_composio_tools(tools: list) -> str:
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    duration_ms = int(time.time() * 1000) - start_ms
     summaries = []
     for tool_spec, result in zip(tools, results):
         slug = tool_spec.get("tool_slug", "unknown")
@@ -246,7 +292,9 @@ async def batch_execute_composio_tools(tools: list) -> str:
         else:
             summaries.append(str(result))
 
-    return " and ".join(summaries) if summaries else "All tools completed"
+    summary = " and ".join(summaries) if summaries else "All tools completed"
+    await publish_tool_completed(batch_call_id, f"{len(slugs)} tools in {duration_ms}ms")
+    return summary
 
 
 def get_composio_mcp_url(settings) -> Optional[tuple[str, dict]]:

@@ -443,6 +443,11 @@ async def entrypoint(ctx: JobContext):
             vad_frame_count["last_log_time"] = now
             logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
 
+    # Set global room reference for tool event publishing
+    from .utils.room_publisher import set_room as _set_room
+    _set_room(ctx.room)
+    logger.info("Room publisher initialized for tool lifecycle events")
+
     # Initialize async tool worker for background execution
     tool_worker = AsyncToolWorker(room=ctx.room, max_concurrent=3)
 
