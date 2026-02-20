@@ -339,21 +339,15 @@ async def search_contacts_async(query: str) -> str:
 @llm.function_tool(
     name="composioBatchExecute",
     description=(
-        "DEFAULT Composio execution tool. Execute one or more Composio tools "
-        "discovered via COMPOSIO_SEARCH_TOOLS. Pass tools_json as a JSON array "
-        "of objects each with tool_slug and arguments fields. "
-        "IMPORTANT: Use the EXACT tool slug from COMPOSIO_SEARCH_TOOLS results. "
-        "Slugs use full service prefix like MICROSOFT_TEAMS_ not shortened TEAMS_. "
-        "DEPENDENCY HANDLING: Add a step field (1 2 3) to control execution order. "
-        "Tools with the same step number run in parallel. "
-        "Higher step numbers wait for lower steps to complete first. "
-        "If no step field is set all tools run in parallel as step 1. "
-        "ONLY batch tools where the later steps do NOT need output data from earlier steps. "
-        "If tool B needs specific data from tool A results use composioExecute for A first "
-        "then call composioBatchExecute for B with the data. "
-        "If any tool result says 'I was not able to' do NOT retry that tool just tell the user. "
+        "Execute one or more actions on connected services like Teams OneDrive Sheets GitHub etc. "
+        "Pass tools_json as a JSON array of objects each with tool_slug and arguments. "
+        "Slugs use full service prefix like MICROSOFT_TEAMS_SEND_MESSAGE or ONE_DRIVE_SEARCH_FILES. "
+        "Shortened slugs like TEAMS_SEND are resolved automatically. "
+        "Add a step field 1 2 3 to control execution order. Same step runs in parallel. "
+        "If tool B needs specific data from tool A results use composioExecute for A first. "
+        "If any result says tool does not exist or do not retry STOP do not call again. "
         "Example: "
-        '[{"tool_slug":"MICROSOFT_TEAMS_SEARCH_MESSAGES","arguments":{...}},{"tool_slug":"ONE_DRIVE_SEARCH_FILES","arguments":{...}}]'
+        '[{"tool_slug":"MICROSOFT_TEAMS_SEND_MESSAGE","arguments":{"channel":"general","body":"hello"}}]'
     ),
 )
 async def composio_batch_execute_async(
@@ -434,14 +428,11 @@ async def composio_batch_execute_async(
 @llm.function_tool(
     name="composioExecute",
     description=(
-        "Execute a SINGLE Composio tool synchronously when you need the result "
-        "to continue the conversation. Only use this for READ queries and lookups "
-        "where you must reason about the data before responding. For all other "
-        "actions use composioBatchExecute instead. "
-        "IMPORTANT: Use the EXACT tool slug from COMPOSIO_SEARCH_TOOLS results. "
-        "Slugs use full service prefix like MICROSOFT_TEAMS_ not shortened TEAMS_. "
-        "Pass tool_slug and arguments_json as a JSON string matching the schema. "
-        "If result says 'I was not able to' do NOT retry just tell the user."
+        "Execute a SINGLE action synchronously when you need the result to continue. "
+        "Only use for READ queries where you must reason about the data before responding. "
+        "For all other actions use composioBatchExecute instead. "
+        "Slugs use full service prefix like MICROSOFT_TEAMS_ or ONE_DRIVE_. "
+        "If result says tool does not exist or do not retry STOP do not call again."
     ),
 )
 async def composio_execute_async(
@@ -483,7 +474,7 @@ ASYNC_TOOLS = [
     add_contact_async,
     get_contact_async,
     search_contacts_async,
-    # Composio (execution wrappers — discovery + planning stays on MCP)
+    # Composio (SDK execution wrappers — no MCP dependency)
     composio_batch_execute_async,  # DEFAULT: parallel background execution
     composio_execute_async,        # FALLBACK: sync reads when LLM needs results
 ]

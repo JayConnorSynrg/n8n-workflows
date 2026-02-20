@@ -1,24 +1,17 @@
-"""Composio Tool Router — MCP discovery + SDK execution.
+"""Composio Tool Router — SDK-only execution.
 
-Architecture (hybrid MCP + Python SDK):
-  MCP (5 meta-tools in LLM context):
-    - COMPOSIO_SEARCH_TOOLS        — discover tools by use case
-    - COMPOSIO_MANAGE_CONNECTIONS  — handle OAuth/auth flows
-    - COMPOSIO_GET_TOOL_SCHEMAS    — load full schema when search returns schemaRef
-    - COMPOSIO_WAIT_FOR_CONNECTION — wait for user to complete auth
-    - COMPOSIO_CREATE_PLAN         — build execution plan for complex workflows
-
+Architecture:
   Python SDK (execution via AsyncToolWorker):
     - composioBatchExecute  — DEFAULT: parallel execution, always background
     - composioExecute       — FALLBACK: single sync reads when LLM needs results
 
-See docs/COMPOSIO-TOOL-ROUTER-APPROACH.md for full architecture.
+  Slug resolution handles LLM-generated short slugs (e.g. TEAMS_SEND → MICROSOFT_TEAMS_SEND_MESSAGE).
+  Circuit breaker prevents retry loops on unresolvable slugs.
 """
 
 import asyncio
 import logging
 import time
-from typing import Optional
 
 from ..utils.room_publisher import (
     publish_tool_start,
@@ -29,31 +22,17 @@ from ..utils.room_publisher import (
 
 logger = logging.getLogger(__name__)
 
-# Composio toolkits loaded into the MCP session.
-# MUST include "composio" and "composio_search" for meta-tools.
-# MUST ALSO include each app toolkit the user has connected (e.g.
-# "microsoft_teams", "onedrive", "gmail") — without these, the session
-# returns "[Session Restriction] Toolkit X is not allowed for this session."
-# Configured via COMPOSIO_TOOLKITS env var (comma-separated).
-COMPOSIO_TOOLKITS: list[str] = []  # populated from settings at init time
-
-# MCP tools loaded into LLM context — discovery, auth, schema loading.
-# Execution is handled by the Python composioExecute wrapper, not MCP.
-COMPOSIO_ALLOWED_TOOLS = [
-    "COMPOSIO_SEARCH_TOOLS",         # Discover the right tool by query
-    "COMPOSIO_MANAGE_CONNECTIONS",   # Handle OAuth/auth when connection is missing
-    "COMPOSIO_GET_TOOL_SCHEMAS",     # Load full schema when search returns schemaRef
-    "COMPOSIO_WAIT_FOR_CONNECTION",  # Wait for user to complete OAuth flow
-    "COMPOSIO_CREATE_PLAN",          # Build execution plan for complex workflows
-]
-
 # Cached Composio client (initialized on first use)
 _composio_client = None
 
 # Slug cache: recently-executed tool slugs with timestamp
-# Avoids redundant MCP discovery for tools used within TTL window
 _slug_cache: dict[str, float] = {}  # slug -> last_used_timestamp
 _SLUG_CACHE_TTL = 300  # 5 minutes
+
+# Circuit breaker: track slugs that failed resolution or execution.
+# After _CB_MAX_FAILURES attempts, short-circuit with "tool does not exist".
+_failed_slugs: dict[str, int] = {}  # slug -> failure count
+_CB_MAX_FAILURES = 2
 
 # Canonical slug index: ALL available tool slugs from connected toolkits.
 # Built once at first execute(), used to resolve LLM-generated short slugs
@@ -117,7 +96,7 @@ def _build_slug_index(client, toolkits: list[str]) -> None:
     )
 
 
-def _resolve_slug(raw_slug: str) -> str:
+def _resolve_slug(raw_slug: str) -> str | None:
     """Resolve a potentially short/incorrect slug to the canonical SDK slug.
 
     The LLM often generates shortened slugs:
@@ -125,12 +104,12 @@ def _resolve_slug(raw_slug: str) -> str:
       - "GMAIL_SEND_EMAIL" instead of "GMAIL_SEND_EMAIL" (may be exact)
 
     Resolution strategy (ordered by confidence):
-      1. Exact match in canonical index → return as-is
-      2. Canonical slug ends with the raw slug → return canonical
+      1. Exact match in canonical index
+      2. Canonical slug ends with the raw slug
       3. Try common prefix expansions (TEAMS_ → MICROSOFT_TEAMS_, etc.)
-      4. Canonical slug contains all words from the raw slug → best match
-      5. Substring match (raw slug is substring of canonical) → best match
-      6. No match → return raw slug (let API error naturally)
+      4. Canonical slug contains all words from the raw slug
+      5. Substring match (raw slug is substring of canonical)
+      6. No match → return None (caller handles error)
     """
     if not _canonical_slugs:
         return raw_slug
@@ -204,8 +183,9 @@ def _resolve_slug(raw_slug: str) -> str:
         logger.info(f"Composio: Slug resolved (partial): {raw_slug} → {best_match}")
         return best_match
 
-    logger.warning(f"Composio: Could not resolve slug: {raw_slug}")
-    return upper
+    # No match found — return None so caller can handle cleanly
+    logger.warning(f"Composio: Could not resolve slug: {raw_slug} (not in {len(_canonical_slugs)} available tools)")
+    return None
 
 
 def _get_client(settings):
@@ -333,11 +313,11 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     the asyncio event loop. Returns a natural language string suitable
     for TTS output (never raw JSON).
 
-    IMPORTANT: Error returns use "I was not able to" language to signal the LLM
-    to stop retrying and inform the user instead.
+    Includes circuit breaker: after 2 failures for the same slug,
+    short-circuits with "tool does not exist" to prevent retry loops.
 
     Args:
-        tool_slug: Tool identifier from COMPOSIO_SEARCH_TOOLS (e.g. COMPOSIO_SEARCH_WEB)
+        tool_slug: Tool identifier (e.g. MICROSOFT_TEAMS_SEND_MESSAGE)
         arguments: Dict of arguments matching the tool's schema
 
     Returns:
@@ -345,6 +325,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """
     from ..config import get_settings
     settings = get_settings()
+
+    slug_key = tool_slug.upper().strip()
+
+    # Circuit breaker: check if this slug has failed too many times
+    if _failed_slugs.get(slug_key, 0) >= _CB_MAX_FAILURES:
+        logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")
+        return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
 
     if not settings.composio_api_key or not settings.composio_user_id:
         return "I was not able to run this tool because Composio is not configured on this instance"
@@ -362,7 +349,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     # Resolve the slug to canonical format (handles LLM-generated short slugs)
     resolved_slug = _resolve_slug(tool_slug)
-    if resolved_slug != tool_slug.upper().strip():
+
+    # If slug resolution failed completely, trip circuit breaker immediately
+    if resolved_slug is None:
+        _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+        logger.warning(f"Composio: Slug unresolvable: {tool_slug} (failure {_failed_slugs[slug_key]}/{_CB_MAX_FAILURES})")
+        return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
+
+    if resolved_slug != slug_key:
         logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
 
     tool_display = _friendly_name(resolved_slug)
@@ -385,11 +379,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         )
 
         duration_ms = int(time.time() * 1000) - start_ms
-        cache_slug(resolved_slug)
 
         if result.get("successful"):
             data = result.get("data", {})
             logger.info(f"[TOOL_CALL] Composio OK: {resolved_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__} ({duration_ms}ms)")
+            cache_slug(resolved_slug)
+            # Reset circuit breaker on success
+            _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
             await publish_composio_event("composio.completed", resolved_slug, call_id, voice_result[:100], duration_ms)
             await publish_tool_completed(call_id, voice_result[:100])
@@ -397,14 +393,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         else:
             error = result.get("error", "unknown error")
             logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error} ({duration_ms}ms)")
+            _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
             await publish_composio_event("composio.error", resolved_slug, call_id, str(error)[:100], duration_ms)
-            # CRITICAL: Use "I was not able to" language so LLM does NOT retry
             return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
 
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
+        _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
         await publish_composio_event("composio.error", resolved_slug, call_id, str(exc)[:100])
-        # CRITICAL: Use "I was not able to" language so LLM does NOT retry
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
 
@@ -455,66 +451,3 @@ async def batch_execute_composio_tools(tools: list) -> str:
     return summary
 
 
-def get_composio_mcp_url(settings) -> Optional[tuple[str, dict]]:
-    """Create a Composio Tool Router MCP session and return (url, headers).
-
-    MCP is used for COMPOSIO_SEARCH_TOOLS (discovery) and
-    COMPOSIO_MANAGE_CONNECTIONS (auth). Execution goes through
-    execute_composio_tool() via the Python SDK instead.
-
-    Returns:
-        (mcp_url, mcp_headers) tuple on success, or None on failure.
-    """
-    if not settings.composio_api_key:
-        logger.debug("Composio: COMPOSIO_API_KEY not set, skipping")
-        return None
-
-    user_id = getattr(settings, "composio_user_id", "").strip()
-    if not user_id:
-        logger.warning(
-            "Composio: COMPOSIO_USER_ID not set. "
-            "Set it to scope tool access to a specific connected account."
-        )
-        return None
-
-    try:
-        from composio import Composio  # type: ignore[import]
-    except ImportError:
-        logger.error(
-            "Composio: 'composio' package not installed. "
-            "Run: pip install composio>=0.11.0"
-        )
-        return None
-
-    try:
-        client = _get_client(settings)
-
-        # Build toolkit list from config (env var COMPOSIO_TOOLKITS).
-        # Must include meta-toolkits + all app toolkits user has connected.
-        toolkits_str = getattr(settings, "composio_toolkits", "")
-        if toolkits_str and toolkits_str.strip():
-            toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()]
-        else:
-            toolkits = ["composio", "composio_search"]
-
-        # Update module-level list for reference
-        global COMPOSIO_TOOLKITS
-        COMPOSIO_TOOLKITS = toolkits
-
-        session = client.create(
-            user_id=user_id,
-            toolkits=toolkits,
-        )
-
-        mcp_url: str = session.mcp.url
-        mcp_headers: dict = getattr(session.mcp, "headers", None) or {}
-
-        logger.info(
-            f"Composio: MCP session created — "
-            f"user_id={user_id!r}, toolkits={toolkits}"
-        )
-        return (mcp_url, mcp_headers)
-
-    except Exception as exc:
-        logger.error(f"Composio: Failed to create MCP session - {exc}")
-        return None
