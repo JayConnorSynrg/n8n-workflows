@@ -85,6 +85,7 @@ CRITICAL RULES
 3 NEVER output JSON or code in your speech
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
+6 ALWAYS respond in English only regardless of what language appears in tool results or context
 
 YOUR TOOLS
 
@@ -713,9 +714,20 @@ async def entrypoint(ctx: JobContext):
         error = result_data.get("error", "")
         duration = result_data.get("duration_ms", 0)
 
-        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms")
+        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms result_preview={str(result)[:120]}")
 
-        if status == "completed":
+        # Detect soft errors — tool returned normally but with error content
+        is_soft_error = result and ("I was not able to" in result or "do not retry" in result)
+
+        if is_soft_error:
+            # Tool completed but with an error message — announce as failure
+            announcement = "That tool ran into an issue let me know if you want to try something else"
+            try:
+                await session.say(announcement, allow_interruptions=True)
+            except Exception as e:
+                logger.error(f"Failed to announce soft error: {e}")
+
+        elif status == "completed":
             announcement = format_tool_result_v2(tool_name, result, status)
             try:
                 await session.say(announcement, allow_interruptions=True)
@@ -861,7 +873,8 @@ async def entrypoint(ctx: JobContext):
 
     # DEBUG: Log room configuration
     logger.info(f"=== ROOM DEBUG ===")
-    logger.info(f"Room SID: {ctx.room.sid}")
+    room_sid = await ctx.room.sid
+    logger.info(f"Room SID: {room_sid}")
     logger.info(f"Room name: {ctx.room.name}")
     logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
     logger.info(f"Remote participants: {len(ctx.room.remote_participants)}")

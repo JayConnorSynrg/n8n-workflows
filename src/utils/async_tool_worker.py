@@ -144,7 +144,7 @@ class AsyncToolWorker:
         self._tasks[task_id] = task
         await self._queue.put(task)
 
-        logger.info(f"Dispatched tool '{tool_name}' as {task_id}")
+        logger.info(f"[TOOL_CALL] Dispatched: {tool_name} task_id={task_id}")
 
         return task_id
 
@@ -182,7 +182,7 @@ class AsyncToolWorker:
         task.status = TaskStatus.RUNNING
         start_time = time.time()
 
-        logger.info(f"Worker {worker_id} executing '{task.tool_name}' ({task.task_id})")
+        logger.info(f"[TOOL_CALL] Executing: {task.tool_name} task_id={task.task_id} worker={worker_id}")
 
         try:
             async with self._semaphore:
@@ -195,8 +195,8 @@ class AsyncToolWorker:
 
                 duration = task.completed_at - start_time
                 logger.info(
-                    f"Tool '{task.tool_name}' completed in {duration:.1f}s: "
-                    f"{result[:100]}..."
+                    f"[TOOL_CALL] Completed: {task.tool_name} "
+                    f"duration={duration:.1f}s result={result[:120]}"
                 )
 
         except Exception as e:
@@ -204,7 +204,7 @@ class AsyncToolWorker:
             task.error = str(e)
             task.completed_at = time.time()
 
-            logger.error(f"Tool '{task.tool_name}' failed: {e}")
+            logger.error(f"[TOOL_CALL] Failed: {task.tool_name} error={e}")
 
         # Publish result to room
         await self._publish_result(task)

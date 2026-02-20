@@ -52,7 +52,7 @@ def _get_client(settings):
     return _composio_client
 
 
-async def execute_composio_tool(tool_slug: str, arguments: dict, toolkit_version: str = "latest") -> str:
+async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
     Runs the synchronous SDK call in a thread executor to avoid blocking
@@ -63,9 +63,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, toolkit_version
     to stop retrying and inform the user instead.
 
     Args:
-        tool_slug: Tool identifier from COMPOSIO_SEARCH_TOOLS (e.g. MICROSOFT_TEAMS_SEND_MESSAGE)
+        tool_slug: Tool identifier from COMPOSIO_SEARCH_TOOLS (e.g. COMPOSIO_SEARCH_WEB)
         arguments: Dict of arguments matching the tool's schema
-        toolkit_version: Toolkit version from search results (default "latest")
 
     Returns:
         Voice-friendly result string
@@ -82,24 +81,22 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, toolkit_version
         return "I was not able to run this tool because the Composio package is not installed"
 
     try:
-        # Build execute kwargs — include toolkit_version to avoid
-        # "Toolkit version not specified" errors from Composio API
-        execute_kwargs = {
-            "slug": tool_slug,
-            "user_id": settings.composio_user_id.strip(),
-            "arguments": arguments,
-        }
-        if toolkit_version:
-            execute_kwargs["toolkit_version"] = toolkit_version
+        user_id = settings.composio_user_id.strip()
+        logger.info(f"Composio SDK execute: slug={tool_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
 
         result = await asyncio.to_thread(
-            lambda: client.tools.execute(**execute_kwargs)
+            lambda: client.tools.execute(
+                slug=tool_slug,
+                user_id=user_id,
+                arguments=arguments,
+            )
         )
 
         tool_display = tool_slug.replace("_", " ").lower()
 
         if result.get("successful"):
             data = result.get("data", {})
+            logger.info(f"[TOOL_CALL] Composio OK: {tool_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
             # Try to extract a meaningful message from the response
             if isinstance(data, dict):
                 message = data.get("message", "")
@@ -108,12 +105,12 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, toolkit_version
             return f"Completed {tool_display}"
         else:
             error = result.get("error", "unknown error")
-            logger.warning(f"Composio execute failed for {tool_slug}: {error}")
+            logger.warning(f"[TOOL_CALL] Composio FAIL: {tool_slug} error={error}")
             # CRITICAL: Use "I was not able to" language so LLM does NOT retry
             return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
 
     except Exception as exc:
-        logger.error(f"Composio execute error for {tool_slug}: {exc}")
+        logger.error(f"[TOOL_CALL] Composio ERROR: {tool_slug} exception={exc}")
         tool_display = tool_slug.replace("_", " ").lower()
         # CRITICAL: Use "I was not able to" language so LLM does NOT retry
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
@@ -134,7 +131,6 @@ async def batch_execute_composio_tools(tools: list) -> str:
         execute_composio_tool(
             tool_slug=t.get("tool_slug", ""),
             arguments=t.get("arguments", {}),
-            toolkit_version=t.get("toolkit_version", "latest"),
         )
         for t in tools
         if t.get("tool_slug")

@@ -385,14 +385,13 @@ async def composio_batch_execute_async(
         "to continue the conversation. Only use this for READ queries and lookups "
         "where you must reason about the data before responding. For all other "
         "actions use composioBatchExecute instead. "
-        "Pass tool_slug and arguments_json as a JSON string matching the schema. "
+        "Pass tool_slug from search results and arguments_json as a JSON string matching the schema. "
         "If result says 'I was not able to' do NOT retry just tell the user."
     ),
 )
 async def composio_execute_async(
     tool_slug: str,
     arguments_json: str = "{}",
-    toolkit_version: str = "latest",
 ) -> str:
     """Execute single Composio tool synchronously - for reads where LLM needs results."""
     import json
@@ -407,7 +406,6 @@ async def composio_execute_async(
     return await execute_composio_tool(
         tool_slug=tool_slug,
         arguments=arguments,
-        toolkit_version=toolkit_version,
     )
 
 
