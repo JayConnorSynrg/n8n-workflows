@@ -466,6 +466,17 @@ async def entrypoint(ctx: JobContext):
             f"AVAILABLE TOOL SLUGS - Use these exact slugs with composioBatchExecute\n{composio_catalog}"
         )
 
+    # Inject current date/time context (no tool call needed)
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    time_context = (
+        f"\n\nCURRENT DATE AND TIME\n"
+        f"UTC: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+        f"Day: {now.strftime('%A, %B %d, %Y')}\n"
+        f"When asked about time always reference this and note it is UTC"
+    )
+    active_prompt += time_context
+
     # Define agent with all tools (no MCP servers)
     agent = Agent(
         instructions=active_prompt,

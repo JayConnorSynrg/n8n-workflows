@@ -515,6 +515,12 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
         if msg and isinstance(msg, str) and len(msg) > 3:
             return msg[:200]
 
+    # 2.5. Direct content fields (search answers, text content, body)
+    for key in ("answer", "text", "content", "body", "summary", "description", "output"):
+        val = data.get(key, inner.get(key, "") if isinstance(inner, dict) else "")
+        if val and isinstance(val, str) and len(val) > 5:
+            return val[:500]
+
     # 3. List of items (search results, file lists, messages)
     for key in ("items", "results", "messages", "files", "values", "records"):
         items = data.get(key, inner.get(key, None) if isinstance(inner, dict) else None)
