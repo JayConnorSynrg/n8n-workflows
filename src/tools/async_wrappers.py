@@ -333,6 +333,27 @@ async def search_contacts_async(query: str) -> str:
 
 
 # =============================================================================
+# COMPOSIO - TOOL CATALOG
+# =============================================================================
+
+@llm.function_tool(
+    name="listComposioTools",
+    description=(
+        "List available Composio tool slugs grouped by service. "
+        "Call this first if unsure which slug to use. "
+        "Pass service to filter: microsoft_teams, gmail, composio_search, one_drive, google_sheets, etc. "
+        "Returns exact slugs to use with composioBatchExecute or composioExecute."
+    ),
+)
+async def list_composio_tools_async(service: str = "") -> str:
+    """List available tool slugs from Composio catalog."""
+    from .composio_router import ensure_slug_index, get_tool_catalog
+
+    await ensure_slug_index()
+    return get_tool_catalog(service_filter=service if service else None)
+
+
+# =============================================================================
 # COMPOSIO - HYBRID ASYNC/SYNC EXECUTION
 # =============================================================================
 
@@ -341,8 +362,7 @@ async def search_contacts_async(query: str) -> str:
     description=(
         "Execute one or more actions on connected services like Teams OneDrive Sheets GitHub etc. "
         "Pass tools_json as a JSON array of objects each with tool_slug and arguments. "
-        "Slugs use full service prefix like MICROSOFT_TEAMS_SEND_MESSAGE or ONE_DRIVE_SEARCH_FILES. "
-        "Shortened slugs like TEAMS_SEND are resolved automatically. "
+        "Always use exact full slugs from listComposioTools like MICROSOFT_TEAMS_SEND_MESSAGE. "
         "Add a step field 1 2 3 to control execution order. Same step runs in parallel. "
         "If tool B needs specific data from tool A results use composioExecute for A first. "
         "If any result says tool does not exist or do not retry STOP do not call again. "
@@ -475,6 +495,7 @@ ASYNC_TOOLS = [
     get_contact_async,
     search_contacts_async,
     # Composio (SDK execution wrappers — no MCP dependency)
+    list_composio_tools_async,     # CATALOG: list exact slugs before executing
     composio_batch_execute_async,  # DEFAULT: parallel background execution
     composio_execute_async,        # FALLBACK: sync reads when LLM needs results
 ]

@@ -41,6 +41,46 @@ _CB_MAX_FAILURES = 2
 _canonical_slugs: list[str] = []  # populated by _build_slug_index()
 _slug_index_built = False
 
+# Service-grouped slugs for catalog generation (zero-latency after index build)
+_slugs_by_service: dict[str, list[str]] = {}
+
+# Ordered longest-prefix-first to avoid partial matches
+_SERVICE_PREFIXES: list[tuple[str, str]] = [
+    ("MICROSOFT_TEAMS_", "microsoft_teams"),
+    ("ONE_DRIVE_", "one_drive"),
+    ("COMPOSIO_SEARCH_", "composio_search"),
+    ("COMPOSIO_", "composio"),
+    ("GOOGLESHEETS_", "google_sheets"),
+    ("GOOGLEDOCS_", "google_docs"),
+    ("GMAIL_", "gmail"),
+    ("GITHUB_", "github"),
+    ("CANVA_", "canva"),
+    ("SUPABASE_", "supabase"),
+    ("SLACK_", "slack"),
+    ("EXCEL_", "excel"),
+    ("PINECONE_", "pinecone"),
+    ("RECALLAI_", "recallai"),
+]
+
+# Tier constants for resolution confidence
+_TIER_EXACT = 1
+_TIER_SUFFIX = 2
+_TIER_PREFIX = 3
+_TIER_WORDS = 4    # unreliable — triggers SDK fallback
+_TIER_SUBSTR = 5
+_TIER_PARTIAL = 6
+
+# Service aliases for catalog filtering
+_SERVICE_ALIASES: dict[str, str] = {
+    "teams": "microsoft_teams",
+    "onedrive": "one_drive",
+    "drive": "one_drive",
+    "sheets": "google_sheets",
+    "docs": "google_docs",
+    "search": "composio_search",
+    "web": "composio_search",
+}
+
 
 def cache_slug(slug: str) -> None:
     """Mark a tool slug as recently used."""
@@ -90,6 +130,14 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
     except Exception as exc:
         logger.warning(f"Composio: Could not discover connected accounts: {exc}")
         return []
+
+
+def _extract_service_key(slug: str) -> str:
+    """Map a canonical slug to its service key using prefix table."""
+    for prefix, key in _SERVICE_PREFIXES:
+        if slug.startswith(prefix):
+            return key
+    return "other"
 
 
 def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
@@ -152,44 +200,96 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
 
     _canonical_slugs = all_slugs
     _slug_index_built = True
+
+    # Build service-grouped index for catalog generation
+    global _slugs_by_service
+    by_service: dict[str, list[str]] = {}
+    for slug in _canonical_slugs:
+        key = _extract_service_key(slug)
+        by_service.setdefault(key, []).append(slug)
+    _slugs_by_service = by_service
+
     logger.info(
         f"Composio: Slug index built — {len(_canonical_slugs)} tools "
         f"from {len(active_toolkits)} active toolkits "
-        f"({len(skipped_toolkits)} skipped)"
+        f"({len(skipped_toolkits)} skipped). "
+        f"Service grouping: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}"
     )
 
 
-def _resolve_slug(raw_slug: str) -> str | None:
-    """Resolve a potentially short/incorrect slug to the canonical SDK slug.
+def get_tool_catalog(service_filter: str | None = None) -> str:
+    """Return plain-text catalog of exact slugs grouped by service.
 
-    The LLM often generates shortened slugs:
-      - "TEAMS_SEARCH_MESSAGES" instead of "MICROSOFT_TEAMS_SEARCH_MESSAGES"
-      - "GMAIL_SEND_EMAIL" instead of "GMAIL_SEND_EMAIL" (may be exact)
+    Zero latency after index build — reads from _slugs_by_service dict.
+    Supports service aliases (e.g. "teams" → "microsoft_teams").
+    """
+    if not _slug_index_built:
+        return "Tool catalog not ready yet. Call composioExecute or composioBatchExecute first to trigger index build."
 
-    Resolution strategy (ordered by confidence):
-      1. Exact match in canonical index
-      2. Canonical slug ends with the raw slug
-      3. Try common prefix expansions (TEAMS_ → MICROSOFT_TEAMS_, etc.)
-      4. Canonical slug contains all words from the raw slug
-      5. Substring match (raw slug is substring of canonical)
-      6. No match → return None (caller handles error)
+    if not _slugs_by_service:
+        return "No tools available. Check Composio configuration and connected accounts."
+
+    # Resolve service alias
+    if service_filter:
+        key = service_filter.lower().strip()
+        key = _SERVICE_ALIASES.get(key, key)
+        slugs = _slugs_by_service.get(key)
+        if slugs:
+            lines = [f"=== {key.upper()} ({len(slugs)} tools) ==="]
+            for slug in sorted(slugs):
+                lines.append(f"  {slug}")
+            return "\n".join(lines)
+        # Check if partial match
+        matches = {k: v for k, v in _slugs_by_service.items() if key in k}
+        if matches:
+            lines = []
+            for svc, slugs in sorted(matches.items()):
+                lines.append(f"=== {svc.upper()} ({len(slugs)} tools) ===")
+                for slug in sorted(slugs):
+                    lines.append(f"  {slug}")
+            return "\n".join(lines)
+        available = ", ".join(sorted(_slugs_by_service.keys()))
+        return f"No tools found for service '{service_filter}'. Available services: {available}"
+
+    # Full catalog — all services
+    lines = [f"COMPOSIO TOOL CATALOG — {len(_canonical_slugs)} tools"]
+    for svc, slugs in sorted(_slugs_by_service.items()):
+        lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
+        for slug in sorted(slugs):
+            lines.append(f"  {slug}")
+    return "\n".join(lines)
+
+
+def _resolve_slug_fast(raw_slug: str) -> tuple[str | None, int]:
+    """Resolve a slug to canonical form and return confidence tier.
+
+    Returns (resolved_slug, tier). Tiers 1-3 are trusted.
+    Tiers 4-6 are UNVERIFIED and should trigger SDK search for verification.
+
+    Tiers:
+      1. Exact match
+      2. Suffix match (unique)
+      3. Prefix expansion match
+      4. Word containment (unreliable — may match wrong tool)
+      5. Substring match
+      6. Partial word overlap
     """
     if not _canonical_slugs:
-        return raw_slug
+        return raw_slug, _TIER_EXACT  # No index, pass through
 
     upper = raw_slug.upper().strip()
 
-    # 1. Exact match
+    # Tier 1: Exact match
     if upper in _canonical_slugs:
-        return upper
+        return upper, _TIER_EXACT
 
-    # 2. Suffix match: canonical ends with the short slug
+    # Tier 2: Suffix match (canonical ends with raw slug)
     suffix_matches = [s for s in _canonical_slugs if s.endswith(upper)]
     if len(suffix_matches) == 1:
-        logger.info(f"Composio: Slug resolved (suffix): {raw_slug} → {suffix_matches[0]}")
-        return suffix_matches[0]
+        logger.info(f"Composio: Slug resolved (tier 2 suffix): {raw_slug} → {suffix_matches[0]}")
+        return suffix_matches[0], _TIER_SUFFIX
 
-    # 3. Common prefix expansion — LLM drops "MICROSOFT_" or "GOOGLE_" prefix
+    # Tier 3: Prefix expansion (TEAMS_ → MICROSOFT_TEAMS_, etc.)
     prefix_expansions = {
         "TEAMS_": "MICROSOFT_TEAMS_",
         "ONEDRIVE_": "ONE_DRIVE_",
@@ -201,10 +301,10 @@ def _resolve_slug(raw_slug: str) -> str | None:
         if upper.startswith(short_prefix):
             expanded = full_prefix + upper[len(short_prefix):]
             if expanded in _canonical_slugs:
-                logger.info(f"Composio: Slug resolved (prefix): {raw_slug} → {expanded}")
-                return expanded
+                logger.info(f"Composio: Slug resolved (tier 3 prefix): {raw_slug} → {expanded}")
+                return expanded, _TIER_PREFIX
 
-    # 4. Word containment: all words in raw slug appear in canonical slug
+    # Tier 4: Word containment (all words in raw slug appear in canonical)
     raw_words = set(upper.split("_"))
     best_match = None
     best_score = 0
@@ -218,21 +318,20 @@ def _resolve_slug(raw_slug: str) -> str | None:
                 best_match = canonical
 
     if best_match:
-        logger.info(f"Composio: Slug resolved (words): {raw_slug} → {best_match}")
-        return best_match
+        logger.info(f"Composio: Slug resolved (tier 4 words UNVERIFIED): {raw_slug} → {best_match}")
+        return best_match, _TIER_WORDS
 
-    # 5. Substring match: raw slug appears within a canonical slug
+    # Tier 5: Substring match
     substr_matches = [s for s in _canonical_slugs if upper in s]
     if len(substr_matches) == 1:
-        logger.info(f"Composio: Slug resolved (substring): {raw_slug} → {substr_matches[0]}")
-        return substr_matches[0]
+        logger.info(f"Composio: Slug resolved (tier 5 substring UNVERIFIED): {raw_slug} → {substr_matches[0]}")
+        return substr_matches[0], _TIER_SUBSTR
     elif len(substr_matches) > 1:
-        # Pick shortest (most specific)
         shortest = min(substr_matches, key=len)
-        logger.info(f"Composio: Slug resolved (substring/shortest): {raw_slug} → {shortest}")
-        return shortest
+        logger.info(f"Composio: Slug resolved (tier 5 substring/shortest UNVERIFIED): {raw_slug} → {shortest}")
+        return shortest, _TIER_SUBSTR
 
-    # 6. Partial word overlap (best effort, need at least 2 words)
+    # Tier 6: Partial word overlap (need at least 2 words)
     best_match = None
     best_score = 0
     for canonical in _canonical_slugs:
@@ -243,12 +342,84 @@ def _resolve_slug(raw_slug: str) -> str | None:
             best_match = canonical
 
     if best_match:
-        logger.info(f"Composio: Slug resolved (partial): {raw_slug} → {best_match}")
-        return best_match
+        logger.info(f"Composio: Slug resolved (tier 6 partial UNVERIFIED): {raw_slug} → {best_match}")
+        return best_match, _TIER_PARTIAL
 
-    # No match found — return None so caller can handle cleanly
+    # No match at any tier
     logger.warning(f"Composio: Could not resolve slug: {raw_slug} (not in {len(_canonical_slugs)} available tools)")
-    return None
+    return None, 0
+
+
+def _sdk_search_slug(client, raw_slug: str) -> str | None:
+    """Search Composio SDK for a tool matching the raw slug.
+
+    Converts the slug to search terms and queries the API.
+    Extends _canonical_slugs with any new slugs discovered.
+    Returns best match or None.
+
+    This is a synchronous function — call via asyncio.to_thread().
+    """
+    global _canonical_slugs
+
+    # Convert slug to search terms: TEAMS_LIST_CHANNELS → "teams list channels"
+    terms = raw_slug.upper().strip().replace("_", " ").lower()
+
+    try:
+        results = client.tools.get_raw_composio_tools(search=terms, limit=5)
+    except Exception as exc:
+        logger.warning(f"Composio SDK search failed for '{terms}': {exc}")
+        return None
+
+    if not results:
+        logger.info(f"Composio SDK search: no results for '{terms}'")
+        return None
+
+    # Extend canonical index with any new slugs
+    existing = set(_canonical_slugs)
+    new_slugs = [t.slug for t in results if t.slug not in existing]
+    if new_slugs:
+        _canonical_slugs.extend(new_slugs)
+        # Update service grouping
+        for slug in new_slugs:
+            key = _extract_service_key(slug)
+            _slugs_by_service.setdefault(key, []).append(slug)
+        logger.info(f"Composio SDK search: added {len(new_slugs)} new slugs to index")
+
+    # Score results by word overlap with raw slug
+    raw_words = set(raw_slug.upper().strip().split("_"))
+    best_match = None
+    best_score = 0
+    for tool in results:
+        tool_words = set(tool.slug.split("_"))
+        overlap = len(raw_words & tool_words)
+        # Prefer exact word count match, penalize extra words
+        score = overlap * 100 - abs(len(tool_words) - len(raw_words)) * 10
+        if score > best_score:
+            best_score = score
+            best_match = tool.slug
+
+    if best_match:
+        logger.info(f"Composio SDK search: '{raw_slug}' → {best_match} (score={best_score})")
+    return best_match
+
+
+def _get_alternative_slugs(raw_slug: str, top_n: int = 5) -> list[str]:
+    """Score all canonical slugs by word overlap and return top N candidates."""
+    if not _canonical_slugs:
+        return []
+
+    raw_words = set(raw_slug.upper().strip().split("_"))
+    scored: list[tuple[int, str]] = []
+    for canonical in _canonical_slugs:
+        canonical_words = set(canonical.split("_"))
+        overlap = len(raw_words & canonical_words)
+        if overlap >= 1:
+            # Score: word overlap * 100 - length penalty
+            score = overlap * 100 - len(canonical)
+            scored.append((score, canonical))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [slug for _, slug in scored[:top_n]]
 
 
 def _get_client(settings):
@@ -374,6 +545,21 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
     return f"Completed {tool_display}"
 
 
+async def ensure_slug_index() -> None:
+    """Build slug index if not already built. Safe to call multiple times."""
+    if _slug_index_built:
+        return
+    from ..config import get_settings
+    settings = get_settings()
+    if not settings.composio_api_key or not settings.composio_user_id:
+        return
+    client = _get_client(settings)
+    toolkits_str = getattr(settings, "composio_toolkits", "")
+    toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
+    user_id = settings.composio_user_id.strip()
+    await asyncio.to_thread(lambda: _build_slug_index(client, toolkits, user_id))
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -416,14 +602,41 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         user_id = settings.composio_user_id.strip()
         await asyncio.to_thread(lambda: _build_slug_index(client, toolkits, user_id))
 
-    # Resolve the slug to canonical format (handles LLM-generated short slugs)
-    resolved_slug = _resolve_slug(tool_slug)
+    # Two-stage slug resolution:
+    # Stage 1: Fast local resolution with confidence tier
+    fast_match, tier = _resolve_slug_fast(tool_slug)
 
-    # If slug resolution failed completely, trip circuit breaker immediately
-    if resolved_slug is None:
-        _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
-        logger.warning(f"Composio: Slug unresolvable: {tool_slug} (failure {_failed_slugs[slug_key]}/{_CB_MAX_FAILURES})")
-        return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
+    # Stage 2: SDK search for low-confidence or failed matches
+    resolved_slug = fast_match
+    if tier >= _TIER_WORDS and fast_match is not None:
+        # Tier 4-6: fuzzy match — verify/override via SDK search
+        logger.info(f"Composio: Tier {tier} match for {tool_slug} → {fast_match}, verifying via SDK search")
+        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        if sdk_match:
+            resolved_slug = sdk_match
+            logger.info(f"Composio: SDK search overrode tier {tier}: {tool_slug} → {sdk_match}")
+        else:
+            logger.info(f"Composio: SDK search confirmed tier {tier} match: {fast_match}")
+    elif fast_match is None:
+        # No local match at all — SDK search as last resort
+        logger.info(f"Composio: No local match for {tool_slug}, trying SDK search")
+        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        if sdk_match:
+            resolved_slug = sdk_match
+            logger.info(f"Composio: SDK search found: {tool_slug} → {sdk_match}")
+        else:
+            # Complete failure — return error with alternatives
+            _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+            alternatives = _get_alternative_slugs(tool_slug)
+            alt_text = " or ".join(alternatives[:3]) if alternatives else "none found"
+            logger.warning(
+                f"Composio: Slug unresolvable: {tool_slug} "
+                f"(failure {_failed_slugs[slug_key]}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
+            )
+            return (
+                f"Tool {tool_slug} not found. Did you mean: {alt_text}? "
+                f"Call listComposioTools to see all available slugs."
+            )
 
     if resolved_slug != slug_key:
         logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
