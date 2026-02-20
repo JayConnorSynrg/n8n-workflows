@@ -55,6 +55,13 @@ _composio_client = None
 _slug_cache: dict[str, float] = {}  # slug -> last_used_timestamp
 _SLUG_CACHE_TTL = 300  # 5 minutes
 
+# Canonical slug index: ALL available tool slugs from connected toolkits.
+# Built once at first execute(), used to resolve LLM-generated short slugs
+# (e.g. "TEAMS_LIST_CHANNELS") to canonical SDK slugs
+# (e.g. "MICROSOFT_TEAMS_GET_CHANNEL").
+_canonical_slugs: list[str] = []  # populated by _build_slug_index()
+_slug_index_built = False
+
 
 def cache_slug(slug: str) -> None:
     """Mark a tool slug as recently used."""
@@ -67,6 +74,138 @@ def is_slug_cached(slug: str) -> bool:
     if ts and (time.time() - ts) < _SLUG_CACHE_TTL:
         return True
     return False
+
+
+def _build_slug_index(client, toolkits: list[str]) -> None:
+    """Build canonical slug index from all connected toolkits.
+
+    Called once at first tool execution. Populates _canonical_slugs
+    with every available tool slug from the Composio API.
+
+    NOTE: The API returns max ~20 tools per toolkit call, so we must
+    load each toolkit individually and combine results.
+    """
+    global _canonical_slugs, _slug_index_built
+    if _slug_index_built:
+        return
+
+    # Filter to app toolkits only (exclude meta-toolkits)
+    app_toolkits = [
+        t for t in toolkits
+        if t not in ("composio", "composio_search")
+    ]
+    if not app_toolkits:
+        logger.warning("Composio: No app toolkits configured, slug index empty")
+        _slug_index_built = True
+        return
+
+    all_slugs: list[str] = []
+    for toolkit in app_toolkits:
+        try:
+            tools = client.tools.get_raw_composio_tools(toolkits=[toolkit])
+            slugs = [t.slug for t in tools]
+            all_slugs.extend(slugs)
+            logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
+        except Exception as exc:
+            logger.warning(f"Composio: Failed to load toolkit {toolkit}: {exc}")
+
+    _canonical_slugs = all_slugs
+    _slug_index_built = True
+    logger.info(
+        f"Composio: Slug index built — {len(_canonical_slugs)} tools "
+        f"from {len(app_toolkits)} toolkits"
+    )
+
+
+def _resolve_slug(raw_slug: str) -> str:
+    """Resolve a potentially short/incorrect slug to the canonical SDK slug.
+
+    The LLM often generates shortened slugs:
+      - "TEAMS_SEARCH_MESSAGES" instead of "MICROSOFT_TEAMS_SEARCH_MESSAGES"
+      - "GMAIL_SEND_EMAIL" instead of "GMAIL_SEND_EMAIL" (may be exact)
+
+    Resolution strategy (ordered by confidence):
+      1. Exact match in canonical index → return as-is
+      2. Canonical slug ends with the raw slug → return canonical
+      3. Try common prefix expansions (TEAMS_ → MICROSOFT_TEAMS_, etc.)
+      4. Canonical slug contains all words from the raw slug → best match
+      5. Substring match (raw slug is substring of canonical) → best match
+      6. No match → return raw slug (let API error naturally)
+    """
+    if not _canonical_slugs:
+        return raw_slug
+
+    upper = raw_slug.upper().strip()
+
+    # 1. Exact match
+    if upper in _canonical_slugs:
+        return upper
+
+    # 2. Suffix match: canonical ends with the short slug
+    suffix_matches = [s for s in _canonical_slugs if s.endswith(upper)]
+    if len(suffix_matches) == 1:
+        logger.info(f"Composio: Slug resolved (suffix): {raw_slug} → {suffix_matches[0]}")
+        return suffix_matches[0]
+
+    # 3. Common prefix expansion — LLM drops "MICROSOFT_" or "GOOGLE_" prefix
+    prefix_expansions = {
+        "TEAMS_": "MICROSOFT_TEAMS_",
+        "ONEDRIVE_": "ONE_DRIVE_",
+        "SHEETS_": "GOOGLESHEETS_",
+        "DOCS_": "GOOGLEDOCS_",
+        "DRIVE_": "ONE_DRIVE_",
+    }
+    for short_prefix, full_prefix in prefix_expansions.items():
+        if upper.startswith(short_prefix):
+            expanded = full_prefix + upper[len(short_prefix):]
+            if expanded in _canonical_slugs:
+                logger.info(f"Composio: Slug resolved (prefix): {raw_slug} → {expanded}")
+                return expanded
+
+    # 4. Word containment: all words in raw slug appear in canonical slug
+    raw_words = set(upper.split("_"))
+    best_match = None
+    best_score = 0
+    for canonical in _canonical_slugs:
+        canonical_words = set(canonical.split("_"))
+        overlap = len(raw_words & canonical_words)
+        if overlap == len(raw_words):
+            score = overlap * 100 - len(canonical)
+            if score > best_score:
+                best_score = score
+                best_match = canonical
+
+    if best_match:
+        logger.info(f"Composio: Slug resolved (words): {raw_slug} → {best_match}")
+        return best_match
+
+    # 5. Substring match: raw slug appears within a canonical slug
+    substr_matches = [s for s in _canonical_slugs if upper in s]
+    if len(substr_matches) == 1:
+        logger.info(f"Composio: Slug resolved (substring): {raw_slug} → {substr_matches[0]}")
+        return substr_matches[0]
+    elif len(substr_matches) > 1:
+        # Pick shortest (most specific)
+        shortest = min(substr_matches, key=len)
+        logger.info(f"Composio: Slug resolved (substring/shortest): {raw_slug} → {shortest}")
+        return shortest
+
+    # 6. Partial word overlap (best effort, need at least 2 words)
+    best_match = None
+    best_score = 0
+    for canonical in _canonical_slugs:
+        canonical_words = set(canonical.split("_"))
+        overlap = len(raw_words & canonical_words)
+        if overlap >= 2 and overlap > best_score:
+            best_score = overlap
+            best_match = canonical
+
+    if best_match:
+        logger.info(f"Composio: Slug resolved (partial): {raw_slug} → {best_match}")
+        return best_match
+
+    logger.warning(f"Composio: Could not resolve slug: {raw_slug}")
+    return upper
 
 
 def _get_client(settings):
@@ -88,11 +227,16 @@ def _friendly_name(tool_slug: str) -> str:
     """
     slug = tool_slug.upper()
     # Known service prefixes → natural suffix
+    # Order matters: longer prefixes first to avoid partial matches
     service_map = {
-        "TEAMS_": "in Teams",
+        "MICROSOFT_TEAMS_": "in Teams",
         "MICROSOFTTEAMS_": "in Teams",
+        "TEAMS_": "in Teams",
+        "ONE_DRIVE_": "on OneDrive",
         "ONEDRIVE_": "on OneDrive",
+        "GOOGLE_SHEETS_": "in Sheets",
         "GOOGLESHEETS_": "in Sheets",
+        "GOOGLE_DOCS_": "in Docs",
         "GOOGLEDOCS_": "in Docs",
         "EXCEL_": "in Excel",
         "SLACK_": "in Slack",
@@ -102,6 +246,8 @@ def _friendly_name(tool_slug: str) -> str:
         "APIFY_": "",
         "FIRECRAWL_": "",
         "SUPABASE_": "in the database",
+        "PERPLEXITYAI_": "via search",
+        "GAMMA_": "in Gamma",
     }
     suffix = ""
     action_part = slug
@@ -208,44 +354,56 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     except ImportError:
         return "I was not able to run this tool because the Composio package is not installed"
 
-    tool_display = _friendly_name(tool_slug)
-    call_id = await publish_tool_start(f"composio:{tool_slug}", {"slug": tool_slug})
+    # Build slug index on first call (loads all available tool slugs)
+    if not _slug_index_built:
+        toolkits_str = getattr(settings, "composio_toolkits", "")
+        toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
+        await asyncio.to_thread(lambda: _build_slug_index(client, toolkits))
+
+    # Resolve the slug to canonical format (handles LLM-generated short slugs)
+    resolved_slug = _resolve_slug(tool_slug)
+    if resolved_slug != tool_slug.upper().strip():
+        logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
+
+    tool_display = _friendly_name(resolved_slug)
+    call_id = await publish_tool_start(f"composio:{resolved_slug}", {"slug": resolved_slug})
 
     try:
         user_id = settings.composio_user_id.strip()
-        logger.info(f"Composio SDK execute: slug={tool_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
+        logger.info(f"Composio SDK execute: slug={resolved_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
 
-        await publish_composio_event("composio.executing", tool_slug, call_id, f"Running {tool_display}")
+        await publish_composio_event("composio.executing", resolved_slug, call_id, f"Running {tool_display}")
         start_ms = int(time.time() * 1000)
 
         result = await asyncio.to_thread(
             lambda: client.tools.execute(
-                slug=tool_slug,
+                slug=resolved_slug,
                 user_id=user_id,
                 arguments=arguments,
+                dangerously_skip_version_check=True,
             )
         )
 
         duration_ms = int(time.time() * 1000) - start_ms
-        cache_slug(tool_slug)
+        cache_slug(resolved_slug)
 
         if result.get("successful"):
             data = result.get("data", {})
-            logger.info(f"[TOOL_CALL] Composio OK: {tool_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__} ({duration_ms}ms)")
-            voice_result = _extract_voice_result(data, tool_slug, tool_display)
-            await publish_composio_event("composio.completed", tool_slug, call_id, voice_result[:100], duration_ms)
+            logger.info(f"[TOOL_CALL] Composio OK: {resolved_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__} ({duration_ms}ms)")
+            voice_result = _extract_voice_result(data, resolved_slug, tool_display)
+            await publish_composio_event("composio.completed", resolved_slug, call_id, voice_result[:100], duration_ms)
             await publish_tool_completed(call_id, voice_result[:100])
             return voice_result
         else:
             error = result.get("error", "unknown error")
-            logger.warning(f"[TOOL_CALL] Composio FAIL: {tool_slug} error={error} ({duration_ms}ms)")
-            await publish_composio_event("composio.error", tool_slug, call_id, str(error)[:100], duration_ms)
+            logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error} ({duration_ms}ms)")
+            await publish_composio_event("composio.error", resolved_slug, call_id, str(error)[:100], duration_ms)
             # CRITICAL: Use "I was not able to" language so LLM does NOT retry
             return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
 
     except Exception as exc:
-        logger.error(f"[TOOL_CALL] Composio ERROR: {tool_slug} exception={exc}")
-        await publish_composio_event("composio.error", tool_slug, call_id, str(exc)[:100])
+        logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
+        await publish_composio_event("composio.error", resolved_slug, call_id, str(exc)[:100])
         # CRITICAL: Use "I was not able to" language so LLM does NOT retry
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
