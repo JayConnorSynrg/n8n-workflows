@@ -339,9 +339,9 @@ async def search_contacts_async(query: str) -> str:
 @llm.function_tool(
     name="listComposioTools",
     description=(
-        "List available Composio tool slugs grouped by service. "
-        "Call this first if unsure which slug to use. "
-        "Pass service to filter: microsoft_teams, gmail, composio_search, one_drive, google_sheets, etc. "
+        "List available connected service tool slugs grouped by service. "
+        "Only use this if the catalog in your instructions is empty or you need to refresh. "
+        "Pass service to filter: microsoft_teams, gmail, one_drive, google_sheets, etc. "
         "Returns exact slugs to use with composioBatchExecute or composioExecute."
     ),
 )
@@ -499,8 +499,8 @@ ASYNC_TOOLS = [
     add_contact_async,
     get_contact_async,
     search_contacts_async,
-    # Composio (SDK execution wrappers — no MCP dependency)
-    # Catalog is pre-loaded at startup and injected into system prompt (no tool needed)
-    composio_batch_execute_async,  # DEFAULT: parallel background execution
-    composio_execute_async,        # FALLBACK: sync reads when LLM needs results
+    # Composio (SDK execution — catalog pre-loaded into system prompt)
+    list_composio_tools_async,     # FALLBACK: refresh catalog if not loaded at startup
+    composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
+    composio_execute_async,        # SYNC: when LLM needs result data before next step
 ]

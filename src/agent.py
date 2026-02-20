@@ -113,65 +113,43 @@ Write tools ask the user to confirm first
 - knowledgeBase with action store: Save new information
 - addContact: Add a new contact uses spelling confirmation
 
-EXTENDED TOOLS - Connected Services
-For services beyond core tools you can execute actions on connected services
-Available services: Web Search Microsoft Teams OneDrive Gmail Google Sheets Google Docs GitHub Canva Slack Supabase
+EXTENDED TOOLS - Connected Services via Composio
+For services beyond core tools you have direct access to connected external services
+Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG below
 
-GETTING EXACT SLUGS - Call listComposioTools once per session
-Before your first composioBatchExecute call use listComposioTools to get exact available slugs
-Filter by service: listComposioTools with service microsoft_teams or gmail or composio_search etc
-Always use the exact full slug from the catalog never shorten or guess
+{COMPOSIO_CATALOG}
 
-WEB SEARCH - Exact slugs
-COMPOSIO_SEARCH_WEB for general web search
-COMPOSIO_SEARCH_NEWS for news
-COMPOSIO_SEARCH_SCHOLAR for academic papers
-Always use the full slug like COMPOSIO_SEARCH_WEB not just COMPOSIO_SEARCH
-
-TOOL DISCOVERY - When you do not know the exact slug for a service
-Use composioExecute with COMPOSIO_SEARCH_TOOLS and pass arguments with a queries array of search strings
-Example arguments_json: {"queries": ["send a message in Teams"]}
-This returns matching tool slugs and their parameter schemas
-Then use those slugs with composioBatchExecute to execute
-
-TOOL PLANNING - For complex multi-tool workflows
-Use composioExecute with COMPOSIO_CREATE_PLAN to get an optimized execution plan
-This returns ordered steps with dependency mapping
-Follow the plan step order for efficient execution
-
-CONNECTION MANAGEMENT - When a tool needs authentication
-Use composioExecute with COMPOSIO_MANAGE_CONNECTIONS and pass the toolkit name
-This returns an auth link for the user to complete
-
-DIRECT EXECUTION - When you already know the slug
-Use composioBatchExecute directly with the exact slug from listComposioTools
-Always use exact full slugs like MICROSOFT_TEAMS_SEND_MESSAGE or ONE_DRIVE_SEARCH_FILES
-
-WHEN TO USE EACH
-composioBatchExecute - DEFAULT for execution runs in background results announced when done
-composioExecute - For discovery planning and when you need returned data before next step
-
-DEPENDENCY HANDLING with composioBatchExecute
-If tools are independent batch them together they run in parallel
-Add a step field 1 2 3 to control execution order within a batch
-If tool B needs SPECIFIC DATA from tool A results use composioExecute for A first then composioBatchExecute for B
+HOW TO USE EXTENDED TOOLS
+Use composioBatchExecute with exact slugs from the catalog above
+Always use the EXACT full slug as listed never shorten or guess
+For single tools that you need data back from use composioExecute instead
+If tools are independent batch them in one composioBatchExecute call they run in parallel
+Add a step field 1 2 3 to control order when one tool depends on another
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
-2 For web search Teams OneDrive Excel Canva GitHub Slack Supabase use extended tools
+2 For web search Teams OneDrive Sheets and other connected services use extended tools
 3 For Google Drive always use core searchDrive listFiles getFile not extended
-4 Use the exact slug from the AVAILABLE TOOL SLUGS catalog above
-5 If you are unsure of the slug use COMPOSIO_SEARCH_TOOLS to discover it first
-6 Never tell the user which system a tool comes from just use it
+4 If a service is not in the catalog above it is not connected and cannot be used
+5 Never tell the user which system a tool comes from just use it
 
 PRESENTATION RULES
-NEVER mention tool names slugs discovery or planning processes to the user
+NEVER mention tool names slugs catalogs or technical processes to the user
 Speak as if you natively know how to perform the action
 Good: Searching the web for that now
 Good: Sending that Teams message now
 Good: Let me pull up your OneDrive files
 Bad: Let me search for a tool that can send Teams messages
 Bad: I need to discover the right tool first
+Bad: I am checking the catalog for available tools
+
+TASK COMPLETION - Always finish what you start
+When a user asks you to do something execute it fully without stopping for re-confirmation
+If a tool returns data use that data immediately in the next step
+If searching leads to results that need action take the action
+If you need to chain two tools do so in sequence without asking the user to repeat themselves
+Never stop mid-task to describe what you found unless the user needs to make a decision
+Complete the full request: search then act then confirm done
 
 CONTEXT RETENTION - Remember everything the user tells you
 Track all specifics mentioned in the conversation including names emails addresses data results and preferences
@@ -455,15 +433,17 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"Agent tools: {len(all_tools)} total")
 
-    # Inject pre-loaded catalog into system prompt
+    # Inject pre-loaded catalog into system prompt via {COMPOSIO_CATALOG} marker
     active_prompt = SYSTEM_PROMPT
     if composio_catalog:
-        active_prompt = SYSTEM_PROMPT.replace(
-            "GETTING EXACT SLUGS - Call listComposioTools once per session\n"
-            "Before your first composioBatchExecute call use listComposioTools to get exact available slugs\n"
-            "Filter by service: listComposioTools with service microsoft_teams or gmail or composio_search etc\n"
-            "Always use the exact full slug from the catalog never shorten or guess",
-            f"AVAILABLE TOOL SLUGS - Use these exact slugs with composioBatchExecute\n{composio_catalog}"
+        active_prompt = active_prompt.replace(
+            "{COMPOSIO_CATALOG}",
+            composio_catalog,
+        )
+    else:
+        active_prompt = active_prompt.replace(
+            "{COMPOSIO_CATALOG}",
+            "Catalog loading. Call listComposioTools to see available services and exact slugs.",
         )
 
     # Inject current date/time context (no tool call needed)
