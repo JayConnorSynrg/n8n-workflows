@@ -878,13 +878,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             ])
 
             if is_param_error:
-                # Parameter validation error — tell LLM what's wrong so it can self-correct
+                # Parameter validation error — auto-fetch schema and include in error response
+                # so LLM can retry immediately without a separate tool call.
                 # Do NOT increment circuit breaker — this is not a tool failure
-                logger.info(f"Composio: Parameter error for {resolved_slug} — allowing retry with corrected args")
-                return (
-                    f"Tool {resolved_slug} failed because of wrong arguments: {error_str}. "
-                    f"Call getToolSchema with this slug to see required parameters then retry with correct arguments."
-                )
+                logger.info(f"Composio: Parameter error for {resolved_slug} — fetching schema inline for LLM retry")
+                schema_str = ""
+                try:
+                    schema_info = await get_tool_schema(resolved_slug)
+                    schema_str = schema_info[:500]
+                except Exception:
+                    pass
+                if schema_str:
+                    return (
+                        f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
+                        f"Required parameters: {schema_str}. Retry now with correct arguments."
+                    )
+                else:
+                    return (
+                        f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
+                        f"Retry with corrected parameters."
+                    )
             else:
                 # Auth, connection, or unknown error — suppress retries
                 _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
