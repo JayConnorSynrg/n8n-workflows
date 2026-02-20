@@ -336,12 +336,18 @@ async def search_contacts_async(query: str) -> str:
 # COMPOSIO - CONNECTION MANAGEMENT
 # =============================================================================
 
+_last_refresh_time: float = 0.0
+
+_N8N_GMAIL_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/execute-gmail"
+_AUTH_EMAIL_RECIPIENT = "jayconnor@synrgscaling.com"
+
+
 @llm.function_tool(
     name="manageConnections",
     description=(
         "Manage connected services. "
         "Use action status to see which services are connected. "
-        "Use action connect with a service name to set up a new connection and send the auth link via Teams. "
+        "Use action connect with a service name to set up a new connection and send the auth link via email. "
         "Use action refresh after connecting a new service to update your available tools mid-session. "
         "Examples: manageConnections(action='status') or manageConnections(action='connect', service='onedrive') "
         "or manageConnections(action='refresh')."
@@ -353,10 +359,11 @@ async def manage_connections_async(
     recipient: str = "",
 ) -> str:
     """Manage Composio service connections."""
+    import time
+    import aiohttp
     from .composio_router import (
         get_connected_services_status,
         initiate_service_connection,
-        execute_composio_tool,
     )
 
     action_lower = action.lower().strip()
@@ -383,35 +390,51 @@ async def manage_connections_async(
             await publish_tool_completed(call_id, "Connection setup unavailable")
             return auth_url
 
-        # Step 2: Send auth link via Teams to the meeting participant
-        message_body = (
-            f"<p>Hi! AIO needs you to connect <b>{display_name}</b> to enable "
-            f"voice commands for this service.</p>"
-            f"<p><a href=\"{auth_url}\">Click here to connect {display_name}</a></p>"
-            f"<p>Once connected, just say \"I connected it\" and I'll refresh my tools.</p>"
-        )
+        # Step 2: Send auth link via n8n Gmail webhook
+        email_to = recipient if recipient else _AUTH_EMAIL_RECIPIENT
+        email_payload = {
+            "to": email_to,
+            "subject": f"Connect {display_name} to AIO Voice Assistant",
+            "body": (
+                f"Click the link below to connect {display_name}:\n\n"
+                f"{auth_url}\n\n"
+                f"This link expires in 10 minutes."
+            ),
+            "isHtml": False,
+        }
 
-        teams_result = await execute_composio_tool(
-            tool_slug="MICROSOFT_TEAMS_SEND_MESSAGE",
-            arguments={
-                "body": message_body,
-                **({"recipient": recipient} if recipient else {}),
-            },
-        )
+        email_sent = False
+        try:
+            async with aiohttp.ClientSession() as http_session:
+                async with http_session.post(
+                    _N8N_GMAIL_WEBHOOK,
+                    json=email_payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    email_sent = resp.status in (200, 201, 202)
+        except Exception as email_err:
+            from ..utils.logging import setup_logging as _sl
+            _sl(__name__).warning(f"manageConnections: email send failed: {email_err}")
 
-        # Check if Teams message was sent successfully
-        if "does not exist" in teams_result.lower() or "error" in teams_result.lower():
-            # Teams send failed — fall back to telling user the URL verbally
+        if email_sent:
+            await publish_tool_completed(call_id, f"Auth link emailed for {display_name}")
+            return f"I sent a connection link for {display_name} to your email. Click the link to authorize it then let me know when its done"
+        else:
+            # Email failed — tell user the situation without the raw URL
             await publish_tool_completed(call_id, f"Auth URL generated for {display_name}")
             return (
-                f"I have the connection link for {display_name} but could not send it via Teams. "
+                f"I have the connection link for {display_name} but could not send it via email. "
                 f"Please go to composio dot dev to connect {display_name}"
             )
 
-        await publish_tool_completed(call_id, f"Auth link sent for {display_name}")
-        return f"I sent a connection link for {display_name} to your Teams chat. Click the link there to authorize it then let me know when its done"
-
     if action_lower == "refresh":
+        global _last_refresh_time
+        import time as _time
+        current_time = _time.time()
+        if current_time - _last_refresh_time < 30.0:
+            return "Tools are already up to date (refreshed less than 30 seconds ago)"
+        _last_refresh_time = current_time
+
         from .composio_router import refresh_slug_index
         call_id = await publish_tool_start("manageConnections", {"action": "refresh"})
         await publish_tool_executing(call_id)
@@ -427,36 +450,14 @@ async def manage_connections_async(
 # COMPOSIO - TOOL SCHEMA LOOKUP
 # =============================================================================
 
-@llm.function_tool(
-    name="getToolSchema",
-    description=(
-        "Get the required and optional parameters for a Composio tool before executing it. "
-        "Call this when you do not know which arguments a tool needs or after a parameter error. "
-        "Pass the exact tool slug like EXCEL_CREATE_WORKBOOK. "
-        "Returns the parameter names types and which are required."
-    ),
-)
 async def get_tool_schema_async(tool_slug: str) -> str:
-    """Look up parameter schema for a Composio tool slug."""
+    """Look up parameter schema for a Composio tool slug (internal use only — not exposed as agent tool)."""
     from .composio_router import get_tool_schema
     return await get_tool_schema(tool_slug)
 
 
-# =============================================================================
-# COMPOSIO - TOOL CATALOG
-# =============================================================================
-
-@llm.function_tool(
-    name="listComposioTools",
-    description=(
-        "List available connected service tool slugs grouped by service. "
-        "Only use this if the catalog in your instructions is empty or you need to refresh. "
-        "Pass service to filter: microsoft_teams, gmail, one_drive, google_sheets, etc. "
-        "Returns exact slugs to use with composioBatchExecute or composioExecute."
-    ),
-)
 async def list_composio_tools_async(service: str = "") -> str:
-    """List available tool slugs from Composio catalog."""
+    """List available tool slugs from Composio catalog (internal use only — not exposed as agent tool)."""
     from .composio_router import ensure_slug_index, get_tool_catalog
 
     await ensure_slug_index()
@@ -472,7 +473,7 @@ async def list_composio_tools_async(service: str = "") -> str:
     description=(
         "Execute one or more actions on connected services like Teams OneDrive Sheets GitHub etc. "
         "Pass tools_json as a JSON array of objects each with tool_slug and arguments. "
-        "Always use exact full slugs from listComposioTools like MICROSOFT_TEAMS_SEND_MESSAGE. "
+        "Always use exact full slugs from the catalog in your instructions like MICROSOFT_TEAMS_SEND_MESSAGE. "
         "Add a step field 1 2 3 to control execution order. Same step runs in parallel. "
         "If tool B needs specific data from tool A results use composioExecute for A first. "
         "If any result says tool does not exist or do not retry STOP do not call again. "
@@ -610,9 +611,7 @@ ASYNC_TOOLS = [
     get_contact_async,
     search_contacts_async,
     # Composio (SDK execution — catalog pre-loaded into system prompt)
-    manage_connections_async,      # CONNECTION MGMT: status + connect new services via Teams
-    get_tool_schema_async,         # SCHEMA: look up required params before executing
-    list_composio_tools_async,     # FALLBACK: refresh catalog if not loaded at startup
+    manage_connections_async,      # CONNECTION MGMT: status + connect new services via email
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step
 ]
