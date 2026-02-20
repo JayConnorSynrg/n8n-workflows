@@ -68,19 +68,13 @@ def _build_slug_index(client, toolkits: list[str]) -> None:
     if _slug_index_built:
         return
 
-    # Filter out "composio" meta-toolkit (connection management only).
-    # Keep "composio_search" — it contains real web search tools (no auth required).
-    app_toolkits = [
-        t for t in toolkits
-        if t != "composio"
-    ]
-    if not app_toolkits:
-        logger.warning("Composio: No app toolkits configured, slug index empty")
+    if not toolkits:
+        logger.warning("Composio: No toolkits configured, slug index empty")
         _slug_index_built = True
         return
 
     all_slugs: list[str] = []
-    for toolkit in app_toolkits:
+    for toolkit in toolkits:
         try:
             tools = client.tools.get_raw_composio_tools(toolkits=[toolkit])
             slugs = [t.slug for t in tools]
@@ -93,7 +87,7 @@ def _build_slug_index(client, toolkits: list[str]) -> None:
     _slug_index_built = True
     logger.info(
         f"Composio: Slug index built — {len(_canonical_slugs)} tools "
-        f"from {len(app_toolkits)} toolkits"
+        f"from {len(toolkits)} toolkits"
     )
 
 
