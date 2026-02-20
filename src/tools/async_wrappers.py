@@ -333,6 +333,86 @@ async def search_contacts_async(query: str) -> str:
 
 
 # =============================================================================
+# COMPOSIO - CONNECTION MANAGEMENT
+# =============================================================================
+
+@llm.function_tool(
+    name="manageConnections",
+    description=(
+        "Manage connected services. "
+        "Use action status to see which services are connected. "
+        "Use action connect with a service name to set up a new connection and send the auth link via Teams. "
+        "Examples: manageConnections(action='status') or manageConnections(action='connect', service='onedrive')."
+    ),
+)
+async def manage_connections_async(
+    action: str = "status",
+    service: str = "",
+    recipient: str = "",
+) -> str:
+    """Manage Composio service connections."""
+    from .composio_router import (
+        get_connected_services_status,
+        initiate_service_connection,
+        execute_composio_tool,
+    )
+
+    action_lower = action.lower().strip()
+
+    if action_lower == "status":
+        call_id = await publish_tool_start("manageConnections", {"action": "status"})
+        await publish_tool_executing(call_id)
+        result = await get_connected_services_status()
+        await publish_tool_completed(call_id, result[:100])
+        return result
+
+    if action_lower == "connect":
+        if not service:
+            return "Which service would you like to connect? For example OneDrive Gmail or Google Sheets"
+
+        call_id = await publish_tool_start("manageConnections", {"action": "connect", "service": service})
+        await publish_tool_executing(call_id)
+
+        # Step 1: Get auth URL from Composio
+        auth_url, display_name = await initiate_service_connection(service)
+
+        if not display_name:
+            # Error case — auth_url contains the error message
+            await publish_tool_completed(call_id, "Connection setup unavailable")
+            return auth_url
+
+        # Step 2: Send auth link via Teams to the meeting participant
+        message_body = (
+            f"<p>Hi! AIO needs you to connect <b>{display_name}</b> to enable "
+            f"voice commands for this service.</p>"
+            f"<p><a href=\"{auth_url}\">Click here to connect {display_name}</a></p>"
+            f"<p>Once connected, just say \"I connected it\" and I'll refresh my tools.</p>"
+        )
+
+        teams_result = await execute_composio_tool(
+            tool_slug="MICROSOFT_TEAMS_SEND_MESSAGE",
+            arguments={
+                "body": message_body,
+                **({"recipient": recipient} if recipient else {}),
+            },
+        )
+
+        # Check if Teams message was sent successfully
+        if "does not exist" in teams_result.lower() or "error" in teams_result.lower():
+            # Teams send failed — fall back to telling user the URL verbally
+            await publish_tool_completed(call_id, f"Auth URL generated for {display_name}")
+            return (
+                f"I have the connection link for {display_name} but could not send it via Teams. "
+                f"Please go to composio dot dev to connect {display_name}"
+            )
+
+        await publish_tool_completed(call_id, f"Auth link sent for {display_name}")
+        return f"I sent a connection link for {display_name} to your Teams chat. Click the link there to authorize it then let me know when its done"
+
+    return "I can check your connection status or help you connect a new service. Just say status or connect"
+
+
+# =============================================================================
 # COMPOSIO - TOOL CATALOG
 # =============================================================================
 
@@ -500,6 +580,7 @@ ASYNC_TOOLS = [
     get_contact_async,
     search_contacts_async,
     # Composio (SDK execution — catalog pre-loaded into system prompt)
+    manage_connections_async,      # CONNECTION MGMT: status + connect new services via Teams
     list_composio_tools_async,     # FALLBACK: refresh catalog if not loaded at startup
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step

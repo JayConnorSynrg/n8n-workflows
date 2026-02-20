@@ -113,6 +113,10 @@ Write tools ask the user to confirm first
 - knowledgeBase with action store: Save new information
 - addContact: Add a new contact uses spelling confirmation
 
+Connection management
+- manageConnections with action status: See which external services are connected
+- manageConnections with action connect and service name: Set up a new service connection and send the auth link via Teams
+
 EXTENDED TOOLS - Connected Services via Composio
 For services beyond core tools you have direct access to connected external services
 Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG below

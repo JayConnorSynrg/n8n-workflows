@@ -71,13 +71,13 @@ class Settings(BaseSettings):
     )
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
-    # Comma-separated list of Composio toolkits to consider for slug index.
-    # composio = tool discovery, planning, connection management (always available)
+    # Minimal base toolkits — always loaded (no connection required).
+    # composio = connection management tools (always available)
     # composio_search = no-auth web search (always available)
-    # App toolkits are auto-filtered: only loaded if user has a connected account.
-    # Add toolkits here as a superset — dynamic discovery prunes unconnected ones.
+    # All other toolkits are auto-discovered from connected accounts at startup.
+    # No need to list app toolkits here — _build_slug_index auto-loads them.
     composio_toolkits: str = Field(
-        default="composio,composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,supabase,excel,gamma,pinecone,recallai",
+        default="composio,composio_search",
         alias="COMPOSIO_TOOLKITS"
     )
 

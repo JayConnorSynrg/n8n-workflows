@@ -730,6 +730,103 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
 
+async def get_connected_services_status() -> str:
+    """Return voice-friendly list of connected and available services.
+
+    Uses the slug index service grouping to report what's connected.
+    If index not built, triggers a build first.
+    """
+    await ensure_slug_index()
+
+    if not _slugs_by_service:
+        return "No services are connected yet"
+
+    # Exclude meta-toolkits from the connected list
+    _EXCLUDED = {"composio", "composio_search", "other"}
+    connected = sorted(k for k in _slugs_by_service.keys() if k not in _EXCLUDED)
+
+    if not connected:
+        return "No external services are connected yet"
+
+    # Format service names for voice
+    _VOICE_NAMES = {
+        "microsoft_teams": "Microsoft Teams",
+        "one_drive": "OneDrive",
+        "gmail": "Gmail",
+        "google_sheets": "Google Sheets",
+        "google_docs": "Google Docs",
+        "github": "GitHub",
+        "canva": "Canva",
+        "supabase": "Supabase",
+        "excel": "Excel",
+        "slack": "Slack",
+        "pinecone": "Pinecone",
+        "recallai": "Recall AI",
+        "gamma": "Gamma",
+    }
+
+    names = [_VOICE_NAMES.get(s, s.replace("_", " ").title()) for s in connected]
+    tool_counts = [f"{_VOICE_NAMES.get(s, s)} with {len(_slugs_by_service[s])} tools" for s in connected]
+
+    if len(names) == 1:
+        summary = names[0]
+    elif len(names) == 2:
+        summary = f"{names[0]} and {names[1]}"
+    else:
+        summary = ", ".join(names[:-1]) + f", and {names[-1]}"
+
+    return f"You have {len(connected)} services connected: {summary}"
+
+
+async def initiate_service_connection(service: str) -> tuple[str, str]:
+    """Initiate a new Composio connection for a service.
+
+    Calls the COMPOSIO_INITIATE_CONNECTION tool to get an auth URL.
+    Returns (auth_url, display_name) on success, or (error_message, "") on failure.
+    """
+    # Normalize service name
+    service_lower = service.lower().strip().replace(" ", "_")
+    _VOICE_NAMES = {
+        "teams": "Microsoft Teams",
+        "microsoft_teams": "Microsoft Teams",
+        "onedrive": "OneDrive",
+        "one_drive": "OneDrive",
+        "gmail": "Gmail",
+        "sheets": "Google Sheets",
+        "google_sheets": "Google Sheets",
+        "docs": "Google Docs",
+        "google_docs": "Google Docs",
+        "github": "GitHub",
+        "canva": "Canva",
+        "supabase": "Supabase",
+        "excel": "Excel",
+        "slack": "Slack",
+        "pinecone": "Pinecone",
+        "gamma": "Gamma",
+    }
+    display_name = _VOICE_NAMES.get(service_lower, service.title())
+
+    # Try to initiate connection via Composio toolkit
+    result = await execute_composio_tool(
+        tool_slug="COMPOSIO_INITIATE_CONNECTION",
+        arguments={"app_name": service_lower},
+    )
+
+    # Check if result contains a URL (auth link)
+    if result and ("http" in result.lower() or "url" in result.lower()):
+        # Extract URL from result
+        import re
+        url_match = re.search(r'https?://[^\s"\'<>]+', result)
+        if url_match:
+            return url_match.group(0), display_name
+
+    # If no URL found, return the result as error
+    if "does not exist" in result.lower() or "not found" in result.lower():
+        return f"Connection setup for {display_name} is not available through voice. Please set it up at composio.dev", ""
+
+    return result, display_name
+
+
 async def batch_execute_composio_tools(tools: list) -> str:
     """Execute multiple Composio tools in parallel via SDK.
 
