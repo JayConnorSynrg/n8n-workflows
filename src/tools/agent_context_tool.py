@@ -61,7 +61,7 @@ def _make_cache_key(
     key_string = ":".join(parts)
     # Use hash for long keys
     if len(key_string) > 100:
-        return f"{query_type}:{hashlib.md5(key_string.encode()).hexdigest()}"
+        return f"{query_type}:{hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()}"  # nosec B324
     return key_string
 
 

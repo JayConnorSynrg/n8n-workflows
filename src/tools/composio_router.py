@@ -684,7 +684,7 @@ async def get_tool_schema(tool_slug: str) -> str:
             for tool in results:
                 if tool.slug == slug_upper:
                     return tool
-        except Exception:
+        except Exception:  # nosec B110 - schema lookup is best-effort, falls through to toolkit method
             pass
 
         # Try loading by toolkit prefix
@@ -695,7 +695,7 @@ async def get_tool_schema(tool_slug: str) -> str:
                 for tool in tools:
                     if tool.slug == slug_upper:
                         return tool
-            except Exception:
+            except Exception:  # nosec B110 - schema lookup is best-effort, returns None on failure
                 pass
         return None
 
