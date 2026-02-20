@@ -141,18 +141,17 @@ def _extract_service_key(slug: str) -> str:
     return "other"
 
 
-def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
-    """Build canonical slug index from connected + configured toolkits.
+def _build_slug_index(client, user_id: str = "") -> None:
+    """Build canonical slug index from always-available + connected toolkits.
 
     Called once at first tool execution. Populates _canonical_slugs
     with every available tool slug from the Composio API.
 
     Strategy:
-    1. Query Composio for user's actually connected apps (dynamic)
-    2. Merge with always-available toolkits (composio, composio_search)
-    3. Load all configured toolkits that are connected
-    4. Auto-discover and load connected toolkits NOT in config
-    5. Log which toolkits were skipped (configured but not connected)
+    1. Always load composio + composio_search (no connection required)
+    2. Query Composio for user's connected apps (dynamic)
+    3. Load all connected toolkits
+    4. No config file or env var — 100% driven by Composio state
 
     NOTE: The API returns max ~20 tools per toolkit call, so we must
     load each toolkit individually and combine results.
@@ -161,40 +160,24 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
     if _slug_index_built:
         return
 
-    # Always-available toolkits (no connection required)
-    always_available = {"composio", "composio_search"}
+    # These two toolkits are always available (no connection required)
+    ALWAYS_AVAILABLE = ["composio", "composio_search"]
 
     # Discover what the user actually has connected
     connected = set()
     if user_id:
         connected = set(_discover_connected_toolkits(client, user_id))
 
-    # Start with configured toolkits that are connected or always-available
-    configured_set = {t.lower().strip() for t in toolkits}
-    active_toolkits = []
-    skipped_toolkits = []
-    for toolkit in toolkits:
-        tk = toolkit.lower().strip()
-        if tk in always_available or tk in connected:
-            active_toolkits.append(toolkit)
-        elif not connected:
-            # If discovery returned nothing (API error?), fall back to loading all
-            active_toolkits.append(toolkit)
-        else:
-            skipped_toolkits.append(toolkit)
-
-    # Auto-discover: also load connected toolkits NOT in config
-    # This ensures newly connected services are available without config changes
-    auto_discovered = []
+    # Build active toolkit list: base + all connected
+    active_toolkits = list(ALWAYS_AVAILABLE)
     for conn_toolkit in sorted(connected):
-        if conn_toolkit not in configured_set and conn_toolkit not in always_available:
+        if conn_toolkit not in ALWAYS_AVAILABLE:
             active_toolkits.append(conn_toolkit)
-            auto_discovered.append(conn_toolkit)
 
-    if skipped_toolkits:
-        logger.info(f"Composio: Skipping unconfigured toolkits (not connected): {skipped_toolkits}")
-    if auto_discovered:
-        logger.info(f"Composio: Auto-discovered connected toolkits (not in config): {auto_discovered}")
+    if connected:
+        logger.info(f"Composio: {len(connected)} connected services: {sorted(connected)}")
+    else:
+        logger.info("Composio: No connected accounts found, loading base toolkits only")
 
     all_slugs: list[str] = []
     for toolkit in active_toolkits:
@@ -219,8 +202,7 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
 
     logger.info(
         f"Composio: Slug index built — {len(_canonical_slugs)} tools "
-        f"from {len(active_toolkits)} active toolkits "
-        f"({len(skipped_toolkits)} skipped). "
+        f"from {len(active_toolkits)} active toolkits. "
         f"Service grouping: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}"
     )
 
@@ -577,10 +559,8 @@ def prewarm_slug_index() -> str:
         return ""
     try:
         client = _get_client(settings)
-        toolkits_str = getattr(settings, "composio_toolkits", "")
-        toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
         user_id = settings.composio_user_id.strip()
-        _build_slug_index(client, toolkits, user_id)
+        _build_slug_index(client, user_id)
         catalog = get_tool_catalog()
         logger.info(f"Composio: Prewarm complete — catalog {len(catalog)} chars")
         return catalog
@@ -598,10 +578,8 @@ async def ensure_slug_index() -> None:
     if not settings.composio_api_key or not settings.composio_user_id:
         return
     client = _get_client(settings)
-    toolkits_str = getattr(settings, "composio_toolkits", "")
-    toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
     user_id = settings.composio_user_id.strip()
-    await asyncio.to_thread(lambda: _build_slug_index(client, toolkits, user_id))
+    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
 
 
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
@@ -641,10 +619,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     # Build slug index on first call (discovers connected accounts + loads tool slugs)
     if not _slug_index_built:
-        toolkits_str = getattr(settings, "composio_toolkits", "")
-        toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
         user_id = settings.composio_user_id.strip()
-        await asyncio.to_thread(lambda: _build_slug_index(client, toolkits, user_id))
+        await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
 
     # Two-stage slug resolution:
     # Stage 1: Fast local resolution with confidence tier

@@ -71,16 +71,6 @@ class Settings(BaseSettings):
     )
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
-    # Minimal base toolkits — always loaded (no connection required).
-    # composio = connection management tools (always available)
-    # composio_search = no-auth web search (always available)
-    # All other toolkits are auto-discovered from connected accounts at startup.
-    # No need to list app toolkits here — _build_slug_index auto-loads them.
-    composio_toolkits: str = Field(
-        default="composio,composio_search",
-        alias="COMPOSIO_TOOLKITS"
-    )
-
     @field_validator("livekit_url")
     @classmethod
     def validate_livekit_url(cls, v: str) -> str:
