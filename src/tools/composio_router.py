@@ -60,6 +60,7 @@ _SERVICE_PREFIXES: list[tuple[str, str]] = [
     ("EXCEL_", "excel"),
     ("PINECONE_", "pinecone"),
     ("RECALLAI_", "recallai"),
+    ("GAMMA_", "gamma"),
 ]
 
 # Tier constants for resolution confidence
@@ -149,19 +150,15 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
     Strategy:
     1. Query Composio for user's actually connected apps (dynamic)
     2. Merge with always-available toolkits (composio, composio_search)
-    3. Only index toolkits that are either connected or always-available
-    4. Log which toolkits were skipped (configured but not connected)
+    3. Load all configured toolkits that are connected
+    4. Auto-discover and load connected toolkits NOT in config
+    5. Log which toolkits were skipped (configured but not connected)
 
     NOTE: The API returns max ~20 tools per toolkit call, so we must
     load each toolkit individually and combine results.
     """
     global _canonical_slugs, _slug_index_built
     if _slug_index_built:
-        return
-
-    if not toolkits:
-        logger.warning("Composio: No toolkits configured, slug index empty")
-        _slug_index_built = True
         return
 
     # Always-available toolkits (no connection required)
@@ -172,7 +169,8 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
     if user_id:
         connected = set(_discover_connected_toolkits(client, user_id))
 
-    # Determine which configured toolkits to actually load
+    # Start with configured toolkits that are connected or always-available
+    configured_set = {t.lower().strip() for t in toolkits}
     active_toolkits = []
     skipped_toolkits = []
     for toolkit in toolkits:
@@ -185,8 +183,18 @@ def _build_slug_index(client, toolkits: list[str], user_id: str = "") -> None:
         else:
             skipped_toolkits.append(toolkit)
 
+    # Auto-discover: also load connected toolkits NOT in config
+    # This ensures newly connected services are available without config changes
+    auto_discovered = []
+    for conn_toolkit in sorted(connected):
+        if conn_toolkit not in configured_set and conn_toolkit not in always_available:
+            active_toolkits.append(conn_toolkit)
+            auto_discovered.append(conn_toolkit)
+
     if skipped_toolkits:
         logger.info(f"Composio: Skipping unconfigured toolkits (not connected): {skipped_toolkits}")
+    if auto_discovered:
+        logger.info(f"Composio: Auto-discovered connected toolkits (not in config): {auto_discovered}")
 
     all_slugs: list[str] = []
     for toolkit in active_toolkits:

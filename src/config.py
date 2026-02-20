@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # App toolkits are auto-filtered: only loaded if user has a connected account.
     # Add toolkits here as a superset — dynamic discovery prunes unconnected ones.
     composio_toolkits: str = Field(
-        default="composio,composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,supabase",
+        default="composio,composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,supabase,excel,gamma,pinecone,recallai",
         alias="COMPOSIO_TOOLKITS"
     )
 
