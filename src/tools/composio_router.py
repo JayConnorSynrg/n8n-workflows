@@ -545,6 +545,31 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
     return f"Completed {tool_display}"
 
 
+def prewarm_slug_index() -> str:
+    """Synchronous slug index build + catalog generation for prewarm phase.
+
+    Called once at worker process start (not per-meeting). Returns the
+    full tool catalog string for injection into the system prompt.
+    """
+    from ..config import get_settings
+    settings = get_settings()
+    if not settings.composio_api_key or not settings.composio_user_id:
+        logger.info("Composio: Skipping prewarm (no API key or user ID)")
+        return ""
+    try:
+        client = _get_client(settings)
+        toolkits_str = getattr(settings, "composio_toolkits", "")
+        toolkits = [t.strip() for t in toolkits_str.split(",") if t.strip()] if toolkits_str else []
+        user_id = settings.composio_user_id.strip()
+        _build_slug_index(client, toolkits, user_id)
+        catalog = get_tool_catalog()
+        logger.info(f"Composio: Prewarm complete — catalog {len(catalog)} chars")
+        return catalog
+    except Exception as exc:
+        logger.warning(f"Composio: Prewarm failed: {exc}")
+        return ""
+
+
 async def ensure_slug_index() -> None:
     """Build slug index if not already built. Safe to call multiple times."""
     if _slug_index_built:

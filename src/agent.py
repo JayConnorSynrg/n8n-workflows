@@ -274,6 +274,14 @@ def prewarm(proc: JobProcess):
     proc.userdata["cache_manager"] = cache_manager
     logger.info("Context cache manager initialized")
 
+    # Pre-build Composio tool catalog (network calls happen here, not per-meeting)
+    try:
+        from .tools.composio_router import prewarm_slug_index
+        proc.userdata["composio_catalog"] = prewarm_slug_index()
+    except Exception as e:
+        logger.warning(f"Composio catalog prewarm failed: {e}")
+        proc.userdata["composio_catalog"] = ""
+
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
@@ -424,20 +432,10 @@ async def entrypoint(ctx: JobContext):
     # Build tool list: n8n webhook tools + Composio SDK execution wrappers
     all_tools = list(ASYNC_TOOLS)
 
-    # Pre-build Composio slug catalog and inject into system prompt
-    # This gives the LLM exact slugs from the start — zero extra tool calls
-    composio_catalog = ""
+    # Read pre-built Composio catalog from prewarm (zero latency — no network calls here)
+    composio_catalog = ctx.proc.userdata.get("composio_catalog", "")
     if settings.composio_api_key:
-        logger.info("Composio: Pre-loading tool catalog at startup...")
-        try:
-            from .tools.composio_router import ensure_slug_index, get_tool_catalog
-            await ensure_slug_index()
-            composio_catalog = get_tool_catalog()
-            logger.info(f"Composio: Catalog pre-loaded ({len(composio_catalog)} chars)")
-        except Exception as e:
-            logger.warning(f"Composio: Catalog pre-load failed: {e}")
-            composio_catalog = ""
-        logger.info(f"Composio: SDK execution enabled ({len(all_tools)} tools including batch/sync wrappers)")
+        logger.info(f"Composio: SDK enabled, catalog {'ready' if composio_catalog else 'empty'} ({len(all_tools)} tools)")
     else:
         logger.info("Composio: Disabled (no COMPOSIO_API_KEY)")
 
@@ -878,19 +876,12 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=True)
     logger.info(f"Connected to room: {ctx.room.name}")
 
-    # DEBUG: Log room configuration (with timeout protection for room.sid)
+    # DEBUG: Log room configuration
     logger.info(f"=== ROOM DEBUG ===")
-    try:
-        room_sid = await asyncio.wait_for(ctx.room.sid, timeout=5.0)
-    except (asyncio.TimeoutError, Exception) as e:
-        room_sid = f"unavailable ({type(e).__name__})"
-        logger.warning(f"room.sid failed: {e}")
+    room_sid = await ctx.room.sid
     logger.info(f"Room SID: {room_sid}")
     logger.info(f"Room name: {ctx.room.name}")
-    try:
-        logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
-    except Exception as e:
-        logger.warning(f"Local participant access failed: {e}")
+    logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
     logger.info(f"Remote participants: {len(ctx.room.remote_participants)}")
 
     # Wait for Output Media client to connect BEFORE starting session
