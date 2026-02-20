@@ -117,8 +117,10 @@ For services beyond core tools you can execute actions on connected services
 Available services: Web Search Microsoft Teams OneDrive Gmail Google Sheets Google Docs GitHub Canva Slack Supabase
 
 WEB SEARCH - Available immediately no authentication needed
-When user asks to search the web look something up or find current information use composioBatchExecute with a COMPOSIO_SEARCH slug
-This is fast and always available do not hesitate to use it
+When user asks to search the web use composioBatchExecute with COMPOSIO_SEARCH_WEB as the slug and query as the argument
+For news specifically use COMPOSIO_SEARCH_NEWS
+For academic papers use COMPOSIO_SEARCH_SCHOLAR
+Always use the full slug like COMPOSIO_SEARCH_WEB not just COMPOSIO_SEARCH
 
 TOOL DISCOVERY - When you do not know the exact slug for a service
 Use composioExecute with COMPOSIO_SEARCH_TOOLS and pass arguments with a queries array of search strings

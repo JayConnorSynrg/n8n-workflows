@@ -254,17 +254,15 @@ def _resolve_slug(raw_slug: str) -> str | None:
 def _get_client(settings):
     """Get or create a cached Composio SDK client.
 
-    Uses toolkit_versions="latest" so we don't need dangerously_skip_version_check
-    on every execute() call. The SDK auto-resolves to the latest toolkit version.
+    NOTE: toolkit_versions="latest" does NOT work for manual tools.execute() calls.
+    The SDK requires either a specific version string or dangerously_skip_version_check=True
+    when calling execute() directly (not through framework integrations).
     """
     global _composio_client
     if _composio_client is None:
         from composio import Composio  # type: ignore[import]
-        _composio_client = Composio(
-            api_key=settings.composio_api_key,
-            toolkit_versions="latest",
-        )
-        logger.info("Composio: SDK client initialized (toolkit_versions=latest)")
+        _composio_client = Composio(api_key=settings.composio_api_key)
+        logger.info("Composio: SDK client initialized")
     return _composio_client
 
 
@@ -445,6 +443,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 resolved_slug,
                 arguments,
                 user_id=user_id,
+                dangerously_skip_version_check=True,
             )
         )
 
