@@ -342,7 +342,9 @@ async def search_contacts_async(query: str) -> str:
         "Manage connected services. "
         "Use action status to see which services are connected. "
         "Use action connect with a service name to set up a new connection and send the auth link via Teams. "
-        "Examples: manageConnections(action='status') or manageConnections(action='connect', service='onedrive')."
+        "Use action refresh after connecting a new service to update your available tools mid-session. "
+        "Examples: manageConnections(action='status') or manageConnections(action='connect', service='onedrive') "
+        "or manageConnections(action='refresh')."
     ),
 )
 async def manage_connections_async(
@@ -409,7 +411,16 @@ async def manage_connections_async(
         await publish_tool_completed(call_id, f"Auth link sent for {display_name}")
         return f"I sent a connection link for {display_name} to your Teams chat. Click the link there to authorize it then let me know when its done"
 
-    return "I can check your connection status or help you connect a new service. Just say status or connect"
+    if action_lower == "refresh":
+        from .composio_router import refresh_slug_index
+        call_id = await publish_tool_start("manageConnections", {"action": "refresh"})
+        await publish_tool_executing(call_id)
+        catalog = await refresh_slug_index()
+        tool_count = catalog.count("\n") if catalog else 0
+        await publish_tool_completed(call_id, f"Refreshed {tool_count} tools")
+        return f"I refreshed my tools and now have access to the latest connected services"
+
+    return "I can check your connection status or help you connect a new service. Just say status or connect or refresh"
 
 
 # =============================================================================
