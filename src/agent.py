@@ -131,6 +131,8 @@ Always use the EXACT full slug as listed never shorten or guess
 For single tools that you need data back from use composioExecute instead
 If tools are independent batch them in one composioBatchExecute call they run in parallel
 Add a step field 1 2 3 to control order when one tool depends on another
+IMPORTANT: If unsure what arguments a tool needs call getToolSchema with the slug first
+If a tool returns a parameter error call getToolSchema then retry with correct arguments
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first

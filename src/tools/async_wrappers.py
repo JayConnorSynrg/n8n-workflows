@@ -424,6 +424,25 @@ async def manage_connections_async(
 
 
 # =============================================================================
+# COMPOSIO - TOOL SCHEMA LOOKUP
+# =============================================================================
+
+@llm.function_tool(
+    name="getToolSchema",
+    description=(
+        "Get the required and optional parameters for a Composio tool before executing it. "
+        "Call this when you do not know which arguments a tool needs or after a parameter error. "
+        "Pass the exact tool slug like EXCEL_CREATE_WORKBOOK. "
+        "Returns the parameter names types and which are required."
+    ),
+)
+async def get_tool_schema_async(tool_slug: str) -> str:
+    """Look up parameter schema for a Composio tool slug."""
+    from .composio_router import get_tool_schema
+    return await get_tool_schema(tool_slug)
+
+
+# =============================================================================
 # COMPOSIO - TOOL CATALOG
 # =============================================================================
 
@@ -592,6 +611,7 @@ ASYNC_TOOLS = [
     search_contacts_async,
     # Composio (SDK execution — catalog pre-loaded into system prompt)
     manage_connections_async,      # CONNECTION MGMT: status + connect new services via Teams
+    get_tool_schema_async,         # SCHEMA: look up required params before executing
     list_composio_tools_async,     # FALLBACK: refresh catalog if not loaded at startup
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step
