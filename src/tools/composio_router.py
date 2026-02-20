@@ -251,9 +251,14 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
         available = ", ".join(sorted(_slugs_by_service.keys()))
         return f"No tools found for service '{service_filter}'. Available services: {available}"
 
-    # Full catalog — all services
-    lines = [f"COMPOSIO TOOL CATALOG — {len(_canonical_slugs)} tools"]
-    for svc, slugs in sorted(_slugs_by_service.items()):
+    # Full catalog — all services (exclude meta-toolkits that confuse LLM)
+    # composio and composio_search are discovery/meta tools — the LLM calls them
+    # instead of actual action tools, causing a stall after the search step.
+    _EXCLUDED_SERVICES = {"composio", "composio_search"}
+    action_slugs = {k: v for k, v in _slugs_by_service.items() if k not in _EXCLUDED_SERVICES}
+    total = sum(len(v) for v in action_slugs.values())
+    lines = [f"COMPOSIO TOOL CATALOG — {total} action tools"]
+    for svc, slugs in sorted(action_slugs.items()):
         lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
         for slug in sorted(slugs):
             lines.append(f"  {slug}")
