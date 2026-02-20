@@ -85,6 +85,7 @@ CRITICAL RULES
 3 NEVER output JSON or code in your speech
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
+6 ALWAYS respond in English only regardless of what language appears in tool results or context
 
 YOUR TOOLS
 
@@ -112,7 +113,7 @@ Write tools ask the user to confirm first
 - knowledgeBase with action store: Save new information
 - addContact: Add a new contact uses spelling confirmation
 
-EXTENDED TOOLS - Composio Tool Router
+EXTENDED TOOLS - Additional Services
 For services beyond core tools you have tools that discover and execute actions on any connected service like Teams OneDrive Excel Canva and more
 
 Step 1 DISCOVER - Call COMPOSIO_SEARCH_TOOLS first
@@ -165,11 +166,27 @@ IMPORTANT RULES FOR EXTENDED TOOLS
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
-2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use the Composio tools
-3 For Google Drive always use core searchDrive listFiles getFile not Composio
-4 If a core tool fails try Composio as backup
+2 For Teams OneDrive Excel Canva Apify Firecrawl Supabase use the extended tools
+3 For Google Drive always use core searchDrive listFiles getFile not extended
+4 If a core tool fails try extended as backup
 5 Never tell the user which system a tool comes from just use it
-6 For multiple independent Composio actions always batch them via composioBatchExecute
+6 For multiple independent actions always batch them via composioBatchExecute
+
+PRESENTATION RULES - How you speak about your actions
+NEVER mention internal tool names tool slugs search processes or system names to the user
+NEVER say you are searching for tools discovering capabilities or loading schemas
+NEVER say Composio COMPOSIO_SEARCH_TOOLS composioBatchExecute or any internal function name
+NEVER describe the discover then execute process
+Instead speak as if you natively know how to perform the action
+Say what you ARE DOING not what tools you are using
+Good: Sending that Teams message now
+Good: Let me pull up your OneDrive files
+Good: Checking on that for you
+Bad: Let me search for a tool that can send Teams messages
+Bad: I found a tool called TEAMS_SEND_MESSAGE let me execute it
+Bad: Im going to use my extended tools to look that up
+When multiple steps happen behind the scenes just narrate the user facing action
+If discovery or schema loading takes a moment say something natural like one moment or working on that
 
 REQUEST DECOMPOSITION - Plan before you act
 When a user makes a request break it down into the specific tool calls needed
@@ -199,17 +216,23 @@ If the user just looked up a candidate and says email those results you know whi
 Use your conversation context to carry forward details between tool calls
 Keep a mental map of the active request including who what where and which tools are likely needed next
 
-LIVE NARRATION - Keep the user informed
-Before each tool call say what you are about to do
-After background tools return say what happened
-Between sequential steps update the user on progress
-Examples
-- Let me look that up for you
-- Got it now sending that over
-- Alright pulling up those files
-- That Teams message is on its way now let me check your OneDrive
-- Found what you need here is what I got
-Keep narration brief and natural like a colleague updating you across the desk
+LIVE NARRATION - Keep the user informed at every step
+Before calling tools tell the user what action you are taking in plain language
+While tools run in the background keep the conversation going with brief status updates
+After EVERY tool completion you MUST respond to the user with the result or confirmation
+Never leave the user in silence after a tool finishes
+If you have nothing specific to report just confirm completion
+
+Narration examples by phase
+BEFORE: Let me send that over / Pulling up your files / Looking into that now / On it
+DURING: Working on that / One moment while I get that sorted / Almost there
+AFTER SUCCESS: Done that message is sent / Here is what I found / All set thats taken care of
+AFTER FAILURE: That ran into an issue want me to try a different approach
+
+CRITICAL RULE: After a tool call result comes back you MUST speak
+Either share the result data or confirm the action completed
+If the user is speaking wait for a natural pause then deliver the update
+Never swallow a tool result silently
 
 EMAIL PROTOCOL - Follow this exact flow
 
@@ -343,6 +366,7 @@ async def entrypoint(ctx: JobContext):
                 model=model,
                 api_key=settings.fireworks_api_key,
                 temperature=settings.fireworks_temperature,
+                parallel_tool_calls=True,
             )
 
         # Cerebras (fallback)
@@ -353,6 +377,7 @@ async def entrypoint(ctx: JobContext):
                 model=model,
                 api_key=settings.cerebras_api_key,
                 temperature=settings.cerebras_temperature,
+                parallel_tool_calls=True,
             )
 
         # No valid provider configured
@@ -387,6 +412,9 @@ async def entrypoint(ctx: JobContext):
         # Handle background noise gracefully
         "resume_false_interruption": True,
         "false_interruption_timeout": 1.0,
+        # Allow multi-step tool flows (Composio: SEARCH → SCHEMA → EXECUTE → respond)
+        # Default is 3 which cuts off Composio discovery flow mid-execution
+        "max_tool_steps": 8,
     }
 
     # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
@@ -415,6 +443,11 @@ async def entrypoint(ctx: JobContext):
             vad_frame_count["last_log_time"] = now
             logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
 
+    # Set global room reference for tool event publishing
+    from .utils.room_publisher import set_room as _set_room
+    _set_room(ctx.room)
+    logger.info("Room publisher initialized for tool lifecycle events")
+
     # Initialize async tool worker for background execution
     tool_worker = AsyncToolWorker(room=ctx.room, max_concurrent=3)
 
@@ -438,7 +471,8 @@ async def entrypoint(ctx: JobContext):
             mcp_servers.append(mcp.MCPServerHTTP(
                 url=composio_url,
                 headers=composio_headers or None,
-                timeout=15,
+                timeout=30,
+                client_session_timeout_seconds=30,
                 allowed_tools=COMPOSIO_ALLOWED_TOOLS,
             ))
             logger.info(f"Composio: Tool Router active — {len(COMPOSIO_ALLOWED_TOOLS)} meta-tools loaded")
@@ -663,21 +697,36 @@ async def entrypoint(ctx: JobContext):
         return random.choice(responses) if responses else "Done"
 
     def format_tool_result_v2(tool_name: str, result: str, status: str) -> str:
-        """Format tool result with 20% wit probability, no punctuation."""
+        """Format tool result with 20% wit probability, no punctuation.
+
+        Handles both core tools (sendEmail, searchDrive) and Composio tools
+        (composio:batch:TEAMS_SEND+DRIVE_LIST). For Composio tools, the result
+        string already contains voice-friendly text from _extract_voice_result.
+        """
 
         # Determine tool type for contextual responses
+        tool_lower = tool_name.lower()
         tool_type = "save"  # default
-        if "email" in tool_name:
+        if "email" in tool_lower or "gmail" in tool_lower or "send" in tool_lower:
             tool_type = "email"
-        elif "search" in tool_name or "query" in tool_name:
+        elif "search" in tool_lower or "query" in tool_lower or "find" in tool_lower or "list" in tool_lower:
             tool_type = "search"
-        elif "document" in tool_name or "file" in tool_name:
+        elif "document" in tool_lower or "file" in tool_lower or "drive" in tool_lower:
             tool_type = "document"
-        elif "store" in tool_name or "save" in tool_name:
+        elif "store" in tool_lower or "save" in tool_lower or "add" in tool_lower:
             tool_type = "save"
+        elif "teams" in tool_lower or "slack" in tool_lower or "message" in tool_lower:
+            tool_type = "email"  # messaging maps to email-like announcements
 
         if status == "failed":
             tool_type = "error"
+
+        # For Composio tools, the result already has voice-friendly text
+        # from _extract_voice_result — use it directly if substantive
+        is_composio = tool_name.startswith("composio:")
+        if is_composio and result and len(result) > 10 and status != "failed":
+            clean_result = strip_punctuation(result[:150])
+            return clean_result
 
         # 20% chance for witty response
         use_wit = random.random() < 0.20
@@ -689,11 +738,11 @@ async def entrypoint(ctx: JobContext):
             if status == "failed":
                 announcement = "That did not work want to try again"
             elif tool_type == "email":
-                announcement = "Email sent"
+                announcement = "Sent"
             elif tool_type == "search":
                 # Include summary of what was found
                 if result and len(result) > 10:
-                    clean_result = strip_punctuation(result[:100])
+                    clean_result = strip_punctuation(result[:120])
                     announcement = f"Here is what I found {clean_result}"
                 else:
                     announcement = "Search complete"
@@ -713,9 +762,20 @@ async def entrypoint(ctx: JobContext):
         error = result_data.get("error", "")
         duration = result_data.get("duration_ms", 0)
 
-        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms")
+        logger.info(f"Tool result: {tool_name} status={status} duration={duration}ms result_preview={str(result)[:120]}")
 
-        if status == "completed":
+        # Detect soft errors — tool returned normally but with error content
+        is_soft_error = result and ("I was not able to" in result or "do not retry" in result)
+
+        if is_soft_error:
+            # Tool completed but with an error message — announce as failure
+            announcement = "That tool ran into an issue let me know if you want to try something else"
+            try:
+                await session.say(announcement, allow_interruptions=True)
+            except Exception as e:
+                logger.error(f"Failed to announce soft error: {e}")
+
+        elif status == "completed":
             announcement = format_tool_result_v2(tool_name, result, status)
             try:
                 await session.say(announcement, allow_interruptions=True)
@@ -861,7 +921,8 @@ async def entrypoint(ctx: JobContext):
 
     # DEBUG: Log room configuration
     logger.info(f"=== ROOM DEBUG ===")
-    logger.info(f"Room SID: {ctx.room.sid}")
+    room_sid = await ctx.room.sid
+    logger.info(f"Room SID: {room_sid}")
     logger.info(f"Room name: {ctx.room.name}")
     logger.info(f"Local participant: {ctx.room.local_participant.identity if ctx.room.local_participant else 'None'}")
     logger.info(f"Remote participants: {len(ctx.room.remote_participants)}")

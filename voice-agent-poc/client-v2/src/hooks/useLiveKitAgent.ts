@@ -136,6 +136,30 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
         case 'tool.error':
           updateToolCall(message.call_id as string, { status: 'error', result: message.error })
           break
+        // Composio-specific events — map to tool call lifecycle
+        case 'composio.searching':
+          addToolCall({
+            id: message.call_id as string,
+            name: `composio:${message.tool_slug || 'search'}`,
+            status: 'pending',
+            arguments: { detail: message.detail },
+          })
+          break
+        case 'composio.executing':
+          updateToolCall(message.call_id as string, { status: 'executing' })
+          break
+        case 'composio.completed':
+          updateToolCall(message.call_id as string, {
+            status: 'completed',
+            result: message.detail || `Done (${message.duration_ms || 0}ms)`,
+          })
+          break
+        case 'composio.error':
+          updateToolCall(message.call_id as string, {
+            status: 'error',
+            result: message.detail || 'Composio tool failed',
+          })
+          break
         case 'error':
           setError(message.message as string)
           options.onError?.(message.message as string)

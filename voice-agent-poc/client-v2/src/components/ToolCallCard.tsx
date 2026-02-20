@@ -61,6 +61,49 @@ const TOOL_ICONS: Record<string, string> = {
   searchContacts: '🔎',
 }
 
+// Composio service prefixes -> display names and icons
+const COMPOSIO_SERVICE_MAP: Record<string, { label: string; icon: string }> = {
+  TEAMS: { label: 'Teams', icon: '💬' },
+  MICROSOFTTEAMS: { label: 'Teams', icon: '💬' },
+  ONEDRIVE: { label: 'OneDrive', icon: '☁️' },
+  GOOGLESHEETS: { label: 'Sheets', icon: '📊' },
+  GOOGLEDOCS: { label: 'Docs', icon: '📝' },
+  GMAIL: { label: 'Gmail', icon: '📧' },
+  SLACK: { label: 'Slack', icon: '💬' },
+  GITHUB: { label: 'GitHub', icon: '🐙' },
+  CANVA: { label: 'Canva', icon: '🎨' },
+  EXCEL: { label: 'Excel', icon: '📊' },
+}
+
+/** Resolve display name and icon for any tool, including dynamic Composio tools. */
+function resolveToolDisplay(name: string): { displayName: string; icon: string } {
+  // Known core tools
+  if (TOOL_DISPLAY_NAMES[name]) {
+    return { displayName: TOOL_DISPLAY_NAMES[name], icon: TOOL_ICONS[name] || '⚙️' }
+  }
+
+  // Composio tools: "composio:SLUG" or "composio:batch:N"
+  if (name.startsWith('composio:')) {
+    const slug = name.replace('composio:', '').replace('batch:', '')
+    // Find matching service prefix
+    const upperSlug = slug.toUpperCase()
+    for (const [prefix, meta] of Object.entries(COMPOSIO_SERVICE_MAP)) {
+      if (upperSlug.startsWith(prefix)) {
+        const action = upperSlug.slice(prefix.length + 1).replace(/_/g, ' ').toLowerCase()
+        return { displayName: `${meta.label}${action ? ': ' + action : ''}`, icon: meta.icon }
+      }
+    }
+    // Batch indicator
+    if (name.startsWith('composio:batch:')) {
+      return { displayName: `Batch (${slug})`, icon: '⚡' }
+    }
+    // Unknown Composio tool
+    return { displayName: slug.replace(/_/g, ' ').toLowerCase(), icon: '🔌' }
+  }
+
+  return { displayName: name, icon: '⚙️' }
+}
+
 interface ToolCallCardProps {
   toolCall: ToolCall
   position: 'left' | 'right'
@@ -70,8 +113,7 @@ interface ToolCallCardProps {
 export function ToolCallCard({ toolCall, position, index }: ToolCallCardProps) {
   const [progress, setProgress] = useState(0)
   const workflow = TOOL_WORKFLOW_MAP[toolCall.name] || { id: '', webhook: '' }
-  const displayName = TOOL_DISPLAY_NAMES[toolCall.name] || toolCall.name
-  const icon = TOOL_ICONS[toolCall.name] || '⚙️'
+  const { displayName, icon } = resolveToolDisplay(toolCall.name)
 
   // Animate progress for executing status
   useEffect(() => {

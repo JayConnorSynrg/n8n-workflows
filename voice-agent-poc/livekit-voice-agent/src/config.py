@@ -63,14 +63,28 @@ class Settings(BaseSettings):
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    # Composio Tool Router (meta-tool MCP — on-demand tool discovery)
-    # LLM gets meta-tools (search, execute) instead of individual action schemas.
-    # Configure available tools via Composio dashboard, not in code.
+    # Composio Integration
+    # WARNING: The MCP approach dumps ALL toolkit actions as individual tool schemas
+    # into the LLM context (200-400 schemas from 8 toolkits). This overwhelms most
+    # models' function calling. Disabled by default until SDK-native integration
+    # is implemented (registering specific actions as LiveKit function_tools).
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")
-    composio_router_enabled: bool = Field(default=True, alias="COMPOSIO_ROUTER_ENABLED")
+    composio_base_url: str = Field(
+        default="https://backend.composio.dev/api",
+        alias="COMPOSIO_BASE_URL"
+    )
+    composio_router_enabled: bool = Field(default=False, alias="COMPOSIO_ROUTER_ENABLED")
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
-    # Direct MCP URL (fallback — only used if COMPOSIO_ROUTER_ENABLED=false)
+    # Comma-separated list of Composio toolkits to load into the MCP session.
+    # Must include "composio" and "composio_search" for meta-tools, plus
+    # any app toolkits the user has connected on the Composio dashboard.
+    composio_toolkits: str = Field(
+        default="composio,composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,slack,supabase",
+        alias="COMPOSIO_TOOLKITS"
+    )
+
+    # MCP Integration (MODE 2 - only used if COMPOSIO_ROUTER_ENABLED=false)
     mcp_server_url: str = Field(default="", alias="MCP_SERVER_URL")
 
     @field_validator("livekit_url")

@@ -5,12 +5,20 @@ Architecture:
 - Descriptions guide LLM behavior for executive UX
 - Background execution with conversational result announcements
 - Tool names use camelCase (no underscores) to prevent TTS saying "underscore"
+- Every tool publishes lifecycle events (tool.call → tool.executing → tool.completed)
+  to the LiveKit data channel for real-time client-side observability
 """
 from typing import Optional
 
 from livekit.agents import llm
 
 from ..utils.async_tool_worker import get_worker
+from ..utils.room_publisher import (
+    publish_tool_start,
+    publish_tool_executing,
+    publish_tool_completed,
+    publish_tool_error,
+)
 from ..utils.short_term_memory import (
     recall_by_category,
     recall_by_tool,
@@ -36,9 +44,13 @@ async def send_email_async(
     cc: Optional[str] = None,
 ) -> str:
     """Send email after confirmation."""
+    call_id = await publish_tool_start("sendEmail", {"to": to, "subject": subject})
+    await publish_tool_executing(call_id)
+
     worker = get_worker()
     if not worker:
         await email_tool.send_email_tool(to, subject, body, cc)
+        await publish_tool_completed(call_id, "Email sent")
         return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
 
     await worker.dispatch(
@@ -46,6 +58,7 @@ async def send_email_async(
         tool_func=email_tool.send_email_tool,
         kwargs={"to": to, "subject": subject, "body": body, "cc": cc},
     )
+    # Completed event will fire from AsyncToolWorker when done
     return f"Sending email to {to.split('@')[0].replace('.', ' ').title()}"
 
 
@@ -62,7 +75,11 @@ async def search_documents_async(
     max_results: int = 5,
 ) -> str:
     """Search Drive documents - runs synchronously for immediate results."""
-    return await google_drive_tool.search_documents_tool(query, max_results)
+    call_id = await publish_tool_start("searchDrive", {"query": query})
+    await publish_tool_executing(call_id)
+    result = await google_drive_tool.search_documents_tool(query, max_results)
+    await publish_tool_completed(call_id, result[:100])
+    return result
 
 
 @llm.function_tool(
@@ -71,7 +88,11 @@ async def search_documents_async(
 )
 async def get_document_async(file_id: str) -> str:
     """Get document content - runs synchronously for immediate results."""
-    return await google_drive_tool.get_document_tool(file_id)
+    call_id = await publish_tool_start("getFile", {"file_id": file_id})
+    await publish_tool_executing(call_id)
+    result = await google_drive_tool.get_document_tool(file_id)
+    await publish_tool_completed(call_id, result[:100])
+    return result
 
 
 @llm.function_tool(
@@ -80,7 +101,11 @@ async def get_document_async(file_id: str) -> str:
 )
 async def list_drive_files_async(max_results: int = 10) -> str:
     """List Drive files - runs synchronously for immediate results."""
-    return await google_drive_tool.list_drive_files_tool(max_results)
+    call_id = await publish_tool_start("listFiles", {"max_results": max_results})
+    await publish_tool_executing(call_id)
+    result = await google_drive_tool.list_drive_files_tool(max_results)
+    await publish_tool_completed(call_id, result[:100])
+    return result
 
 
 # =============================================================================
@@ -98,11 +123,19 @@ async def vector_store_async(
 ) -> str:
     """Knowledge base operations."""
     if action.lower() in ["search", "find", "query"]:
-        return await database_tool.query_database_tool(content)
+        call_id = await publish_tool_start("knowledgeBase", {"action": "search", "content": content[:40]})
+        await publish_tool_executing(call_id)
+        result = await database_tool.query_database_tool(content)
+        await publish_tool_completed(call_id, result[:100] if result else "")
+        return result
     else:
+        call_id = await publish_tool_start("knowledgeBase", {"action": "store", "content": content[:40]})
+        await publish_tool_executing(call_id)
         worker = get_worker()
         if not worker:
-            return await vector_store_tool.store_knowledge_tool(content, category or "general", None)
+            result = await vector_store_tool.store_knowledge_tool(content, category or "general", None)
+            await publish_tool_completed(call_id, "Stored")
+            return result
         await worker.dispatch(
             tool_name="storeKnowledge",
             tool_func=vector_store_tool.store_knowledge_tool,
@@ -121,7 +154,11 @@ async def vector_store_async(
 )
 async def database_query_async(query: str) -> str:
     """Query database - runs synchronously for immediate results."""
-    return await database_tool.query_database_tool(query)
+    call_id = await publish_tool_start("queryDatabase", {"query": query})
+    await publish_tool_executing(call_id)
+    result = await database_tool.query_database_tool(query)
+    await publish_tool_completed(call_id, result[:100])
+    return result
 
 
 # =============================================================================
@@ -137,7 +174,11 @@ async def query_context_async(
     query: Optional[str] = None,
 ) -> str:
     """Query session context - runs synchronously for immediate results."""
-    return await agent_context_tool.query_context_tool(context_type, query)
+    call_id = await publish_tool_start("checkContext", {"context_type": context_type})
+    await publish_tool_executing(call_id)
+    result = await agent_context_tool.query_context_tool(context_type, query)
+    await publish_tool_completed(call_id, result[:100] if result else "")
+    return result
 
 
 # =============================================================================
@@ -239,7 +280,9 @@ async def add_contact_async(
     email_confirmed: bool = False,
 ) -> str:
     """Add contact with multi-gate confirmation - runs synchronously for immediate gate response."""
-    return await contact_tool.add_contact_tool(
+    call_id = await publish_tool_start("addContact", {"name": name, "gate": gate})
+    await publish_tool_executing(call_id)
+    result = await contact_tool.add_contact_tool(
         name=name,
         email=email,
         phone=phone,
@@ -249,6 +292,8 @@ async def add_contact_async(
         name_confirmed=name_confirmed,
         email_confirmed=email_confirmed,
     )
+    await publish_tool_completed(call_id, result[:100] if result else "")
+    return result
 
 
 @llm.function_tool(
@@ -262,12 +307,16 @@ async def get_contact_async(
     contact_id: Optional[str] = None,
 ) -> str:
     """Get contact - runs synchronously for immediate results."""
-    return await contact_tool.get_contact_tool(
+    call_id = await publish_tool_start("getContact", {"query": query or name or email or ""})
+    await publish_tool_executing(call_id)
+    result = await contact_tool.get_contact_tool(
         query=query,
         name=name,
         email=email,
         contact_id=contact_id,
     )
+    await publish_tool_completed(call_id, result[:100] if result else "")
+    return result
 
 
 @llm.function_tool(
@@ -276,7 +325,11 @@ async def get_contact_async(
 )
 async def search_contacts_async(query: str) -> str:
     """Search contacts - runs synchronously for immediate results."""
-    return await contact_tool.search_contacts_tool(query)
+    call_id = await publish_tool_start("searchContacts", {"query": query})
+    await publish_tool_executing(call_id)
+    result = await contact_tool.search_contacts_tool(query)
+    await publish_tool_completed(call_id, result[:100] if result else "")
+    return result
 
 
 # =============================================================================
@@ -385,14 +438,13 @@ async def composio_batch_execute_async(
         "to continue the conversation. Only use this for READ queries and lookups "
         "where you must reason about the data before responding. For all other "
         "actions use composioBatchExecute instead. "
-        "Pass tool_slug and arguments_json as a JSON string matching the schema. "
+        "Pass tool_slug from search results and arguments_json as a JSON string matching the schema. "
         "If result says 'I was not able to' do NOT retry just tell the user."
     ),
 )
 async def composio_execute_async(
     tool_slug: str,
     arguments_json: str = "{}",
-    toolkit_version: str = "latest",
 ) -> str:
     """Execute single Composio tool synchronously - for reads where LLM needs results."""
     import json
@@ -407,7 +459,6 @@ async def composio_execute_async(
     return await execute_composio_tool(
         tool_slug=tool_slug,
         arguments=arguments,
-        toolkit_version=toolkit_version,
     )
 
 
