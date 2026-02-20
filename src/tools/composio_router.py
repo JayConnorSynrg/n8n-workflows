@@ -61,22 +61,30 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
     Returns toolkit slugs (lowercase) for all apps the user has connected
     on the Composio dashboard. These are merged with the static config
     to ensure we only index tools the user can actually execute.
+
+    SDK signature: client.connected_accounts.list(user_ids=[...], statuses=[...])
+    Returns ConnectedAccountListResponse with .items: List[Item]
+    Each Item has .toolkit.slug (str) and .status (str)
     """
     try:
-        accounts = client.connected_accounts.list(user_id=user_id)
-        if not accounts:
-            logger.info("Composio: No connected accounts found for user")
+        response = client.connected_accounts.list(
+            user_ids=[user_id],
+            statuses=["ACTIVE"],
+        )
+
+        items = response.items if hasattr(response, "items") else []
+        if not items:
+            logger.info("Composio: No active connected accounts found for user")
             return []
 
-        # Extract unique toolkit/app slugs from connected accounts
         connected = set()
-        for account in accounts:
-            # connected_account has app_name or toolkit attribute
-            app = getattr(account, "app_name", None) or getattr(account, "toolkit", None)
-            if app:
-                connected.add(app.lower().strip())
+        for account in items:
+            toolkit_obj = getattr(account, "toolkit", None)
+            slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
+            if slug:
+                connected.add(slug.lower().strip())
 
-        logger.info(f"Composio: Connected accounts discovered — {sorted(connected)}")
+        logger.info(f"Composio: {len(connected)} connected accounts discovered — {sorted(connected)}")
         return list(connected)
 
     except Exception as exc:
@@ -244,12 +252,19 @@ def _resolve_slug(raw_slug: str) -> str | None:
 
 
 def _get_client(settings):
-    """Get or create a cached Composio SDK client."""
+    """Get or create a cached Composio SDK client.
+
+    Uses toolkit_versions="latest" so we don't need dangerously_skip_version_check
+    on every execute() call. The SDK auto-resolves to the latest toolkit version.
+    """
     global _composio_client
     if _composio_client is None:
         from composio import Composio  # type: ignore[import]
-        _composio_client = Composio(api_key=settings.composio_api_key)
-        logger.info("Composio: SDK client initialized")
+        _composio_client = Composio(
+            api_key=settings.composio_api_key,
+            toolkit_versions="latest",
+        )
+        logger.info("Composio: SDK client initialized (toolkit_versions=latest)")
     return _composio_client
 
 
@@ -427,10 +442,9 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
         result = await asyncio.to_thread(
             lambda: client.tools.execute(
-                slug=resolved_slug,
+                resolved_slug,
+                arguments,
                 user_id=user_id,
-                arguments=arguments,
-                dangerously_skip_version_check=True,
             )
         )
 
