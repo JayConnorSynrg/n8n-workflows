@@ -366,6 +366,7 @@ async def entrypoint(ctx: JobContext):
                 model=model,
                 api_key=settings.fireworks_api_key,
                 temperature=settings.fireworks_temperature,
+                parallel_tool_calls=True,
             )
 
         # Cerebras (fallback)
@@ -376,6 +377,7 @@ async def entrypoint(ctx: JobContext):
                 model=model,
                 api_key=settings.cerebras_api_key,
                 temperature=settings.cerebras_temperature,
+                parallel_tool_calls=True,
             )
 
         # No valid provider configured
@@ -410,6 +412,9 @@ async def entrypoint(ctx: JobContext):
         # Handle background noise gracefully
         "resume_false_interruption": True,
         "false_interruption_timeout": 1.0,
+        # Allow multi-step tool flows (Composio: SEARCH → SCHEMA → EXECUTE → respond)
+        # Default is 3 which cuts off Composio discovery flow mid-execution
+        "max_tool_steps": 8,
     }
 
     # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
