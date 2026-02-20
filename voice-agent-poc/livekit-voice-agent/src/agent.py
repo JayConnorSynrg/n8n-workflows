@@ -309,42 +309,18 @@ async def entrypoint(ctx: JobContext):
         )
 
     def init_llm():
-        """Initialize LLM based on LLM_PROVIDER setting.
-
-        Supports:
-        - "fireworks": Fireworks AI (128K context, reliable tool calling)
-        - "cerebras": Cerebras (fast but limited context)
-
-        Falls back to Cerebras if Fireworks key is missing.
-        """
-        provider = settings.llm_provider.lower().strip()
-
-        # Fireworks AI (primary)
-        if provider == "fireworks" and settings.fireworks_api_key:
-            model = settings.fireworks_model
-            logger.info(f"Initializing Fireworks AI LLM: {model}")
-            return openai.LLM.with_fireworks(
-                model=model,
-                api_key=settings.fireworks_api_key,
-                temperature=settings.fireworks_temperature,
-                parallel_tool_calls=True,
+        """Initialize Fireworks AI LLM."""
+        if not settings.fireworks_api_key:
+            raise RuntimeError(
+                "No LLM configured. Set FIREWORKS_API_KEY. "
+                f"Model: {settings.fireworks_model}"
             )
-
-        # Cerebras (fallback)
-        if settings.cerebras_api_key:
-            model = settings.cerebras_model
-            logger.info(f"Initializing Cerebras LLM: {model}")
-            return openai.LLM.with_cerebras(
-                model=model,
-                api_key=settings.cerebras_api_key,
-                temperature=settings.cerebras_temperature,
-                parallel_tool_calls=True,
-            )
-
-        # No valid provider configured
-        raise RuntimeError(
-            f"No LLM configured. Set FIREWORKS_API_KEY or CEREBRAS_API_KEY. "
-            f"LLM_PROVIDER='{provider}'"
+        logger.info(f"Initializing Fireworks AI LLM: {settings.fireworks_model}")
+        return openai.LLM.with_fireworks(
+            model=settings.fireworks_model,
+            api_key=settings.fireworks_api_key,
+            temperature=settings.fireworks_temperature,
+            parallel_tool_calls=True,
         )
 
     def init_tts():

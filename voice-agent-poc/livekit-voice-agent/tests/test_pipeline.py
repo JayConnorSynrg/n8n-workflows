@@ -144,59 +144,6 @@ class PipelineTestSuite:
                 message=f"Connection failed: {str(e)}"
             )
 
-    async def test_cerebras_api(self) -> TestResult:
-        """Test Cerebras LLM API connectivity and inference."""
-        start = time.perf_counter()
-        try:
-            from openai import AsyncOpenAI
-
-            api_key = os.environ.get("CEREBRAS_API_KEY", "")
-            model = os.environ.get("CEREBRAS_MODEL", "zai-glm-4.7")
-
-            if not api_key:
-                return TestResult(
-                    name="Cerebras LLM",
-                    passed=False,
-                    latency_ms=(time.perf_counter() - start) * 1000,
-                    message="Missing CEREBRAS_API_KEY"
-                )
-
-            # Cerebras uses OpenAI-compatible API
-            client = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://api.cerebras.ai/v1"
-            )
-
-            # Test with a simple completion
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "Say 'test successful' in exactly 2 words."}],
-                max_tokens=10,
-                temperature=0.0,
-            )
-
-            latency = (time.perf_counter() - start) * 1000
-            content = response.choices[0].message.content
-
-            return TestResult(
-                name="Cerebras LLM",
-                passed=True,
-                latency_ms=latency,
-                message=f"Inference successful. Response: '{content[:50]}'",
-                details={
-                    "model": model,
-                    "tokens_used": response.usage.total_tokens if response.usage else 0
-                }
-            )
-
-        except Exception as e:
-            return TestResult(
-                name="Cerebras LLM",
-                passed=False,
-                latency_ms=(time.perf_counter() - start) * 1000,
-                message=f"API error: {str(e)}"
-            )
-
     async def test_cartesia_api(self) -> TestResult:
         """Test Cartesia TTS API connectivity and voice synthesis."""
         start = time.perf_counter()
@@ -332,7 +279,7 @@ class PipelineTestSuite:
                 ("livekit_api_key", settings.livekit_api_key),
                 ("livekit_api_secret", settings.livekit_api_secret),
                 ("deepgram_api_key", settings.deepgram_api_key),
-                ("cerebras_api_key", settings.cerebras_api_key),
+                ("fireworks_api_key", settings.fireworks_api_key),
                 ("cartesia_api_key", settings.cartesia_api_key),
             ]
 
@@ -355,7 +302,7 @@ class PipelineTestSuite:
                 message="All required configuration fields present",
                 details={
                     "livekit_url": settings.livekit_url,
-                    "cerebras_model": settings.cerebras_model,
+                    "fireworks_model": settings.fireworks_model,
                     "cartesia_voice": settings.cartesia_voice
                 }
             )
@@ -414,7 +361,6 @@ class PipelineTestSuite:
             ("Agent Imports", self.test_agent_imports),
             ("LiveKit Connection", self.test_livekit_connection),
             ("Deepgram STT", self.test_deepgram_api),
-            ("Cerebras LLM", self.test_cerebras_api),
             ("Cartesia TTS", self.test_cartesia_api),
             ("n8n Webhook", self.test_n8n_webhook),
         ]
