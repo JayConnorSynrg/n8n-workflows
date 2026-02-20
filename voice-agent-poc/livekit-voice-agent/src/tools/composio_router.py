@@ -655,6 +655,88 @@ async def refresh_slug_index() -> str:
     return get_tool_catalog()
 
 
+async def get_tool_schema(tool_slug: str) -> str:
+    """Fetch the parameter schema for a Composio tool slug.
+
+    Returns a concise description of required and optional parameters
+    formatted for LLM consumption. Uses the SDK's get_raw_composio_tools
+    with search to find the tool and extract its input schema.
+    """
+    from ..config import get_settings
+    settings = get_settings()
+    if not settings.composio_api_key:
+        return "Composio not configured"
+
+    client = _get_client(settings)
+    slug_upper = tool_slug.upper().strip()
+
+    # Resolve slug first
+    resolved, tier = _resolve_slug_fast(slug_upper)
+    if resolved:
+        slug_upper = resolved
+
+    def _fetch_schema():
+        # Try direct toolkit lookup first
+        try:
+            # Search by slug terms
+            terms = slug_upper.replace("_", " ").lower()
+            results = client.tools.get_raw_composio_tools(search=terms, limit=5)
+            for tool in results:
+                if tool.slug == slug_upper:
+                    return tool
+        except Exception:  # nosec B110 - schema lookup is best-effort, falls through to toolkit method
+            pass
+
+        # Try loading by toolkit prefix
+        toolkit = _slug_to_toolkit.get(slug_upper, "")
+        if toolkit:
+            try:
+                tools = client.tools.get_raw_composio_tools(toolkits=[toolkit])
+                for tool in tools:
+                    if tool.slug == slug_upper:
+                        return tool
+            except Exception:  # nosec B110 - schema lookup is best-effort, returns None on failure
+                pass
+        return None
+
+    tool_obj = await asyncio.to_thread(_fetch_schema)
+
+    if not tool_obj:
+        return f"Could not find schema for {tool_slug}. Check the slug is correct using listComposioTools."
+
+    # Extract parameters from the tool's input schema
+    params = getattr(tool_obj, "parameters", None) or {}
+    # Handle Composio tool schema format
+    if hasattr(tool_obj, "input_schema"):
+        params = tool_obj.input_schema
+    elif hasattr(tool_obj, "args_schema"):
+        params = tool_obj.args_schema
+
+    properties = {}
+    required = []
+    if isinstance(params, dict):
+        properties = params.get("properties", {})
+        required = params.get("required", [])
+
+    if not properties:
+        return f"Tool {slug_upper} has no documented parameters. Try executing with empty arguments."
+
+    # Format for LLM consumption
+    lines = [f"SCHEMA FOR {slug_upper}"]
+    lines.append(f"Required fields: {', '.join(required) if required else 'none'}")
+    lines.append("")
+
+    for prop_name, prop_info in sorted(properties.items()):
+        is_req = prop_name in required
+        prop_type = prop_info.get("type", "string") if isinstance(prop_info, dict) else "string"
+        description = prop_info.get("description", "") if isinstance(prop_info, dict) else ""
+        marker = "REQUIRED" if is_req else "optional"
+        desc_text = f" - {description[:80]}" if description else ""
+        lines.append(f"  {prop_name} ({prop_type}, {marker}){desc_text}")
+
+    return "\n".join(lines)
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -767,10 +849,29 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             return voice_result
         else:
             error = result.get("error", "unknown error")
-            logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error} ({duration_ms}ms)")
-            _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
-            await publish_composio_event("composio.error", resolved_slug, call_id, str(error)[:100], duration_ms)
-            return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
+            error_str = str(error)
+            logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
+            await publish_composio_event("composio.error", resolved_slug, call_id, error_str[:100], duration_ms)
+
+            # Distinguish parameter errors (recoverable) from auth errors (not recoverable)
+            error_lower = error_str.lower()
+            is_param_error = any(s in error_lower for s in [
+                "missing", "invalid request data", "required field",
+                "invalid value", "validation", "expected",
+            ])
+
+            if is_param_error:
+                # Parameter validation error — tell LLM what's wrong so it can self-correct
+                # Do NOT increment circuit breaker — this is not a tool failure
+                logger.info(f"Composio: Parameter error for {resolved_slug} — allowing retry with corrected args")
+                return (
+                    f"Tool {resolved_slug} failed because of wrong arguments: {error_str}. "
+                    f"Call getToolSchema with this slug to see required parameters then retry with correct arguments."
+                )
+            else:
+                # Auth, connection, or unknown error — suppress retries
+                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
 
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
