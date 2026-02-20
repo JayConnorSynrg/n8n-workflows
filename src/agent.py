@@ -467,13 +467,14 @@ async def entrypoint(ctx: JobContext):
         )
 
     # Inject current date/time context (no tool call needed)
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
+    from datetime import datetime, timezone, timedelta
+    est = timezone(timedelta(hours=-5))
+    now = datetime.now(est)
     time_context = (
         f"\n\nCURRENT DATE AND TIME\n"
-        f"UTC: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-        f"Day: {now.strftime('%A, %B %d, %Y')}\n"
-        f"When asked about time always reference this and note it is UTC"
+        f"{now.strftime('%Y-%m-%d %I:%M %p')} EST\n"
+        f"{now.strftime('%A, %B %d, %Y')}\n"
+        f"Always reference EST when discussing time"
     )
     active_prompt += time_context
 
