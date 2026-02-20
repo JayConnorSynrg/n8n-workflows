@@ -45,6 +45,8 @@ _slug_index_built = False
 _slugs_by_service: dict[str, list[str]] = {}
 # Direct slug → toolkit mapping (most reliable for service key lookups)
 _slug_to_toolkit: dict[str, str] = {}
+# Slug → required params list (pre-fetched during index build for catalog hints)
+_slug_required_params: dict[str, list[str]] = {}
 
 # Dynamic prefix map: auto-generated from actual slug data at index build time.
 # Sorted longest-first to avoid partial matches. Empty until first build.
@@ -192,7 +194,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     4. Auto-generate prefix map from loaded slugs (zero hardcoded lists)
     5. No config file or env var — 100% driven by Composio state
     """
-    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES
+    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params
 
     if _slug_index_built:
         return
@@ -216,6 +218,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     all_slugs: list[str] = []
     slug_toolkit_map: dict[str, str] = {}
     by_service: dict[str, list[str]] = {}
+    required_params: dict[str, list[str]] = {}
 
     for toolkit in active_toolkits:
         try:
@@ -223,8 +226,12 @@ def _build_slug_index(client, user_id: str = "") -> None:
             slugs = [t.slug for t in tools]
             all_slugs.extend(slugs)
             by_service[toolkit] = slugs
-            for slug in slugs:
-                slug_toolkit_map[slug] = toolkit
+            for t in tools:
+                slug_toolkit_map[t.slug] = toolkit
+                # Extract required params from tool schema (zero extra API calls)
+                schema = getattr(t, "input_schema", None) or getattr(t, "args_schema", None) or getattr(t, "parameters", None)
+                if isinstance(schema, dict) and schema.get("required"):
+                    required_params[t.slug] = schema["required"]
             logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
         except Exception as exc:
             logger.warning(f"Composio: Failed to load toolkit {toolkit}: {exc}")
@@ -232,6 +239,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     _canonical_slugs = all_slugs
     _slug_to_toolkit = slug_toolkit_map
     _slugs_by_service = by_service
+    _slug_required_params = required_params
 
     # Auto-generate prefix map from actual slug data (replaces hardcoded list)
     _SERVICE_PREFIXES = _auto_generate_prefixes(by_service)
@@ -266,6 +274,13 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     if not _slugs_by_service:
         return "No tools available. Check Composio configuration and connected accounts."
 
+    def _format_slug(slug: str) -> str:
+        """Format a slug with inline required params hint."""
+        req = _slug_required_params.get(slug)
+        if req:
+            return f"  {slug} (requires: {', '.join(req)})"
+        return f"  {slug}"
+
     # Resolve service alias
     if service_filter:
         key = service_filter.lower().strip()
@@ -274,7 +289,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
         if slugs:
             lines = [f"=== {key.upper()} ({len(slugs)} tools) ==="]
             for slug in sorted(slugs):
-                lines.append(f"  {slug}")
+                lines.append(_format_slug(slug))
             return "\n".join(lines)
         # Check if partial match
         matches = {k: v for k, v in _slugs_by_service.items() if key in k}
@@ -283,7 +298,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
             for svc, slugs in sorted(matches.items()):
                 lines.append(f"=== {svc.upper()} ({len(slugs)} tools) ===")
                 for slug in sorted(slugs):
-                    lines.append(f"  {slug}")
+                    lines.append(_format_slug(slug))
             return "\n".join(lines)
         available = ", ".join(sorted(_slugs_by_service.keys()))
         return f"No tools found for service '{service_filter}'. Available services: {available}"
@@ -295,10 +310,11 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     action_slugs = {k: v for k, v in _slugs_by_service.items() if k not in _EXCLUDED_SERVICES}
     total = sum(len(v) for v in action_slugs.values())
     lines = [f"COMPOSIO TOOL CATALOG — {total} action tools"]
+    lines.append("Each tool shows required parameters in parentheses. Pass these as arguments_json keys.")
     for svc, slugs in sorted(action_slugs.items()):
         lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
         for slug in sorted(slugs):
-            lines.append(f"  {slug}")
+            lines.append(_format_slug(slug))
     return "\n".join(lines)
 
 
@@ -638,9 +654,10 @@ async def refresh_slug_index() -> str:
 
     Returns the updated tool catalog string.
     """
-    global _slug_index_built
+    global _slug_index_built, _slug_required_params
     _slug_index_built = False
     _failed_slugs.clear()
+    _slug_required_params = {}
 
     from ..config import get_settings
     settings = get_settings()
