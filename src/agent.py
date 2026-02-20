@@ -328,7 +328,6 @@ async def entrypoint(ctx: JobContext):
             interim_results=True,
             punctuate=True,
             profanity_filter=False,
-            enable_diarization=False,
         )
 
     def init_llm():
