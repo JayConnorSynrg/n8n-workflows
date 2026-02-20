@@ -52,6 +52,107 @@ def _get_client(settings):
     return _composio_client
 
 
+def _friendly_name(tool_slug: str) -> str:
+    """Convert a tool slug like TEAMS_SEND_MESSAGE to a voice-friendly name.
+
+    Strips common prefixes (service names) and produces natural phrases.
+    E.g. GOOGLESHEETS_BATCH_UPDATE -> batch update sheets
+         TEAMS_SEND_MESSAGE -> send message in Teams
+    """
+    slug = tool_slug.upper()
+    # Known service prefixes → natural suffix
+    service_map = {
+        "TEAMS_": "in Teams",
+        "MICROSOFTTEAMS_": "in Teams",
+        "ONEDRIVE_": "on OneDrive",
+        "GOOGLESHEETS_": "in Sheets",
+        "GOOGLEDOCS_": "in Docs",
+        "EXCEL_": "in Excel",
+        "SLACK_": "in Slack",
+        "GMAIL_": "via email",
+        "GITHUB_": "on GitHub",
+        "CANVA_": "in Canva",
+        "APIFY_": "",
+        "FIRECRAWL_": "",
+        "SUPABASE_": "in the database",
+    }
+    suffix = ""
+    action_part = slug
+    for prefix, svc_suffix in service_map.items():
+        if slug.startswith(prefix):
+            action_part = slug[len(prefix):]
+            suffix = svc_suffix
+            break
+
+    # Convert ACTION_NAME to "action name"
+    action = action_part.replace("_", " ").lower().strip()
+    if suffix:
+        return f"{action} {suffix}"
+    return action
+
+
+def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
+    """Extract a meaningful voice-friendly result from Composio response data.
+
+    Tries multiple strategies to find useful content in the response:
+    1. Explicit message field
+    2. Title/name/subject fields (common in search/list results)
+    3. Count of items (for list operations)
+    4. Body/content/text fields (for content retrieval)
+    5. Fallback to generic completion message
+    """
+    if not isinstance(data, dict):
+        if isinstance(data, str) and len(data) > 5:
+            return data[:200]
+        return f"Completed {tool_display}"
+
+    # 1. Explicit message
+    message = data.get("message", "")
+    if message and isinstance(message, str) and len(message) > 3:
+        return message[:200]
+
+    # 2. Response data nested in 'data' or 'response_data'
+    inner = data.get("data", data.get("response_data", data))
+    if isinstance(inner, dict) and inner is not data:
+        msg = inner.get("message", "")
+        if msg and isinstance(msg, str) and len(msg) > 3:
+            return msg[:200]
+
+    # 3. List of items (search results, file lists, messages)
+    for key in ("items", "results", "messages", "files", "values", "records"):
+        items = data.get(key, inner.get(key, None) if isinstance(inner, dict) else None)
+        if isinstance(items, list):
+            count = len(items)
+            if count == 0:
+                return f"No results found for {tool_display}"
+            # Try to extract names/titles from first few items
+            names = []
+            for item in items[:5]:
+                if isinstance(item, dict):
+                    name = item.get("name", item.get("title", item.get("subject", "")))
+                    if name:
+                        names.append(str(name))
+            if names:
+                listing = " and ".join(names[:3])
+                if count > 3:
+                    listing += f" and {count - 3} more"
+                return f"Found {count} results including {listing}"
+            return f"Found {count} results for {tool_display}"
+
+    # 4. Single item with title/name
+    for key in ("title", "name", "subject", "fileName", "file_name"):
+        val = data.get(key, "")
+        if val and isinstance(val, str):
+            return f"Got it {val}"
+
+    # 5. Status/success indicators
+    if data.get("success") or data.get("ok") or data.get("status") == "ok":
+        return f"Done {tool_display}"
+
+    # 6. Fallback
+    return f"Completed {tool_display}"
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -92,17 +193,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             )
         )
 
-        tool_display = tool_slug.replace("_", " ").lower()
+        tool_display = _friendly_name(tool_slug)
 
         if result.get("successful"):
             data = result.get("data", {})
             logger.info(f"[TOOL_CALL] Composio OK: {tool_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
-            # Try to extract a meaningful message from the response
-            if isinstance(data, dict):
-                message = data.get("message", "")
-                if message and isinstance(message, str):
-                    return message
-            return f"Completed {tool_display}"
+            # Extract meaningful content from the response
+            return _extract_voice_result(data, tool_slug, tool_display)
         else:
             error = result.get("error", "unknown error")
             logger.warning(f"[TOOL_CALL] Composio FAIL: {tool_slug} error={error}")
@@ -111,7 +208,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {tool_slug} exception={exc}")
-        tool_display = tool_slug.replace("_", " ").lower()
+        tool_display = _friendly_name(tool_slug)
         # CRITICAL: Use "I was not able to" language so LLM does NOT retry
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
@@ -141,7 +238,7 @@ async def batch_execute_composio_tools(tools: list) -> str:
     summaries = []
     for tool_spec, result in zip(tools, results):
         slug = tool_spec.get("tool_slug", "unknown")
-        display = slug.replace("_", " ").lower()
+        display = _friendly_name(slug)
         if isinstance(result, Exception):
             summaries.append(f"{display} failed")
             logger.error(f"Composio batch: {slug} raised {result}")
