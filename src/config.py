@@ -16,12 +16,7 @@ class Settings(BaseSettings):
     deepgram_api_key: str = Field(..., alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
 
-    # LLM Provider Selection: "fireworks" (default) or "cerebras"
-    # Fireworks AI: 128K context, reliable tool calling, OpenAI-compatible
-    # Cerebras: Fast inference but limited context (8K-65K depending on model)
-    llm_provider: str = Field(default="fireworks", alias="LLM_PROVIDER")
-
-    # Fireworks AI (Primary LLM - function calling + large context)
+    # Fireworks AI (LLM - function calling + large context)
     # IMPORTANT: Only use models with function calling support on Fireworks.
     # llama-v3p3-70b-instruct does NOT support function calling on Fireworks!
     # Models with FC: deepseek-v3p1 (163K, fastest TTFT)
@@ -35,15 +30,6 @@ class Settings(BaseSettings):
     )
     fireworks_temperature: float = Field(default=0.6, alias="FIREWORKS_TEMPERATURE")
     fireworks_max_tokens: int = Field(default=512, alias="FIREWORKS_MAX_TOKENS")
-
-    # Cerebras LLM (Fallback - 1M free tokens/day, ~1000 TPS)
-    # Production models: gpt-oss-120b (65K ctx), llama3.1-8b (8K ctx)
-    # llama-3.3-70b was deprecated 2026-02-16
-    cerebras_api_key: str = Field(default="", alias="CEREBRAS_API_KEY")
-    cerebras_model: str = Field(default="gpt-oss-120b", alias="CEREBRAS_MODEL")
-    cerebras_fallback_model: str = Field(default="gpt-oss-120b", alias="CEREBRAS_FALLBACK_MODEL")
-    cerebras_temperature: float = Field(default=0.6, alias="CEREBRAS_TEMPERATURE")
-    cerebras_max_tokens: int = Field(default=150, alias="CEREBRAS_MAX_TOKENS")
 
     # Cartesia
     cartesia_api_key: str = Field(..., alias="CARTESIA_API_KEY")
