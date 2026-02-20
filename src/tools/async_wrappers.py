@@ -495,7 +495,7 @@ ASYNC_TOOLS = [
     get_contact_async,
     search_contacts_async,
     # Composio (SDK execution wrappers — no MCP dependency)
-    list_composio_tools_async,     # CATALOG: list exact slugs before executing
+    # Catalog is pre-loaded at startup and injected into system prompt (no tool needed)
     composio_batch_execute_async,  # DEFAULT: parallel background execution
     composio_execute_async,        # FALLBACK: sync reads when LLM needs results
 ]

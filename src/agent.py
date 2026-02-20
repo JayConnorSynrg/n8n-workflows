@@ -147,7 +147,6 @@ Use composioBatchExecute directly with the exact slug from listComposioTools
 Always use exact full slugs like MICROSOFT_TEAMS_SEND_MESSAGE or ONE_DRIVE_SEARCH_FILES
 
 WHEN TO USE EACH
-listComposioTools - FIRST call at session start to get exact slug catalog
 composioBatchExecute - DEFAULT for execution runs in background results announced when done
 composioExecute - For discovery planning and when you need returned data before next step
 
@@ -160,10 +159,9 @@ HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
 2 For web search Teams OneDrive Excel Canva GitHub Slack Supabase use extended tools
 3 For Google Drive always use core searchDrive listFiles getFile not extended
-4 Call listComposioTools once at session start to get exact slugs
-5 If you know the exact slug from the catalog execute directly
-6 If you are unsure of the slug use COMPOSIO_SEARCH_TOOLS to discover it first
-7 Never tell the user which system a tool comes from just use it
+4 Use the exact slug from the AVAILABLE TOOL SLUGS catalog above
+5 If you are unsure of the slug use COMPOSIO_SEARCH_TOOLS to discover it first
+6 Never tell the user which system a tool comes from just use it
 
 PRESENTATION RULES
 NEVER mention tool names slugs discovery or planning processes to the user
@@ -426,18 +424,39 @@ async def entrypoint(ctx: JobContext):
     # Build tool list: n8n webhook tools + Composio SDK execution wrappers
     all_tools = list(ASYNC_TOOLS)
 
-    # Composio execution goes through SDK wrappers (composioBatchExecute, composioExecute)
-    # registered in ASYNC_TOOLS. No MCP server needed — slug resolution + SDK handles everything.
+    # Pre-build Composio slug catalog and inject into system prompt
+    # This gives the LLM exact slugs from the start — zero extra tool calls
+    composio_catalog = ""
     if settings.composio_api_key:
+        logger.info("Composio: Pre-loading tool catalog at startup...")
+        try:
+            from .tools.composio_router import ensure_slug_index, get_tool_catalog
+            await ensure_slug_index()
+            composio_catalog = get_tool_catalog()
+            logger.info(f"Composio: Catalog pre-loaded ({len(composio_catalog)} chars)")
+        except Exception as e:
+            logger.warning(f"Composio: Catalog pre-load failed: {e}")
+            composio_catalog = ""
         logger.info(f"Composio: SDK execution enabled ({len(all_tools)} tools including batch/sync wrappers)")
     else:
         logger.info("Composio: Disabled (no COMPOSIO_API_KEY)")
 
     logger.info(f"Agent tools: {len(all_tools)} total")
 
+    # Inject pre-loaded catalog into system prompt
+    active_prompt = SYSTEM_PROMPT
+    if composio_catalog:
+        active_prompt = SYSTEM_PROMPT.replace(
+            "GETTING EXACT SLUGS - Call listComposioTools once per session\n"
+            "Before your first composioBatchExecute call use listComposioTools to get exact available slugs\n"
+            "Filter by service: listComposioTools with service microsoft_teams or gmail or composio_search etc\n"
+            "Always use the exact full slug from the catalog never shorten or guess",
+            f"AVAILABLE TOOL SLUGS - Use these exact slugs with composioBatchExecute\n{composio_catalog}"
+        )
+
     # Define agent with all tools (no MCP servers)
     agent = Agent(
-        instructions=SYSTEM_PROMPT,
+        instructions=active_prompt,
         tools=all_tools,
     )
 
