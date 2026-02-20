@@ -41,7 +41,7 @@ def get_turn_detector():
         except ImportError:
             HAS_TURN_DETECTOR = False
             logger.info("Turn detector not available (not installed)")
-        except RuntimeError as e:
+        except Exception as e:
             HAS_TURN_DETECTOR = False
             logger.warning(f"Turn detector initialization failed: {e}")
 
