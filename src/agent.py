@@ -7,6 +7,7 @@ Based on LiveKit Agents 1.3.x documentation:
 import asyncio
 import json
 import logging
+import threading
 from typing import Optional
 
 from livekit import rtc
@@ -274,13 +275,23 @@ def prewarm(proc: JobProcess):
     proc.userdata["cache_manager"] = cache_manager
     logger.info("Context cache manager initialized")
 
-    # Pre-build Composio tool catalog (network calls happen here, not per-meeting)
-    try:
-        from .tools.composio_router import prewarm_slug_index
-        proc.userdata["composio_catalog"] = prewarm_slug_index()
-    except Exception as e:
-        logger.warning(f"Composio catalog prewarm failed: {e}")
-        proc.userdata["composio_catalog"] = ""
+    # Pre-build Composio tool catalog in background thread (non-blocking).
+    # Worker registration proceeds immediately. If catalog finishes before
+    # first meeting, it gets injected into system prompt. If not, the lazy
+    # build on first composioBatchExecute call handles it.
+    proc.userdata["composio_catalog"] = ""  # default empty
+
+    def _build_catalog():
+        try:
+            from .tools.composio_router import prewarm_slug_index
+            proc.userdata["composio_catalog"] = prewarm_slug_index()
+        except Exception as e:
+            logger.warning(f"Composio catalog prewarm failed: {e}")
+
+    catalog_thread = threading.Thread(target=_build_catalog, daemon=True, name="composio-prewarm")
+    catalog_thread.start()
+    proc.userdata["_composio_thread"] = catalog_thread
+    logger.info("Composio catalog build started in background thread")
 
 
 async def entrypoint(ctx: JobContext):
@@ -433,6 +444,10 @@ async def entrypoint(ctx: JobContext):
     all_tools = list(ASYNC_TOOLS)
 
     # Read pre-built Composio catalog from prewarm (zero latency — no network calls here)
+    # If background thread is still running, proceed without catalog (lazy build handles it)
+    composio_thread = ctx.proc.userdata.get("_composio_thread")
+    if composio_thread and composio_thread.is_alive():
+        logger.info("Composio catalog still building in background, proceeding without")
     composio_catalog = ctx.proc.userdata.get("composio_catalog", "")
     if settings.composio_api_key:
         logger.info(f"Composio: SDK enabled, catalog {'ready' if composio_catalog else 'empty'} ({len(all_tools)} tools)")
