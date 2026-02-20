@@ -163,6 +163,11 @@ async def query_context_tool(
             limit=limit,
         )
 
+        # Guard against empty/None responses from webhook
+        if result is None:
+            logger.warning(f"Webhook returned None for {query_type}")
+            return "Could not reach the context service right now"
+
         # Check for errors
         if result.get("status") == "CANCELLED":
             return result.get("voice_response", "Query was cancelled")

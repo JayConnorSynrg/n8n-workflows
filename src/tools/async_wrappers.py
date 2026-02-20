@@ -280,6 +280,138 @@ async def search_contacts_async(query: str) -> str:
 
 
 # =============================================================================
+# COMPOSIO - HYBRID ASYNC/SYNC EXECUTION
+# =============================================================================
+
+@llm.function_tool(
+    name="composioBatchExecute",
+    description=(
+        "DEFAULT Composio execution tool. Execute one or more Composio tools "
+        "discovered via COMPOSIO_SEARCH_TOOLS. Pass tools_json as a JSON array "
+        "of objects each with tool_slug and arguments fields. "
+        "DEPENDENCY HANDLING: Add a step field (1 2 3) to control execution order. "
+        "Tools with the same step number run in parallel. "
+        "Higher step numbers wait for lower steps to complete first. "
+        "If no step field is set all tools run in parallel as step 1. "
+        "ONLY batch tools where the later steps do NOT need output data from earlier steps. "
+        "If tool B needs specific data from tool A results use composioExecute for A first "
+        "then call composioBatchExecute for B with the data. "
+        "If any tool result says 'I was not able to' do NOT retry that tool just tell the user. "
+        "Example independent tools: "
+        '[{"tool_slug":"TEAMS_SEND","arguments":{...}},{"tool_slug":"DRIVE_LIST","arguments":{...}}] '
+        "Example ordered steps: "
+        '[{"tool_slug":"GET_ISSUE","arguments":{...},"step":1},{"tool_slug":"NOTIFY","arguments":{...},"step":2}]'
+    ),
+)
+async def composio_batch_execute_async(
+    tools_json: str,
+) -> str:
+    """Execute Composio tools with step-based dependency ordering via AsyncToolWorker."""
+    import json
+    from .composio_router import batch_execute_composio_tools
+
+    try:
+        tools = json.loads(tools_json)
+    except (json.JSONDecodeError, TypeError):
+        return "Could not parse tools_json use format [{tool_slug: x, arguments: {}}]"
+
+    if isinstance(tools, dict):
+        tools = [tools]
+
+    if not isinstance(tools, list) or not tools:
+        return "tools_json must be an array with at least one tool object"
+
+    # Validate each tool has required fields
+    for t in tools:
+        if not isinstance(t, dict) or not t.get("tool_slug"):
+            return "Each tool must have a tool_slug field"
+
+    # Group tools by step for ordered execution
+    # Default step=1 if not specified (all parallel)
+    step_groups: dict[int, list] = {}
+    for t in tools:
+        step = t.get("step", 1)
+        if not isinstance(step, int) or step < 1:
+            step = 1
+        step_groups.setdefault(step, []).append(t)
+
+    tool_names = [t.get("tool_slug", "unknown") for t in tools]
+    display = " and ".join(
+        t.replace("_", " ").lower() for t in tool_names[:3]
+    )
+    if len(tool_names) > 3:
+        display += f" and {len(tool_names) - 3} more"
+
+    num_steps = len(step_groups)
+
+    # If single step (all parallel, no dependencies) — dispatch to background worker
+    if num_steps == 1:
+        worker = get_worker()
+        if worker:
+            await worker.dispatch(
+                tool_name=f"composio:batch:{'+'.join(tool_names)}",
+                tool_func=batch_execute_composio_tools,
+                kwargs={"tools": tools},
+            )
+            return f"Running {len(tools)} {'tool' if len(tools) == 1 else 'tools'} now {display}"
+        return await batch_execute_composio_tools(tools)
+
+    # Multi-step: dispatch ordered execution to background worker
+    async def _execute_ordered_steps(step_groups: dict, tool_names: list) -> str:
+        """Execute tool groups in step order, parallel within each step."""
+        all_results = []
+        for step_num in sorted(step_groups.keys()):
+            group = step_groups[step_num]
+            group_result = await batch_execute_composio_tools(group)
+            all_results.append(group_result)
+        return " then ".join(all_results)
+
+    worker = get_worker()
+    if worker:
+        await worker.dispatch(
+            tool_name=f"composio:ordered:{'+'.join(tool_names)}",
+            tool_func=_execute_ordered_steps,
+            kwargs={"step_groups": step_groups, "tool_names": tool_names},
+        )
+        return f"Running {len(tools)} tools in {num_steps} steps {display}"
+
+    return await _execute_ordered_steps(step_groups, tool_names)
+
+
+@llm.function_tool(
+    name="composioExecute",
+    description=(
+        "Execute a SINGLE Composio tool synchronously when you need the result "
+        "to continue the conversation. Only use this for READ queries and lookups "
+        "where you must reason about the data before responding. For all other "
+        "actions use composioBatchExecute instead. "
+        "Pass tool_slug and arguments_json as a JSON string matching the schema. "
+        "If result says 'I was not able to' do NOT retry just tell the user."
+    ),
+)
+async def composio_execute_async(
+    tool_slug: str,
+    arguments_json: str = "{}",
+    toolkit_version: str = "latest",
+) -> str:
+    """Execute single Composio tool synchronously - for reads where LLM needs results."""
+    import json
+    from .composio_router import execute_composio_tool
+
+    try:
+        arguments = json.loads(arguments_json)
+    except (json.JSONDecodeError, TypeError):
+        return "Could not parse the arguments try again with valid JSON"
+
+    # Synchronous execution — blocks until result, LLM can reason about it
+    return await execute_composio_tool(
+        tool_slug=tool_slug,
+        arguments=arguments,
+        toolkit_version=toolkit_version,
+    )
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -298,4 +430,7 @@ ASYNC_TOOLS = [
     add_contact_async,
     get_contact_async,
     search_contacts_async,
+    # Composio (execution wrappers — discovery + planning stays on MCP)
+    composio_batch_execute_async,  # DEFAULT: parallel background execution
+    composio_execute_async,        # FALLBACK: sync reads when LLM needs results
 ]
