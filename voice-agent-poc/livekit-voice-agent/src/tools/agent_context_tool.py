@@ -61,7 +61,7 @@ def _make_cache_key(
     key_string = ":".join(parts)
     # Use hash for long keys
     if len(key_string) > 100:
-        return f"{query_type}:{hashlib.md5(key_string.encode()).hexdigest()}"
+        return f"{query_type}:{hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()}"  # nosec B324
     return key_string
 
 
@@ -162,6 +162,11 @@ async def query_context_tool(
             function_name=function_name,
             limit=limit,
         )
+
+        # Guard against empty/None responses from webhook
+        if result is None:
+            logger.warning(f"Webhook returned None for {query_type}")
+            return "Could not reach the context service right now"
 
         # Check for errors
         if result.get("status") == "CANCELLED":
