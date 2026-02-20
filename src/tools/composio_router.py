@@ -68,10 +68,11 @@ def _build_slug_index(client, toolkits: list[str]) -> None:
     if _slug_index_built:
         return
 
-    # Filter to app toolkits only (exclude meta-toolkits)
+    # Filter out "composio" meta-toolkit (connection management only).
+    # Keep "composio_search" — it contains real web search tools (no auth required).
     app_toolkits = [
         t for t in toolkits
-        if t not in ("composio", "composio_search")
+        if t != "composio"
     ]
     if not app_toolkits:
         logger.warning("Composio: No app toolkits configured, slug index empty")

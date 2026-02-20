@@ -71,10 +71,11 @@ class Settings(BaseSettings):
     )
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
-    # Comma-separated list of Composio app toolkits for slug index.
-    # Only app toolkits needed (not meta-toolkits).
+    # Comma-separated list of Composio toolkits for slug index.
+    # composio_search = no-auth web search (always include).
+    # Other toolkits require connected accounts on Composio dashboard.
     composio_toolkits: str = Field(
-        default="microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,slack,supabase",
+        default="composio_search,microsoft_teams,onedrive,gmail,googlesheets,googledocs,github,canva,slack,supabase",
         alias="COMPOSIO_TOOLKITS"
     )
 

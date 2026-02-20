@@ -114,7 +114,11 @@ Write tools ask the user to confirm first
 
 EXTENDED TOOLS - Connected Services
 For services beyond core tools you can execute actions on connected services
-Available services: Microsoft Teams OneDrive Gmail Google Sheets Google Docs GitHub Canva Slack Supabase
+Available services: Web Search Microsoft Teams OneDrive Gmail Google Sheets Google Docs GitHub Canva Slack Supabase
+
+WEB SEARCH - Available immediately no authentication needed
+When user asks to search the web look something up or find current information use composioBatchExecute with a COMPOSIO_SEARCH slug
+This is fast and always available do not hesitate to use it
 
 Use composioBatchExecute to execute actions on these services
 Pass tools_json as a JSON array of tool objects each with tool_slug and arguments
@@ -122,6 +126,7 @@ Tool slugs use full service prefix like MICROSOFT_TEAMS_SEND_MESSAGE or ONE_DRIV
 The system will resolve shortened slugs automatically so TEAMS_SEND becomes MICROSOFT_TEAMS_SEND_MESSAGE
 
 Common slug patterns
+Web Search: use slugs from the composio_search toolkit
 Teams: MICROSOFT_TEAMS_SEND_MESSAGE MICROSOFT_TEAMS_LIST_CHANNELS MICROSOFT_TEAMS_SEARCH_MESSAGES
 OneDrive: ONE_DRIVE_SEARCH_FILES ONE_DRIVE_LIST_FILES ONE_DRIVE_GET_FILE
 Sheets: GOOGLESHEETS_GET_SHEET GOOGLESHEETS_UPDATE_ROW
