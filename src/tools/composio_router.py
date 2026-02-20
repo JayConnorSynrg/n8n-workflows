@@ -918,7 +918,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 try:
                     schema_info = await get_tool_schema(resolved_slug)
                     schema_str = schema_info[:500]
-                except Exception:
+                except Exception:  # nosec B110 — best-effort schema lookup, fallback below
                     pass
                 if schema_str:
                     return (
