@@ -34,6 +34,11 @@ _SLUG_CACHE_TTL = 300  # 5 minutes
 _failed_slugs: dict[str, int] = {}  # slug -> failure count
 _CB_MAX_FAILURES = 2
 
+# Auth failure tracker: services where OAuth token is confirmed expired.
+# Key = toolkit name (e.g. "microsoft_teams"), value = re-auth URL or True.
+# Prevents hammering services that can't execute until user re-authenticates.
+_service_auth_failed: dict[str, bool] = {}
+
 # Canonical slug index: ALL available tool slugs from connected toolkits.
 # Built once at first execute(), used to resolve LLM-generated short slugs
 # (e.g. "TEAMS_LIST_CHANNELS") to canonical SDK slugs
@@ -689,6 +694,7 @@ async def refresh_slug_index() -> str:
     global _slug_index_built, _slug_required_params
     _slug_index_built = False
     _failed_slugs.clear()
+    _service_auth_failed.clear()  # Re-auth completed — clear auth circuit breakers
     _slug_required_params = {}
 
     from ..config import get_settings
@@ -813,6 +819,17 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")
         return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
 
+    # Auth circuit breaker: check if this service's OAuth is known to be expired
+    # (trip all tools in that service, not just the slug that first failed)
+    service_key = _slug_to_toolkit.get(slug_key)
+    if service_key and _service_auth_failed.get(service_key):
+        service_display = service_key.replace("_", " ").title()
+        logger.warning(f"Composio: Auth circuit breaker OPEN for service={service_key} (token expired)")
+        return (
+            f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
+            f"Do not retry {service_display} tools."
+        )
+
     if not settings.composio_api_key or not settings.composio_user_id:
         return "I was not able to run this tool because Composio is not configured on this instance"
 
@@ -902,11 +919,17 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
             await publish_tool_error(call_id, error_str[:100])
 
-            # Distinguish parameter errors (recoverable) from auth errors (not recoverable)
+            # Distinguish parameter errors (recoverable) from auth/unknown errors
             error_lower = error_str.lower()
             is_param_error = any(s in error_lower for s in [
                 "missing", "invalid request data", "required field",
                 "invalid value", "validation", "expected",
+            ])
+            is_auth_error = any(s in error_lower for s in [
+                "unauthorized", "401", "token expired", "invalid token",
+                "access token", "forbidden", "403", "access denied",
+                "reauthenticate", "re-authenticate", "auth", "credentials",
+                "not authorized", "permission denied",
             ])
 
             if is_param_error:
@@ -930,10 +953,31 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                         f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
                         f"Retry with corrected parameters."
                     )
+
+            elif is_auth_error:
+                # OAuth token expired — the connection exists but the token underneath
+                # has expired. "ACTIVE" in Composio only means the record exists,
+                # not that the token is currently valid.
+                # Mark the entire service as auth-failed so other tools don't retry.
+                service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
+                _service_auth_failed[service_key] = True
+                _failed_slugs[slug_key] = _CB_MAX_FAILURES  # trip circuit breaker
+                service_display = service_key.replace("_", " ").title()
+                logger.warning(
+                    f"[TOOL_CALL] Composio AUTH EXPIRED: {resolved_slug} service={service_key} error={error_str!r}"
+                )
+                return (
+                    f"The {service_display} connection needs to be re-authenticated. "
+                    f"The OAuth token has expired. "
+                    f"Tell the user their {service_display} access needs to be reconnected — "
+                    f"they can do this at composio.dev or you can say 'reconnect {service_display}' "
+                    f"to get a new authorization link. Do not retry {service_display} tools until reconnected."
+                )
+
             else:
-                # Auth, connection, or unknown error — suppress retries
+                # Unknown error — suppress retries but don't claim auth issue
                 _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
-                return f"I was not able to complete {tool_display} the service returned an error do not retry this tool"
+                return f"I was not able to complete {tool_display} — the service returned an error. Do not retry this tool."
 
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
