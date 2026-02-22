@@ -488,11 +488,49 @@ async def manage_connections_async(
 # =============================================================================
 
 @llm.function_tool(
+    name="planComposioTask",
+    description=(
+        "PLANNING TOOL: Fetch schemas for all tools you plan to use in one batch call. "
+        "Call this AFTER listComposioTools (to get slugs) and BEFORE composioBatchExecute. "
+        "Pass tool_slugs as a comma-separated list of exact slugs. "
+        "Returns required and optional params for every tool so you can build correct arguments. "
+        "This is the correct sequence: listComposioTools → planComposioTask → composioBatchExecute. "
+        "Example: planComposioTask(tool_slugs='MICROSOFT_TEAMS_GET_CHANNELS,MICROSOFT_TEAMS_SEND_MESSAGE')"
+    ),
+)
+async def plan_composio_task_async(tool_slugs: str) -> str:
+    """Batch schema lookup for multiple tools at once — pure cache, zero API calls."""
+    from .composio_router import ensure_slug_index, _format_cached_schema, _resolve_slug_fast
+
+    await ensure_slug_index()
+
+    slugs = [s.strip().upper() for s in tool_slugs.split(",") if s.strip()]
+    if not slugs:
+        return "No slugs provided. Pass comma-separated tool slugs like: MICROSOFT_TEAMS_SEND_MESSAGE,ONE_DRIVE_LIST_FOLDER_CHILDREN"
+
+    results = []
+    for slug in slugs[:10]:  # cap at 10 tools per plan
+        resolved, _ = _resolve_slug_fast(slug)
+        actual = resolved or slug
+        schema_text = _format_cached_schema(actual)
+        if schema_text:
+            results.append(f"=== {actual} ===\n{schema_text}")
+        else:
+            results.append(
+                f"=== {actual} ===\nNo cached schema — use getComposioToolSchema('{actual}') for live lookup."
+            )
+
+    header = f"PLAN SCHEMAS — {len(slugs)} tools. Build your arguments_json from these before calling composioBatchExecute:"
+    return header + "\n\n" + "\n\n".join(results)
+
+
+@llm.function_tool(
     name="listComposioTools",
     description=(
         "List exact tool slugs available for connected services grouped by service. "
-        "Call this before composioBatchExecute when unsure which slug to use. "
-        "Pass service to filter by one service: microsoft_teams, gmail, one_drive, google_sheets, github, etc. "
+        "Call this FIRST when you need to identify which slugs exist for a service. "
+        "Then call planComposioTask with those slugs to get full parameter schemas. "
+        "Pass service to filter: microsoft_teams, gmail, one_drive, google_sheets, github, etc. "
         "Leave service empty for the full catalog. "
         "Always use the exact full slug returned here — never shorten or guess."
     ),
@@ -651,10 +689,11 @@ ASYNC_TOOLS = [
     search_contacts_async,
     # Composio (SDK execution — catalog pre-loaded into system prompt)
     manage_connections_async,      # CONNECTION MGMT: status + connect new services via email
-    list_composio_tools_async,     # CATALOG: browse exact slugs before executing (no guessing)
-    get_tool_schema_async,         # SCHEMA: look up required params before building arguments
-    composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
-    composio_execute_async,        # SYNC: when LLM needs result data before next step
+    list_composio_tools_async,     # STEP 1: browse exact slugs for a service
+    plan_composio_task_async,      # STEP 2: batch schema fetch for all tools in the plan
+    get_tool_schema_async,         # FALLBACK: single tool schema if not in cache
+    composio_batch_execute_async,  # STEP 3: execute with correct slugs and params
+    composio_execute_async,        # SYNC: single read where LLM needs result before next step
     # Gamma (async background generation with proactive session notification)
     generate_presentation_async,   # ASYNC: slide decks
     generate_document_async,       # ASYNC: documents / reports
