@@ -70,6 +70,18 @@ from .utils.short_term_memory import clear_session as clear_session_memory
 logger = setup_logging(__name__)
 settings = get_settings()
 
+# Memory layer — persistent cross-session memory (optional, gracefully disabled)
+try:
+    from .memory import memory_store as _mem_store
+    from .memory import session_writer as _session_writer
+    from .memory import capture as _mem_capture
+    _MEM_AVAILABLE = True
+except Exception as _mem_err:
+    _mem_store = None  # type: ignore[assignment]
+    _session_writer = None  # type: ignore[assignment]
+    _mem_capture = None  # type: ignore[assignment]
+    _MEM_AVAILABLE = False
+
 # =============================================================================
 # AIO VOICE ASSISTANT - EXECUTIVE SYSTEM PROMPT v3
 # =============================================================================
@@ -117,18 +129,24 @@ Write tools ask the user to confirm first
 Connection management
 - manageConnections with action status: See which external services are connected
 - manageConnections with action connect and service name: Set up a new service connection and send the auth link via email
-- manageConnections with action refresh: Refresh your tool catalog after a new service is connected mid-session
-When a user says they connected a new service always call manageConnections with action refresh before trying to use it
+- manageConnections with action refresh: Rebuild your tool catalog mid-session to activate newly connected services
+When a user connects a new service call manageConnections with action refresh immediately — the result shows the new slugs you can now use
+Never tell the user you are locked or limited — always offer to connect and activate the service instead
 
-EXTENDED TOOLS - Connected Services via Composio
+EXTENDED TOOLS - Connected Services
 For services beyond core tools you have direct access to connected external services
 Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG at the end of these instructions
 
-NEVER guess or shorten slugs - always use the exact full slug from the catalog at the end
-NEVER call listComposioTools or getToolSchema - all available tools are in the catalog below
+You are NEVER locked or limited — new services can be connected and activated mid-session without restarting
+After a user authenticates a new service say "Let me activate that now" then call manageConnections with action refresh
+The refresh tool result will show your full updated catalog with all new slugs — use those slugs immediately after
+You always have access to whatever services the user has connected regardless of what the startup catalog showed
+
+NEVER guess or shorten slugs - always use the exact full slug from the catalog or from a recent refresh result
+NEVER call listComposioTools or getToolSchema
 
 HOW TO USE EXTENDED TOOLS
-Use composioBatchExecute with exact slugs from the catalog at the end of these instructions
+Use composioBatchExecute with exact slugs from the catalog at the end of these instructions or from a refresh result
 Always use the EXACT full slug as listed never shorten or guess
 For single tools that you need data back from use composioExecute instead
 If tools are independent batch them in one composioBatchExecute call they run in parallel
@@ -290,6 +308,22 @@ def prewarm(proc: JobProcess):
     catalog_thread.start()
     proc.userdata["_composio_thread"] = catalog_thread
     logger.info("Composio catalog build started in background thread")
+
+    # Ensure memory files (MEMORY.md, USER.md) exist on the volume
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            _session_writer.ensure_memory_files(_mem_dir)
+        except Exception as _e:
+            logger.warning("[Memory] File init failed: %s", _e)
+
+    # Initialize persistent memory store (non-blocking — failure is tolerated)
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _mem_store.init()
+        except Exception as _e:
+            logger.warning("[Memory] Store init failed in prewarm: %s", _e)
 
 
 async def entrypoint(ctx: JobContext):
@@ -455,6 +489,19 @@ async def entrypoint(ctx: JobContext):
     )
     active_prompt += time_context
 
+    # Load cross-session memory context and inject into instructions
+    _memory_context = ""
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            _memory_context = _session_writer.load_memory_context(_mem_dir, max_tokens=500)
+        except Exception as _e:
+            logger.warning("[Memory] Context load failed: %s", _e)
+
+    if _memory_context:
+        active_prompt = active_prompt + "\n\n## Cross-Session Memory\n" + _memory_context
+
     # Define agent with all tools (no MCP servers)
     agent = Agent(
         instructions=active_prompt,
@@ -556,6 +603,22 @@ async def entrypoint(ctx: JobContext):
 
         # Check if this is an assistant (agent) message
         role = getattr(item, 'role', None)
+
+        # Auto-capture memory triggers from user utterances
+        if _MEM_AVAILABLE and _mem_capture is not None:
+            try:
+                # Only capture from user messages, not agent responses
+                if hasattr(item, 'role') and str(getattr(item, 'role', '')).lower() == 'user':
+                    _text = ""
+                    if hasattr(item, 'text_content'):
+                        _text = item.text_content or ""
+                    elif hasattr(item, 'content') and isinstance(item.content, str):
+                        _text = item.content
+                    if _text:
+                        _mem_capture.detect_and_queue(_text)
+            except Exception as _e:
+                logger.debug("[Memory] Capture check failed: %s", _e)
+
         if role != 'assistant':
             return  # Only publish agent responses, user transcripts handled separately
 
@@ -1172,6 +1235,38 @@ async def entrypoint(ctx: JobContext):
 
     # Clean up session memory when session ends
     session_id = ctx.room.name or "livekit-agent"
+
+    # Flush session to persistent memory (8s timeout — must not block disconnect)
+    if _MEM_AVAILABLE and _session_writer is not None and _mem_capture is not None:
+        try:
+            # Build a brief session summary from STM stats
+            from .tools.short_term_memory import get_session_stats
+            _stats = get_session_stats(session_id)
+            _summary = (
+                f"Voice session ended. "
+                f"Tools used: {_stats.get('total_entries', 0)} calls across "
+                f"{len(_stats.get('categories', {}))} categories."
+            )
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            # Flush auto-captured facts to SQLite
+            _pending = _mem_capture.get_pending_facts()
+            _fact_texts = [f for f, _ in _pending]
+            # Write session log (with 8s timeout)
+            await asyncio.wait_for(
+                _session_writer.flush_session(_mem_dir, _summary, _fact_texts),
+                timeout=8.0,
+            )
+            # Flush facts to store
+            if _mem_store is not None and _pending:
+                await _mem_capture.flush_to_store(_mem_store)
+        except asyncio.TimeoutError:
+            logger.warning("[Memory] Session flush timed out — session log skipped")
+        except Exception as _e:
+            logger.error("[Memory] Session flush failed: %s", _e)
+        finally:
+            _mem_capture.reset_session()
+
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
 
