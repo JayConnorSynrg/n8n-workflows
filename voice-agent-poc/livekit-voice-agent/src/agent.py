@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import Optional
 
 from livekit import rtc
@@ -65,6 +66,7 @@ from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
 from .utils.async_tool_worker import AsyncToolWorker, set_worker
 from .utils.short_term_memory import clear_session as clear_session_memory
+from .utils.task_tracker import TaskTracker
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -332,6 +334,16 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Agent starting for room: {ctx.room.name}")
     tracker = LatencyTracker()
 
+    # Heartbeat state — shared across event handlers and the heartbeat coroutine.
+    # Updated by: on_user_input_transcribed, on_conversation_item_added, on_function_tools_executed.
+    _hb: dict = {
+        "running": True,
+        "last_user_input_ts": 0.0,
+        "last_agent_response_ts": 0.0,
+        "last_tool_ts": 0.0,
+        "tool_calls_in_progress": 0,
+    }
+
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
         vad = ctx.proc.userdata["vad"]
@@ -507,6 +519,9 @@ async def entrypoint(ctx: JobContext):
         tools=all_tools,
     )
 
+    # In-session task tracker — monitors tool execution progress for heartbeat continuation
+    _task_tracker = TaskTracker(stall_threshold_seconds=6.0, max_continuations_per_objective=3)
+
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
@@ -551,6 +566,11 @@ async def entrypoint(ctx: JobContext):
         # Safe text handling for logging
         text_preview = text[:100] if text and len(text) > 100 else (text or "(empty)")
         logger.info(f"User said (final): {text_preview}")
+
+        # Track user objective for heartbeat-driven continuation
+        if text:
+            _task_tracker.record_user_message(text)
+
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
             json.dumps({
@@ -569,6 +589,7 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
+            _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}',
                 log_type="agent.state"
@@ -579,11 +600,13 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
         elif "listening" in state_str:
+            _task_tracker.record_agent_idle()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"listening"}',
                 log_type="agent.state"
             ))
         elif "idle" in state_str:
+            _task_tracker.record_agent_idle()
             total = tracker.end("total_latency")
             if total:
                 logger.info(f"Total latency: {total:.0f}ms")
@@ -652,6 +675,9 @@ async def entrypoint(ctx: JobContext):
     def on_function_tools_executed(ev):
         """Called when tools finish executing."""
         logger.info(f"Tools executed: {ev}")
+        # Notify task tracker that tool work completed — heartbeat uses this
+        # to determine whether a multi-step task was in progress
+        _task_tracker.record_tool_call_completed()
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev):
@@ -1123,6 +1149,27 @@ async def entrypoint(ctx: JobContext):
             pass
         raise
 
+    # ── New user detection ────────────────────────────────────────────────────
+    # Check SQLite memory store: if empty → new user, log and seed first entry.
+    # If returning → memory context is already injected into the system prompt above.
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _existing_memories = await asyncio.to_thread(_mem_store.search, "user session", k=1)
+            _is_new_user = len(_existing_memories) == 0
+            if _is_new_user:
+                logger.info("[Heartbeat] New user detected — no prior memories in store")
+                await asyncio.to_thread(
+                    _mem_store.store,
+                    "AIO session started for new user",
+                    category="fact",
+                    source="session",
+                )
+                logger.info("[Heartbeat] New user entry recorded in memory store")
+            else:
+                logger.info(f"[Heartbeat] Returning user — {len(_existing_memories)} prior memory entries found")
+        except Exception as _nud_err:
+            logger.debug(f"[Heartbeat] New user detection failed (non-critical): {_nud_err}")
+
     # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
     try:
@@ -1184,6 +1231,64 @@ async def entrypoint(ctx: JobContext):
 
     gamma_monitor_task = asyncio.create_task(_gamma_notification_monitor(session))
     logger.info("Gamma notification monitor started")
+
+    # ── In-session heartbeat monitor ─────────────────────────────────────────
+    # Runs every 5 seconds SILENTLY. Does not speak to the user unless a multi-step
+    # tool task has stalled (no activity for 6+ seconds while objective is incomplete).
+    # When stalled, injects a continuation instruction to resume the task.
+    async def _heartbeat_monitor(session_ref, task_tracker_ref):
+        """Background heartbeat: monitors tool execution and injects continuations.
+
+        Design:
+        - Runs every HEARTBEAT_INTERVAL seconds in the background
+        - Checks TaskTracker.should_inject_continuation() — fires only when:
+            * An active objective exists (user issued a task)
+            * Tools were called (multi-step task, not idle chat)
+            * Agent has been idle for 6+ seconds (stalled)
+            * Max continuations (3) not exceeded
+        - Uses session.generate_reply(instructions=...) to resume the LLM without
+          injecting a raw say() call — this goes through the LLM for intelligent continuation
+        - Falls back to session.say() if generate_reply is unavailable
+        """
+        HEARTBEAT_INTERVAL = 5.0  # Assess every 5 seconds
+        logger.info("[Heartbeat] Background monitor started (interval=5s, stall=6s)")
+        while True:
+            try:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+                if not task_tracker_ref.should_inject_continuation():
+                    continue  # Nothing to do — stay silent
+
+                prompt = task_tracker_ref.get_continuation_prompt()
+                logger.info(f"[Heartbeat] Stalled task detected — injecting continuation")
+
+                try:
+                    # generate_reply makes the LLM produce a new turn using the
+                    # continuation instructions — intelligent, context-aware resumption
+                    await session_ref.generate_reply(instructions=prompt)
+                    logger.info("[Heartbeat] Continuation injected via generate_reply")
+                except AttributeError:
+                    # generate_reply not available in this SDK build — use say() fallback
+                    logger.warning("[Heartbeat] generate_reply unavailable, using say() fallback")
+                    try:
+                        await session_ref.say(
+                            "Let me continue working on that for you",
+                            allow_interruptions=True
+                        )
+                    except Exception as say_err:
+                        logger.error(f"[Heartbeat] say() fallback failed: {say_err}")
+                except Exception as gen_err:
+                    logger.error(f"[Heartbeat] generate_reply failed: {gen_err}")
+
+            except asyncio.CancelledError:
+                logger.info("[Heartbeat] Monitor cancelled — session ending")
+                break
+            except Exception as e:
+                logger.error(f"[Heartbeat] Monitor error: {e}")
+                await asyncio.sleep(1.0)  # Brief pause before continuing loop
+
+    _heartbeat_task = asyncio.create_task(_heartbeat_monitor(session, _task_tracker))
+    logger.info("[Heartbeat] In-session monitor started (5s interval, 6s stall threshold)")
 
     # CRITICAL: Keep the agent alive until the room closes
     # Without this, the entrypoint returns and the agent disconnects!
