@@ -9,6 +9,8 @@ Design principles:
 - Zero latency impact on normal conversation flow
 - Self-limiting: max 3 continuations per objective to prevent infinite loops
 - Stall detection only fires when tools were involved (not idle chat)
+- Silent after task completion: heartbeat NEVER fires after the agent has
+  already responded to a tool result — only fires on genuine unaddressed stalls
 """
 import time
 import threading
@@ -59,6 +61,10 @@ class TaskTracker:
         # Tool call tracking
         self._tool_calls_pending: int = 0
         self._total_tool_calls_for_objective: int = 0
+        # True only between a tool completing and the agent responding.
+        # The heartbeat fires ONLY in this window — never after the agent has
+        # already addressed the tool result (which would be post-task noise).
+        self._tool_completed_since_last_response: bool = False
 
         # Agent state
         self._agent_is_responding: bool = False
@@ -88,6 +94,7 @@ class TaskTracker:
                 self._current_objective = text[:300]
                 self._objective_completed = False
                 self._total_tool_calls_for_objective = 0
+                self._tool_completed_since_last_response = False
                 logger.debug(
                     f"[Heartbeat] Objective captured: '{text[:60]}...'"
                     if len(text) > 60 else f"[Heartbeat] Objective captured: '{text}'"
@@ -114,6 +121,7 @@ class TaskTracker:
         with self._lock:
             self._tool_calls_pending = max(0, self._tool_calls_pending - 1)
             self._total_tool_calls_for_objective += 1
+            self._tool_completed_since_last_response = True  # arm the stall detector
             self._last_activity_at = time.monotonic()
             logger.debug(
                 f"[Heartbeat] Tool completed "
@@ -121,9 +129,14 @@ class TaskTracker:
             )
 
     def record_agent_responding(self) -> None:
-        """Called when agent starts speaking (thinking→speaking transition)."""
+        """Called when agent starts speaking (thinking→speaking transition).
+
+        Disarms the stall detector — the agent has addressed the tool result,
+        so the heartbeat must not fire again until another tool completes.
+        """
         with self._lock:
             self._agent_is_responding = True
+            self._tool_completed_since_last_response = False  # disarm stall detector
             self._last_activity_at = time.monotonic()
 
     def record_agent_idle(self) -> None:
@@ -138,6 +151,7 @@ class TaskTracker:
             self._objective_completed = True
             self._continuation_count = 0
             self._tool_calls_pending = 0
+            self._tool_completed_since_last_response = False
             logger.debug("[Heartbeat] Objective marked complete")
 
     # ── Heartbeat decision methods ────────────────────────────────────────────
@@ -148,9 +162,15 @@ class TaskTracker:
         Fires only when ALL of:
         - Active incomplete objective exists
         - Agent is NOT currently responding to the user
+        - A tool completed but the agent has NOT yet responded to it (stalled)
         - No activity for stall_threshold_seconds
         - At least one tool call was made for this objective (multi-step task)
         - Max continuations not exceeded
+
+        KEY INVARIANT: The heartbeat is SILENT after the agent responds to a tool.
+        `_tool_completed_since_last_response` is armed by tool completion and
+        disarmed when the agent starts responding — so post-task idle chat never
+        triggers an injection.
         """
         with self._lock:
             # No active task
@@ -170,6 +190,12 @@ class TaskTracker:
 
             # Not a tool-using task — skip idle chat
             if self._total_tool_calls_for_objective == 0:
+                return False
+
+            # CRITICAL SILENCE GUARD: Only fire if the agent has NOT yet responded
+            # to the most recent tool result. Once the agent speaks after a tool,
+            # this flag is cleared — preventing spurious post-task continuations.
+            if not self._tool_completed_since_last_response:
                 return False
 
             # Check idle time
