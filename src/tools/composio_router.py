@@ -651,17 +651,27 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
             return val[:500]
 
     # 3. List of items (search results, file lists, messages)
-    for key in ("items", "results", "messages", "files", "values", "records"):
+    # "value" is the OData standard key used by ALL Microsoft APIs (OneDrive, Teams, Excel, Calendar)
+    for key in ("value", "items", "results", "messages", "files", "values", "records"):
         items = data.get(key, inner.get(key, None) if isinstance(inner, dict) else None)
         if isinstance(items, list):
             count = len(items)
             if count == 0:
                 return f"No results found for {tool_display}"
             # Try to extract names/titles from first few items
+            # Includes OData/Microsoft-specific fields: displayName (drives/users),
+            # name (OneDrive items), subject (emails/events), title (documents)
             names = []
             for item in items[:5]:
                 if isinstance(item, dict):
-                    name = item.get("name", item.get("title", item.get("subject", "")))
+                    name = (
+                        item.get("name")
+                        or item.get("displayName")
+                        or item.get("title")
+                        or item.get("subject")
+                        or item.get("fileName")
+                        or ""
+                    )
                     if name:
                         names.append(str(name))
             if names:
@@ -963,6 +973,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             is_param_error = any(s in error_lower for s in [
                 "missing", "invalid request data", "required field",
                 "invalid value", "validation", "expected",
+                "must be provided", "are required", "is required",
+                "parameter", "argument",
             ])
             is_auth_error = any(s in error_lower for s in [
                 "unauthorized", "401", "token expired", "invalid token",
