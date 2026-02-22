@@ -143,6 +143,11 @@ async def _start_gamma_generation(
                         "tone": tone,
                         "language": "en",
                     },
+                    "imageOptions": {
+                        "source": "aiGenerated",
+                        "style": "minimal, black and white, line art",
+                        "model": "flux-1-pro",
+                    },
                 },
                 user_id=user_id,
                 dangerously_skip_version_check=True,
