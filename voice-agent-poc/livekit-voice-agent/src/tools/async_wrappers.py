@@ -484,21 +484,40 @@ async def manage_connections_async(
 
 
 # =============================================================================
-# COMPOSIO - TOOL SCHEMA LOOKUP
+# COMPOSIO - TOOL CATALOG & SCHEMA LOOKUP
 # =============================================================================
 
-async def get_tool_schema_async(tool_slug: str) -> str:
-    """Look up parameter schema for a Composio tool slug (internal use only — not exposed as agent tool)."""
-    from .composio_router import get_tool_schema
-    return await get_tool_schema(tool_slug)
-
-
+@llm.function_tool(
+    name="listComposioTools",
+    description=(
+        "List exact tool slugs available for connected services grouped by service. "
+        "Call this before composioBatchExecute when unsure which slug to use. "
+        "Pass service to filter by one service: microsoft_teams, gmail, one_drive, google_sheets, github, etc. "
+        "Leave service empty for the full catalog. "
+        "Always use the exact full slug returned here — never shorten or guess."
+    ),
+)
 async def list_composio_tools_async(service: str = "") -> str:
-    """List available tool slugs from Composio catalog (internal use only — not exposed as agent tool)."""
+    """List available tool slugs from Composio catalog grouped by service."""
     from .composio_router import ensure_slug_index, get_tool_catalog
 
     await ensure_slug_index()
     return get_tool_catalog(service_filter=service if service else None)
+
+
+@llm.function_tool(
+    name="getComposioToolSchema",
+    description=(
+        "Get the required and optional parameters for a specific Composio tool slug. "
+        "Call this when unsure what arguments to pass to a tool before executing it. "
+        "Returns a list of parameters with types and descriptions so you can build the correct arguments_json. "
+        "Example: getComposioToolSchema(tool_slug='MICROSOFT_TEAMS_SEND_MESSAGE')"
+    ),
+)
+async def get_tool_schema_async(tool_slug: str) -> str:
+    """Look up parameter schema for a Composio tool slug."""
+    from .composio_router import get_tool_schema
+    return await get_tool_schema(tool_slug)
 
 
 # =============================================================================
@@ -632,6 +651,8 @@ ASYNC_TOOLS = [
     search_contacts_async,
     # Composio (SDK execution — catalog pre-loaded into system prompt)
     manage_connections_async,      # CONNECTION MGMT: status + connect new services via email
+    list_composio_tools_async,     # CATALOG: browse exact slugs before executing (no guessing)
+    get_tool_schema_async,         # SCHEMA: look up required params before building arguments
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step
     # Gamma (async background generation with proactive session notification)
