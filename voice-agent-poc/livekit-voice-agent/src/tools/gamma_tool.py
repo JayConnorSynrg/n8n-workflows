@@ -1,6 +1,17 @@
 """
-Async Gamma presentation tool for AIO Voice Agent.
-Generation runs in background; agent is notified via notification queue when done.
+Async Gamma content generation tools for AIO Voice Agent.
+
+Supports three content types via the same GAMMA_GENERATE_GAMMA API:
+  - generatePresentation: slide decks
+  - generateDocument:     continuous pages / reports
+  - generateWebpage:      web pages / landing pages
+
+Pattern:
+  1. Tool returns immediately with ETA (~45s)
+  2. Background poller checks GAMMA_GET_GAMMA_FILE_URLS every 5s
+  3. On completion, message is put into _notification_queue
+  4. agent.py _gamma_notification_monitor calls session.say() proactively
+  5. Agent offers to email the Gamma link
 """
 import asyncio
 import logging
@@ -13,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level notification queue — agent.py monitors this and calls session.say()
 _notification_queue: asyncio.Queue = asyncio.Queue()
+
 
 def get_notification_queue() -> asyncio.Queue:
     return _notification_queue
@@ -27,10 +39,12 @@ async def _poll_gamma_completion(
     generation_id: str,
     topic: str,
     job_id: str,
+    content_type: str = "presentation",
 ) -> None:
     """
     Background coroutine: polls GAMMA_GET_GAMMA_FILE_URLS every 5s.
     On completion, puts notification into _notification_queue.
+    Works for all content types (presentation, document, webpage).
     """
     from ..config import get_settings
     from . import composio_router as _router
@@ -64,7 +78,7 @@ async def _poll_gamma_completion(
             if status == "completed":
                 gamma_url = data.get("gammaUrl", "")
                 message = (
-                    f"Your presentation on {topic} is ready. "
+                    f"Your {content_type} on {topic} is ready. "
                     f"You can find it at gamma dot app. "
                     f"Would you like me to email you the link?"
                 )
@@ -73,6 +87,7 @@ async def _poll_gamma_completion(
                     "gamma_url": gamma_url,
                     "topic": topic,
                     "job_id": job_id,
+                    "content_type": content_type,
                 })
                 return
 
@@ -82,43 +97,36 @@ async def _poll_gamma_completion(
     # Timeout after max polls
     await _notification_queue.put({
         "message": (
-            f"Your presentation on {topic} is taking longer than expected. "
+            f"Your {content_type} on {topic} is taking longer than expected. "
             f"Please check your Gamma workspace directly at gamma dot app."
         ),
         "gamma_url": None,
         "topic": topic,
         "job_id": job_id,
+        "content_type": content_type,
     })
 
 
-@llm.function_tool(
-    name="generatePresentation",
-    description=(
-        "Generate a Gamma AI presentation, document, or slide deck on any topic. "
-        "Runs in the background — agent notifies user when the presentation is ready. "
-        "Use when user asks to create, build, or generate a presentation, deck, or document."
-    ),
-)
-async def generate_presentation_async(
+async def _start_gamma_generation(
     topic: str,
-    slide_count: Optional[int] = 10,
-    tone: Optional[str] = "professional",
-    format: Optional[str] = "presentation",
+    format: str,
+    slide_count: int,
+    tone: str,
+    content_type: str,
+    job_id: str,
 ) -> str:
-    """
-    Start async Gamma presentation generation.
-    Returns immediately with ETA; background task polls and notifies via queue.
+    """Shared helper: start Gamma generation and spawn background poller.
+
+    Used by all three generation tools. Returns immediately with ETA message.
+    Background task polls and notifies via _notification_queue when done.
     """
     from ..config import get_settings
     from . import composio_router as _router
 
-    job_id = str(uuid.uuid4())[:8]
-    logger.info(f"Starting Gamma generation [{job_id}] topic={topic!r}")
-
     try:
         settings = get_settings()
         if not settings.composio_api_key or not settings.composio_user_id:
-            return "Composio is not configured so I cannot generate presentations right now."
+            return f"Composio is not configured so I cannot generate {content_type}s right now."
 
         client = _router._get_client(settings)
         user_id = settings.composio_user_id.strip()
@@ -145,8 +153,8 @@ async def generate_presentation_async(
             error = result.get("error", "unknown error")
             logger.error(f"Gamma generate failed [{job_id}]: {error}")
             return (
-                "I had trouble starting the presentation. "
-                "Please make sure Gamma is connected and try again."
+                f"I had trouble starting the {content_type}. "
+                f"Please make sure Gamma is connected and try again."
             )
 
         data = result.get("data", {})
@@ -156,14 +164,14 @@ async def generate_presentation_async(
         if status == "completed" and data.get("gammaUrl"):
             # Rare: instant completion
             return (
-                f"Your presentation on {topic} is already ready. "
+                f"Your {content_type} on {topic} is already ready. "
                 f"You can view it at gamma dot app. "
                 f"Would you like me to email you the link?"
             )
 
         if not generation_id:
             logger.error(f"Gamma returned no generationId [{job_id}]: {data}")
-            return "I could not start the presentation. Please try again."
+            return f"I could not start the {content_type}. Please try again."
 
         # Spawn background poller — asyncio.create_task keeps it alive independently
         asyncio.create_task(
@@ -171,11 +179,12 @@ async def generate_presentation_async(
                 generation_id=generation_id,
                 topic=topic,
                 job_id=job_id,
+                content_type=content_type,
             )
         )
 
         return (
-            f"Got it. I am generating your presentation on {topic} right now. "
+            f"Got it. I am generating your {content_type} on {topic} right now. "
             f"It usually takes about {GAMMA_ETA_SECONDS} seconds. "
             f"I will let you know as soon as it is ready."
         )
@@ -183,6 +192,94 @@ async def generate_presentation_async(
     except Exception as e:
         logger.error(f"Gamma generation failed [{job_id}]: {e}")
         return (
-            "I had trouble starting the presentation. "
-            "Please make sure Gamma is connected and try again."
+            f"I had trouble starting the {content_type}. "
+            f"Please make sure Gamma is connected and try again."
         )
+
+
+# =============================================================================
+# PUBLIC TOOL: generatePresentation
+# =============================================================================
+
+@llm.function_tool(
+    name="generatePresentation",
+    description=(
+        "Generate a Gamma AI slide deck or presentation on any topic. "
+        "Runs in the background — agent notifies user when the presentation is ready. "
+        "Use when user asks to create, build, or generate a presentation or slide deck."
+    ),
+)
+async def generate_presentation_async(
+    topic: str,
+    slide_count: Optional[int] = 10,
+    tone: Optional[str] = "professional",
+) -> str:
+    """Start async Gamma presentation generation (format=presentation)."""
+    job_id = str(uuid.uuid4())[:8]
+    logger.info(f"Starting Gamma presentation [{job_id}] topic={topic!r}")
+    return await _start_gamma_generation(
+        topic=topic,
+        format="presentation",
+        slide_count=slide_count or 10,
+        tone=tone or "professional",
+        content_type="presentation",
+        job_id=job_id,
+    )
+
+
+# =============================================================================
+# PUBLIC TOOL: generateDocument
+# =============================================================================
+
+@llm.function_tool(
+    name="generateDocument",
+    description=(
+        "Generate a Gamma AI document or report on any topic. "
+        "Runs in the background — agent notifies user when the document is ready. "
+        "Use when user asks to create, write, or generate a document, report, or article."
+    ),
+)
+async def generate_document_async(
+    topic: str,
+    tone: Optional[str] = "professional",
+) -> str:
+    """Start async Gamma document generation (format=document)."""
+    job_id = str(uuid.uuid4())[:8]
+    logger.info(f"Starting Gamma document [{job_id}] topic={topic!r}")
+    return await _start_gamma_generation(
+        topic=topic,
+        format="document",
+        slide_count=10,
+        tone=tone or "professional",
+        content_type="document",
+        job_id=job_id,
+    )
+
+
+# =============================================================================
+# PUBLIC TOOL: generateWebpage
+# =============================================================================
+
+@llm.function_tool(
+    name="generateWebpage",
+    description=(
+        "Generate a Gamma AI webpage or landing page on any topic. "
+        "Runs in the background — agent notifies user when the webpage is ready. "
+        "Use when user asks to create, build, or generate a webpage, landing page, or website."
+    ),
+)
+async def generate_webpage_async(
+    topic: str,
+    tone: Optional[str] = "professional",
+) -> str:
+    """Start async Gamma webpage generation (format=webpage)."""
+    job_id = str(uuid.uuid4())[:8]
+    logger.info(f"Starting Gamma webpage [{job_id}] topic={topic!r}")
+    return await _start_gamma_generation(
+        topic=topic,
+        format="webpage",
+        slide_count=10,
+        tone=tone or "professional",
+        content_type="webpage",
+        job_id=job_id,
+    )
