@@ -32,21 +32,14 @@ COPY --from=builder /app/models /app/models
 # Copy application code
 COPY src/ ./src/
 
-# Create memory volume directory and set permissions before switching to non-root user
-RUN mkdir -p /app/data/memory/sessions && chmod -R 755 /app/data
-
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash agent
-RUN chown -R agent:agent /app/data
-USER agent
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
-# Entry point
+# Entry point — shell wrapper ensures memory volume directory exists at runtime
+# (Docker volume mounts replace build-time directories, so mkdir must run at startup)
 ENV PYTHONUNBUFFERED=1
 ENV SENTENCE_TRANSFORMERS_HOME=/app/models
 ENV AIO_MEMORY_DIR=/app/data/memory
 ENV AIO_MODELS_DIR=/app/models
-CMD ["python", "-m", "src.agent", "start"]
+CMD ["sh", "-c", "mkdir -p /app/data/memory/sessions && exec python -m src.agent start"]
