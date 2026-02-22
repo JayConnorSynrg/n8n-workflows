@@ -122,14 +122,13 @@ When a user says they connected a new service always call manageConnections with
 
 EXTENDED TOOLS - Connected Services via Composio
 For services beyond core tools you have direct access to connected external services
-Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG below
+Your available services and exact tool slugs are listed in the CONNECTED SERVICES CATALOG at the end of these instructions
 
-{COMPOSIO_CATALOG}
-
-NEVER call listComposioTools or getToolSchema - all available tools are listed in the catalog above use exact slugs from the catalog only
+NEVER guess or shorten slugs - always use the exact full slug from the catalog at the end
+NEVER call listComposioTools or getToolSchema - all available tools are in the catalog below
 
 HOW TO USE EXTENDED TOOLS
-Use composioBatchExecute with exact slugs from the catalog above
+Use composioBatchExecute with exact slugs from the catalog at the end of these instructions
 Always use the EXACT full slug as listed never shorten or guess
 For single tools that you need data back from use composioExecute instead
 If tools are independent batch them in one composioBatchExecute call they run in parallel
@@ -168,6 +167,20 @@ If the user spelled out an email earlier and later says send that to them you al
 If the user just looked up a candidate and says email those results you know which candidate and which results
 Use your conversation context to carry forward details between tool calls
 Keep a mental map of the active request including who what where and which tools are likely needed next
+
+GOAL TRACKING - Plan every multi-step task before starting
+Before calling the first tool for any multi-step request form a complete internal task plan
+Name every step you need to complete in a single brief spoken sentence then execute ALL of them
+Do not stop after one step and wait for the user unless they must make a decision
+If step 2 depends on the result from step 1 use that result immediately and call step 2 without speaking
+Only deliver the final summary after every step in the plan is complete
+Example request: Find the budget file and email it to Jay
+  Correct: say "Searching Drive and emailing it to Jay" then call searchDrive then call sendEmail then say "Done sent the budget to Jay"
+  Wrong: call searchDrive then say "Found it here are your files" then stop and wait for the user
+Example request: List my Teams channels and send a message to General
+  Correct: say "Checking Teams and sending that message" then call composioBatchExecute with step 1 list channels step 2 send message then say "Done message sent to General"
+  Wrong: call composioExecute to list channels then stop and ask which channel to use when you already know
+Track the goal from the first word to the final confirmation
 
 EXECUTION PROTOCOL - Confirm then complete silently
 Before calling any tools give ONE brief spoken confirmation of what you are about to do (one sentence, e.g. "On it pulling up your calendar" or "Got it sending that email now")
@@ -233,7 +246,13 @@ WHAT NEVER TO DO
 TONE
 Direct efficient professional
 Occasional dry wit when contextually relevant
-Executive-grade communication"""
+Executive-grade communication
+
+CONNECTED SERVICES CATALOG
+Reference this section to find exact tool slugs for composioBatchExecute and composioExecute
+Always use the EXACT full slug as listed below never shorten or guess
+
+{COMPOSIO_CATALOG}"""
 
 
 def prewarm(proc: JobProcess):
@@ -322,6 +341,7 @@ async def entrypoint(ctx: JobContext):
             api_key=settings.fireworks_api_key,
             temperature=settings.fireworks_temperature,
             parallel_tool_calls=True,
+            max_tokens=settings.fireworks_max_tokens,
         )
 
     def init_tts():
@@ -381,7 +401,7 @@ async def entrypoint(ctx: JobContext):
             logger.info(f"🎤 VAD receiving audio: {vad_frame_count['count']} frames total")
 
     # Set global room reference for tool event publishing
-    from .utils.room_publisher import set_room as _set_room
+    from .utils.room_publisher import set_room as _set_room, publish_error as _publish_error
     _set_room(ctx.room)
     logger.info("Room publisher initialized for tool lifecycle events")
 
@@ -1035,6 +1055,10 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Audio input configured: sample_rate=16000, num_channels=1")
     except Exception as e:
         logger.error(f"CRITICAL: session.start() failed: {e}")
+        try:
+            await _publish_error(str(e)[:200], code="agent_error", severity="high")
+        except Exception:  # nosec B110 - error publishing must not block error handling
+            pass
         raise
 
     # Generate AIO opening greeting (no punctuation - voice output)
@@ -1047,26 +1071,54 @@ async def entrypoint(ctx: JobContext):
         logger.info("AIO greeting sent successfully")
     except Exception as e:
         logger.error(f"CRITICAL: session.say() failed: {e}")
+        try:
+            await _publish_error(str(e)[:200], code="agent_error", severity="high")
+        except Exception:  # nosec B110 - error publishing must not block error handling
+            pass
 
     # Start Gamma notification monitor — watches the module-level queue and proactively
     # speaks completion messages when background presentation generation finishes.
     # Stored in a variable to prevent garbage collection; cancelled naturally when the
     # enclosing coroutine (entrypoint) exits and the event loop tears down.
     async def _gamma_notification_monitor(session_ref):
-        """Monitor gamma notification queue and proactively speak results."""
+        """Monitor gamma notification queue and proactively speak results.
+
+        This runs as a persistent background task for the duration of the session.
+        When Gamma generation completes (~45s), the background poller puts a
+        notification into the queue and this monitor speaks it via session.say().
+        """
         queue = get_notification_queue()
         while True:
             try:
                 notification = await queue.get()
                 message = notification.get("message", "")
+                job_id = notification.get("job_id", "?")
+                content_type = notification.get("content_type", "content")
+                gamma_url = notification.get("gamma_url")
+
                 if message:
-                    logger.info(f"Gamma monitor: speaking notification for job={notification.get('job_id', '?')}")
-                    await session_ref.say(message, allow_interruptions=True)
+                    logger.info(f"Gamma monitor: speaking notification job={job_id} content_type={content_type} has_url={bool(gamma_url)}")
+                    try:
+                        await session_ref.say(message, allow_interruptions=True)
+                        logger.info(f"Gamma monitor: notification delivered job={job_id}")
+                    except Exception as say_err:
+                        logger.error(f"Gamma monitor: session.say() failed job={job_id}: {say_err}")
+                        # Retry once after brief delay (session may be transitioning)
+                        await asyncio.sleep(1.0)
+                        try:
+                            await session_ref.say(message, allow_interruptions=True)
+                            logger.info(f"Gamma monitor: retry notification delivered job={job_id}")
+                        except Exception as retry_err:
+                            logger.error(f"Gamma monitor: retry also failed job={job_id}: {retry_err}")
+                else:
+                    logger.warning(f"Gamma monitor: empty message in notification job={job_id}")
+
             except asyncio.CancelledError:
                 logger.info("Gamma notification monitor cancelled")
                 break
             except Exception as e:
                 logger.error(f"Gamma notification monitor error: {e}")
+                await asyncio.sleep(0.5)  # Brief pause before continuing loop
 
     gamma_monitor_task = asyncio.create_task(_gamma_notification_monitor(session))
     logger.info("Gamma notification monitor started")

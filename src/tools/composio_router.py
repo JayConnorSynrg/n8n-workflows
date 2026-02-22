@@ -277,7 +277,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
         return "Tool catalog not ready yet. Call composioExecute or composioBatchExecute first to trigger index build."
 
     if not _slugs_by_service:
-        return "No tools available. Check Composio configuration and connected accounts."
+        return "No connected services available. Use manageConnections with action status to check what is connected."
 
     def _format_slug(slug: str) -> str:
         """Format a slug with inline required params hint."""
@@ -314,7 +314,7 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     _EXCLUDED_SERVICES = {"composio", "composio_search"}
     action_slugs = {k: v for k, v in _slugs_by_service.items() if k not in _EXCLUDED_SERVICES}
     total = sum(len(v) for v in action_slugs.values())
-    lines = [f"COMPOSIO TOOL CATALOG — {total} action tools"]
+    lines = [f"CONNECTED SERVICES CATALOG — {total} action tools"]
     lines.append("Each tool shows required parameters in parentheses. Pass these as arguments_json keys.")
     for svc, slugs in sorted(action_slugs.items()):
         lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
@@ -700,7 +700,7 @@ async def refresh_slug_index() -> str:
     from ..config import get_settings
     settings = get_settings()
     if not settings.composio_api_key or not settings.composio_user_id:
-        return "Composio not configured"
+        return "Service connections are not configured on this instance"
 
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
@@ -720,7 +720,7 @@ async def get_tool_schema(tool_slug: str) -> str:
     from ..config import get_settings
     settings = get_settings()
     if not settings.composio_api_key:
-        return "Composio not configured"
+        return "Tool schema lookup is not available"
 
     client = _get_client(settings)
     slug_upper = tool_slug.upper().strip()
@@ -831,12 +831,12 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         )
 
     if not settings.composio_api_key or not settings.composio_user_id:
-        return "I was not able to run this tool because Composio is not configured on this instance"
+        return "That connected service is not available on this instance"
 
     try:
         client = _get_client(settings)
     except ImportError:
-        return "I was not able to run this tool because the Composio package is not installed"
+        return "That connected service is not available on this instance"
 
     # Build slug index on first call (discovers connected accounts + loads tool slugs)
     if not _slug_index_built:
@@ -956,9 +956,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
             elif is_auth_error:
                 # OAuth token expired — the connection exists but the token underneath
-                # has expired. "ACTIVE" in Composio only means the record exists,
-                # not that the token is currently valid.
-                # Mark the entire service as auth-failed so other tools don't retry.
+                # has expired. Mark the entire service as auth-failed so other tools don't retry.
                 service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
                 _service_auth_failed[service_key] = True
                 _failed_slugs[slug_key] = _CB_MAX_FAILURES  # trip circuit breaker
@@ -967,11 +965,10 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     f"[TOOL_CALL] Composio AUTH EXPIRED: {resolved_slug} service={service_key} error={error_str!r}"
                 )
                 return (
-                    f"The {service_display} connection needs to be re-authenticated. "
-                    f"The OAuth token has expired. "
-                    f"Tell the user their {service_display} access needs to be reconnected — "
-                    f"they can do this at composio.dev or you can say 'reconnect {service_display}' "
-                    f"to get a new authorization link. Do not retry {service_display} tools until reconnected."
+                    f"The {service_display} connection needs to be re-authorized. "
+                    f"Tell the user their {service_display} access has expired and they need to reconnect it. "
+                    f"You can say 'reconnect {service_display}' to send them a new authorization link via email. "
+                    f"Do not retry {service_display} tools until reconnected."
                 )
 
             else:
@@ -1078,7 +1075,7 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     from ..config import get_settings
     settings = get_settings()
     if not settings.composio_api_key or not settings.composio_user_id:
-        return "Composio is not configured on this instance", ""
+        return "Service connections are not configured on this instance", ""
 
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()

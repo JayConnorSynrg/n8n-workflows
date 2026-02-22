@@ -126,7 +126,7 @@ async def _start_gamma_generation(
     try:
         settings = get_settings()
         if not settings.composio_api_key or not settings.composio_user_id:
-            return f"Composio is not configured so I cannot generate {content_type}s right now."
+            return f"Content generation is not available right now"
 
         client = _router._get_client(settings)
         user_id = settings.composio_user_id.strip()

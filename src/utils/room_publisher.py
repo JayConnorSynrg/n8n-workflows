@@ -118,6 +118,18 @@ async def publish_tool_error(call_id: str, error: str = "") -> None:
 # Composio-specific events (richer detail for extended tool oversight)
 # =============================================================================
 
+async def publish_error(message: str, code: str = None, severity: str = "medium") -> None:
+    """Publish error event to UI data channel."""
+    payload = {
+        "type": "error",
+        "message": message,
+        "severity": severity,
+    }
+    if code:
+        payload["code"] = code
+    await _publish(payload)
+
+
 async def publish_composio_event(
     event_type: str,
     tool_slug: str,
