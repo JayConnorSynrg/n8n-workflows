@@ -7,7 +7,7 @@ the agent is genuinely idle with an incomplete objective.
 Design principles:
 - Thread-safe (state updated from synchronous callbacks, read from async loop)
 - Zero latency impact on normal conversation flow
-- Self-limiting: max 3 continuations per objective to prevent infinite loops
+- Self-limiting: max N continuations per objective to prevent infinite loops
 - Three-case stall detection (see should_inject_continuation docstring)
 - Inspired by OpenClaw's isLikelyInterimCronMessage() for phrase detection
 """
@@ -90,7 +90,8 @@ class TaskTracker:
     )
 
     def __init__(self, stall_threshold_seconds: float = 8.0,
-                 max_continuations_per_objective: int = 3):
+                 max_continuations_per_objective: int = 3,
+                 min_continuation_gap_seconds: float = 8.0):
         self._lock = threading.Lock()
 
         # Task state
@@ -112,7 +113,7 @@ class TaskTracker:
         # Agent state
         self._agent_is_responding: bool = False
         # Set when agent's speech contains an interim phrase (OpenClaw-style).
-        # Stays armed until: tool runs, new user message, or definitive agent response.
+        # Stays armed until: tool runs, new user message, definitive response, or injection.
         self._agent_gave_interim_response: bool = False
 
         # Continuation limits
@@ -120,9 +121,17 @@ class TaskTracker:
         self._max_continuations: int = max_continuations_per_objective
         self._stall_threshold: float = stall_threshold_seconds
 
+        # Cooldown: minimum gap between consecutive continuations.
+        # Prevents rapid-fire when generate_reply resolves in 1-2s without speech —
+        # which would otherwise leave _agent_gave_interim_response armed and re-trigger
+        # Case 3 every 4 seconds until max_continuations is exhausted.
+        self._last_continuation_at: float = 0.0
+        self._min_continuation_gap: float = min_continuation_gap_seconds
+
         logger.info(
             f"[Heartbeat] TaskTracker initialized "
-            f"(stall={stall_threshold_seconds}s, max_continuations={max_continuations_per_objective})"
+            f"(stall={stall_threshold_seconds}s, max_continuations={max_continuations_per_objective}, "
+            f"min_gap={min_continuation_gap_seconds}s)"
         )
 
     # ── State update methods (called from event hooks) ──────────────────────
@@ -275,17 +284,26 @@ class TaskTracker:
 
             idle_seconds = time.monotonic() - self._last_activity_at
 
-            # CASE 1: Tool completed, agent hasn't responded yet — tight stall
+            # CASE 1: Tool completed, agent hasn't responded yet — tight stall.
+            # No cooldown applied — tool-result stalls need immediate response.
             if (self._total_tool_calls_for_objective > 0 and
                     self._tool_completed_since_last_response and
                     idle_seconds >= self._stall_threshold):
                 logger.info("[Heartbeat] CASE 1 stall: tool ran, no response yet")
                 return True
 
+            # Rate-limit Cases 2 and 3 — enforce minimum gap between continuations.
+            # Without this, generate_reply resolves in ~1.5s without speech, leaving
+            # _agent_gave_interim_response armed, causing Case 3 to fire again 4s later
+            # and consuming all 3 continuations in ~11 seconds.
+            gap_since_last = time.monotonic() - self._last_continuation_at
+            if gap_since_last < self._min_continuation_gap:
+                return False  # Too soon — cooldown not expired
+
             # CASE 2: No tools called for objective — agent may be stalling without
             # taking action (spoke but didn't execute). Longer threshold.
             if (self._total_tool_calls_for_objective == 0 and
-                    idle_seconds >= self._stall_threshold * 4):  # 16s
+                    idle_seconds >= self._stall_threshold * 4):  # 16s default
                 logger.info("[Heartbeat] CASE 2 stall: no tools called, long idle")
                 return True
 
@@ -301,21 +319,29 @@ class TaskTracker:
     def get_continuation_prompt(self) -> str:
         """Build the continuation instructions for the LLM.
 
-        Increments the continuation counter to enforce the limit.
+        Increments the continuation counter and starts the cooldown window.
+        Clears _agent_gave_interim_response so Case 3 cannot re-fire until
+        the agent speaks a new interim phrase (prevents rapid-fire when
+        generate_reply resolves in ~1.5s without producing speech).
         """
         with self._lock:
             self._continuation_count += 1
+            now = time.monotonic()
+            self._last_continuation_at = now        # start cooldown
+            self._agent_gave_interim_response = False  # disarm Case 3
+
             objective = self._current_objective or "the current task"
             count = self._continuation_count
             max_c = self._max_continuations
+            tool_count = self._total_tool_calls_for_objective
 
             prompt = (
-                f"You are mid-task. The user's objective was: '{objective}'. "
-                f"You used {self._total_tool_calls_for_objective} tool call(s) so far. "
-                f"Check whether the task is fully complete. If any steps remain, "
-                f"continue executing them now without waiting for the user to prompt you again. "
-                f"If the task is done, summarize what was accomplished. "
-                f"[Internal continuation {count}/{max_c}]"
+                f"CONTINUE THE TASK NOW. Do not explain or apologize — take action immediately. "
+                f"The user's request was: '{objective}'. "
+                f"You have made {tool_count} tool call(s) so far but the objective is NOT complete. "
+                f"Pick the most relevant available tool and call it right now to make progress. "
+                f"Do not give up. Do not speak until you have called a tool and received a result. "
+                f"[Internal heartbeat continuation {count}/{max_c}]"
             )
             logger.info(
                 f"[Heartbeat] Continuation prompt {count}/{max_c} for objective: '{objective[:50]}...'"

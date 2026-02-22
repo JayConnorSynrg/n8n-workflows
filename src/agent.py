@@ -631,7 +631,11 @@ async def entrypoint(ctx: JobContext):
     )
 
     # In-session task tracker — monitors tool execution progress for heartbeat continuation
-    _task_tracker = TaskTracker(stall_threshold_seconds=4.0, max_continuations_per_objective=3)
+    _task_tracker = TaskTracker(
+        stall_threshold_seconds=6.0,          # 6s stall before Case 1/3 triggers
+        max_continuations_per_objective=5,    # 5 attempts before giving up
+        min_continuation_gap_seconds=8.0,     # 8s cooldown between Case 2/3 injections
+    )
 
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
@@ -1359,14 +1363,15 @@ async def entrypoint(ctx: JobContext):
         - Checks TaskTracker.should_inject_continuation() — fires only when:
             * An active objective exists (user issued a task)
             * Tools were called (multi-step task, not idle chat)
-            * Agent has been idle for 4+ seconds (stalled)
-            * Max continuations (3) not exceeded
+            * Agent has been idle for 6+ seconds (stalled)
+            * Max continuations (5) not exceeded
+            * Minimum 8s cooldown since last continuation (prevents rapid-fire)
         - Uses session.generate_reply(instructions=...) to resume the LLM without
           injecting a raw say() call — this goes through the LLM for intelligent continuation
         - Falls back to session.say() if generate_reply is unavailable
         """
         HEARTBEAT_INTERVAL = 4.0  # Assess every 4 seconds
-        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=4s)")
+        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s)")
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
