@@ -27,7 +27,7 @@ from ..utils.short_term_memory import (
     ToolCategory,
 )
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
-from .gamma_tool import generate_presentation_async
+from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async
 
 
 # =============================================================================
@@ -616,5 +616,7 @@ ASYNC_TOOLS = [
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step
     # Gamma (async background generation with proactive session notification)
-    generate_presentation_async,   # ASYNC: starts generation, background poller notifies via queue
+    generate_presentation_async,   # ASYNC: slide decks
+    generate_document_async,       # ASYNC: documents / reports
+    generate_webpage_async,        # ASYNC: webpages / landing pages
 ]
