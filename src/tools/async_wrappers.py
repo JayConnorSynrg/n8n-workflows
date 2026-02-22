@@ -27,6 +27,7 @@ from ..utils.short_term_memory import (
     ToolCategory,
 )
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
+from .gamma_tool import generate_presentation_async
 
 
 # =============================================================================
@@ -614,4 +615,6 @@ ASYNC_TOOLS = [
     manage_connections_async,      # CONNECTION MGMT: status + connect new services via email
     composio_batch_execute_async,  # DEFAULT: direct execution with exact slugs
     composio_execute_async,        # SYNC: when LLM needs result data before next step
+    # Gamma (async background generation with proactive session notification)
+    generate_presentation_async,   # ASYNC: starts generation, background poller notifies via queue
 ]

@@ -59,6 +59,7 @@ from .tools.agent_context_tool import (
     invalidate_session_cache,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
+from .tools.gamma_tool import get_notification_queue
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
@@ -1046,6 +1047,29 @@ async def entrypoint(ctx: JobContext):
         logger.info("AIO greeting sent successfully")
     except Exception as e:
         logger.error(f"CRITICAL: session.say() failed: {e}")
+
+    # Start Gamma notification monitor — watches the module-level queue and proactively
+    # speaks completion messages when background presentation generation finishes.
+    # Stored in a variable to prevent garbage collection; cancelled naturally when the
+    # enclosing coroutine (entrypoint) exits and the event loop tears down.
+    async def _gamma_notification_monitor(session_ref):
+        """Monitor gamma notification queue and proactively speak results."""
+        queue = get_notification_queue()
+        while True:
+            try:
+                notification = await queue.get()
+                message = notification.get("message", "")
+                if message:
+                    logger.info(f"Gamma monitor: speaking notification for job={notification.get('job_id', '?')}")
+                    await session_ref.say(message, allow_interruptions=True)
+            except asyncio.CancelledError:
+                logger.info("Gamma notification monitor cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Gamma notification monitor error: {e}")
+
+    gamma_monitor_task = asyncio.create_task(_gamma_notification_monitor(session))
+    logger.info("Gamma notification monitor started")
 
     # CRITICAL: Keep the agent alive until the room closes
     # Without this, the entrypoint returns and the agent disconnects!
