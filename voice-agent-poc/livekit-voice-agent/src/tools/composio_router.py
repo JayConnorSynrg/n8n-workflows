@@ -289,7 +289,15 @@ def _build_slug_index(client, user_id: str = "") -> None:
                 # Zero extra API calls — tool objects already fetched above.
                 # Stores both required list (for pre-execution validation) and
                 # property descriptions (for catalog hints and error messages).
-                schema = getattr(t, "input_schema", None) or getattr(t, "args_schema", None) or getattr(t, "parameters", None)
+                # Probe multiple attribute names — Composio SDK uses different names across versions:
+                #   input_parameters = canonical field (confirmed from Composio docs)
+                #   input_schema / args_schema / parameters = alternative names in older SDK versions
+                schema = (
+                    getattr(t, "input_parameters", None)
+                    or getattr(t, "input_schema", None)
+                    or getattr(t, "args_schema", None)
+                    or getattr(t, "parameters", None)
+                )
                 if isinstance(schema, dict):
                     req = schema.get("required", [])
                     props = schema.get("properties", {})
