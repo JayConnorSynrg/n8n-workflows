@@ -70,6 +70,18 @@ from .utils.short_term_memory import clear_session as clear_session_memory
 logger = setup_logging(__name__)
 settings = get_settings()
 
+# Memory layer — persistent cross-session memory (optional, gracefully disabled)
+try:
+    from .memory import memory_store as _mem_store
+    from .memory import session_writer as _session_writer
+    from .memory import capture as _mem_capture
+    _MEM_AVAILABLE = True
+except Exception as _mem_err:
+    _mem_store = None  # type: ignore[assignment]
+    _session_writer = None  # type: ignore[assignment]
+    _mem_capture = None  # type: ignore[assignment]
+    _MEM_AVAILABLE = False
+
 # =============================================================================
 # AIO VOICE ASSISTANT - EXECUTIVE SYSTEM PROMPT v3
 # =============================================================================
@@ -291,6 +303,22 @@ def prewarm(proc: JobProcess):
     proc.userdata["_composio_thread"] = catalog_thread
     logger.info("Composio catalog build started in background thread")
 
+    # Ensure memory files (MEMORY.md, USER.md) exist on the volume
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            _session_writer.ensure_memory_files(_mem_dir)
+        except Exception as _e:
+            logger.warning("[Memory] File init failed: %s", _e)
+
+    # Initialize persistent memory store (non-blocking — failure is tolerated)
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _mem_store.init()
+        except Exception as _e:
+            logger.warning("[Memory] Store init failed in prewarm: %s", _e)
+
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
@@ -455,6 +483,19 @@ async def entrypoint(ctx: JobContext):
     )
     active_prompt += time_context
 
+    # Load cross-session memory context and inject into instructions
+    _memory_context = ""
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            _memory_context = _session_writer.load_memory_context(_mem_dir, max_tokens=500)
+        except Exception as _e:
+            logger.warning("[Memory] Context load failed: %s", _e)
+
+    if _memory_context:
+        active_prompt = active_prompt + "\n\n## Cross-Session Memory\n" + _memory_context
+
     # Define agent with all tools (no MCP servers)
     agent = Agent(
         instructions=active_prompt,
@@ -556,6 +597,22 @@ async def entrypoint(ctx: JobContext):
 
         # Check if this is an assistant (agent) message
         role = getattr(item, 'role', None)
+
+        # Auto-capture memory triggers from user utterances
+        if _MEM_AVAILABLE and _mem_capture is not None:
+            try:
+                # Only capture from user messages, not agent responses
+                if hasattr(item, 'role') and str(getattr(item, 'role', '')).lower() == 'user':
+                    _text = ""
+                    if hasattr(item, 'text_content'):
+                        _text = item.text_content or ""
+                    elif hasattr(item, 'content') and isinstance(item.content, str):
+                        _text = item.content
+                    if _text:
+                        _mem_capture.detect_and_queue(_text)
+            except Exception as _e:
+                logger.debug("[Memory] Capture check failed: %s", _e)
+
         if role != 'assistant':
             return  # Only publish agent responses, user transcripts handled separately
 
@@ -1172,6 +1229,38 @@ async def entrypoint(ctx: JobContext):
 
     # Clean up session memory when session ends
     session_id = ctx.room.name or "livekit-agent"
+
+    # Flush session to persistent memory (8s timeout — must not block disconnect)
+    if _MEM_AVAILABLE and _session_writer is not None and _mem_capture is not None:
+        try:
+            # Build a brief session summary from STM stats
+            from .tools.short_term_memory import get_session_stats
+            _stats = get_session_stats(session_id)
+            _summary = (
+                f"Voice session ended. "
+                f"Tools used: {_stats.get('total_entries', 0)} calls across "
+                f"{len(_stats.get('categories', {}))} categories."
+            )
+            import os
+            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
+            # Flush auto-captured facts to SQLite
+            _pending = _mem_capture.get_pending_facts()
+            _fact_texts = [f for f, _ in _pending]
+            # Write session log (with 8s timeout)
+            await asyncio.wait_for(
+                _session_writer.flush_session(_mem_dir, _summary, _fact_texts),
+                timeout=8.0,
+            )
+            # Flush facts to store
+            if _mem_store is not None and _pending:
+                await _mem_capture.flush_to_store(_mem_store)
+        except asyncio.TimeoutError:
+            logger.warning("[Memory] Session flush timed out — session log skipped")
+        except Exception as _e:
+            logger.error("[Memory] Session flush failed: %s", _e)
+        finally:
+            _mem_capture.reset_session()
+
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
 

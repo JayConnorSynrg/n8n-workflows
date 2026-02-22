@@ -30,6 +30,16 @@ from ..utils.short_term_memory import (
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async
 
+# Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
+try:
+    from ..memory import memory_store as _memory_store
+    from ..memory import capture as _memory_capture
+    _MEMORY_AVAILABLE = True
+except Exception:
+    _memory_store = None  # type: ignore[assignment]
+    _memory_capture = None  # type: ignore[assignment]
+    _MEMORY_AVAILABLE = False
+
 
 # =============================================================================
 # EMAIL - WRITE OPERATION (REQUIRES CONFIRMATION)
@@ -179,14 +189,20 @@ async def query_context_async(
 
 @llm.function_tool(
     name="recall",
-    description="Recall previously retrieved data from session memory without making another call.",
+    description=(
+        "Recall data from memory. "
+        "Use query= to search cross-session long-term memory for preferences, decisions, or past context. "
+        "Use category= or tool_name= to recall recent in-session data. "
+        "Use show_all=True for a full in-session memory overview."
+    ),
 )
 async def recall_data_async(
+    query: Optional[str] = None,
     category: Optional[str] = None,
     tool_name: Optional[str] = None,
     show_all: bool = False,
 ) -> str:
-    """Recall from memory."""
+    # Level 1: In-session short-term memory (fast path — always checked first)
     if show_all:
         return get_memory_summary()
 
@@ -194,7 +210,6 @@ async def recall_data_async(
         result = recall_by_tool(tool_name)
         if result:
             return _format_recall(result)
-        return f"No recent {tool_name} data in memory"
 
     if category:
         try:
@@ -204,11 +219,28 @@ async def recall_data_async(
                 return _format_recall(result)
         except ValueError:
             pass
-        return f"No recent {category} data in memory"
 
-    result = recall_most_recent()
-    if result:
-        return _format_recall(result)
+    # Level 2: Cross-session SQLite memory (only when a query is provided)
+    if query and _MEMORY_AVAILABLE and _memory_store is not None:
+        try:
+            results = _memory_store.search(query, top_k=3)
+            if results:
+                lines = ["From long-term memory:"]
+                for i, r in enumerate(results, 1):
+                    lines.append(f"{i}. [{r['category']}] {r['text_safe']}")
+                return " | ".join(lines)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("[recall] Memory search failed: %s", exc)
+
+    # Level 1 fallback: most recent in-session entry
+    if not query:
+        result = recall_most_recent()
+        if result:
+            return _format_recall(result)
+
+    if query:
+        return f"No memory found for: {query}"
     return "No data in memory yet"
 
 

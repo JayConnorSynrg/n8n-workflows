@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     )
     composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
 
+    # Memory layer configuration
+    memory_enabled: bool = Field(default=True, alias="AIO_MEMORY_ENABLED")
+    memory_dir: str = Field(default="/app/data/memory", alias="AIO_MEMORY_DIR")
+    models_dir: str = Field(default="/app/models", alias="AIO_MODELS_DIR")
+
     @field_validator("livekit_url")
     @classmethod
     def validate_livekit_url(cls, v: str) -> str:
