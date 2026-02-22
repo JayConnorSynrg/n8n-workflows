@@ -44,6 +44,25 @@ _MIN_FACT_LENGTH = 15
 # Maximum length before we truncate (characters)
 _MAX_FACT_LENGTH = 500
 
+# Category detection patterns — ordered by specificity (preference > fact > decision > entity)
+_CATEGORY_PATTERNS = [
+    ("preference", re.compile(
+        r"\b(I\s+prefer|I\s+like|I\s+always|I\s+never|I\s+hate|"
+        r"don'?t\s+like|prefer\s+to|would\s+rather)\b",
+        re.IGNORECASE,
+    )),
+    ("decision", re.compile(
+        r"\b(I\s+decided|we\s+decided|going\s+with|chose\s+to|"
+        r"we'?re\s+going\s+to|decided\s+to)\b",
+        re.IGNORECASE,
+    )),
+    ("fact", re.compile(
+        r"\b(my\s+\w+\s+is|I\s+work\s+(at|for)|I'?m\s+using|I\s+use|"
+        r"the\s+\w+\s+is|my\s+name\s+is|I'?m\s+a\b)\b",
+        re.IGNORECASE,
+    )),
+]
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Session-scoped capture queue
@@ -68,13 +87,26 @@ def get_pending_facts() -> list[tuple[str, str]]:
 # Detection
 # ────────────────────────────────────────────────────────────────────────────────
 
+def detect_category(text: str) -> str:
+    """
+    Infer memory category from utterance content.
+
+    Returns one of: 'preference', 'decision', 'fact', 'general'
+    Checked in specificity order — first match wins.
+    """
+    for category, pattern in _CATEGORY_PATTERNS:
+        if pattern.search(text):
+            return category
+    return "general"
+
+
 def detect_and_queue(text: str, category: str = "general") -> Optional[str]:
     """
     Check user utterance for memory trigger patterns. If found, queue for storage.
 
     Args:
         text: The user utterance text
-        category: Memory category (default: 'general')
+        category: Memory category override. If 'general', auto-detected from content.
 
     Returns:
         The queued fact text if captured, None otherwise
@@ -89,6 +121,10 @@ def detect_and_queue(text: str, category: str = "general") -> Optional[str]:
     fact = text[:_MAX_FACT_LENGTH].strip()
     if len(text) > _MAX_FACT_LENGTH:
         fact += "…"
+
+    # Auto-detect category if caller didn't override
+    if category == "general":
+        category = detect_category(text)
 
     _pending_facts.append((fact, category))
     logger.debug("[Capture] Queued fact: [%s] %.60s...", category, fact)

@@ -36,6 +36,7 @@ def _load_model():
 
         _model = SentenceTransformer(MODEL_NAME)
         logger.info("[Memory] Embedder loaded: %s (%d dims)", MODEL_NAME, MODEL_DIMS)
+        print(f"[Memory] Embedder ready: {MODEL_NAME}", flush=True)
         return _model
 
     except Exception as exc:
@@ -44,6 +45,7 @@ def _load_model():
             "[Memory] Embedder unavailable — cross-session memory disabled. Reason: %s",
             exc,
         )
+        print(f"[Memory] Embedder FAILED to load: {exc}", flush=True)
         return None
 
 

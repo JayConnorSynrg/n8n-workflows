@@ -23,6 +23,7 @@ import os
 import re
 import sqlite3
 import threading
+import math
 import time
 import uuid
 from typing import Any, Optional
@@ -41,6 +42,7 @@ DEFAULT_TOP_K = 3
 MIN_SCORE = 0.25           # Minimum final score to include in results
 DEDUP_THRESHOLD = 0.95     # Cosine similarity above which we skip storage
 MAX_MEMORY_TEXT_LEN = 1000 # Characters — truncate longer entries at store time
+TEMPORAL_HALF_LIFE_DAYS = 30.0  # Memories score 50% less after 30 days
 
 # Patterns that suggest prompt injection attempts
 _INJECTION_PATTERNS = re.compile(
@@ -103,11 +105,13 @@ def init(memory_dir: Optional[str] = None) -> bool:
         module.MEMORY_AVAILABLE = True  # type: ignore[attr-defined]
 
         logger.info("[Memory] Store initialized at %s", _db_path)
+        print(f"[Memory] Store initialized at {_db_path}", flush=True)
         return True
 
     except Exception as exc:
         _init_failed = True
         logger.error("[Memory] Store init failed: %s", exc)
+        print(f"[Memory] Store init FAILED: {exc}", flush=True)
         return False
 
 
@@ -256,6 +260,31 @@ def _is_near_duplicate(query_embedding: list[float]) -> bool:
         return False  # On error, allow storage
 
 
+def _get_creation_times(ids: list[str]) -> dict[str, int]:
+    """Fetch created_at timestamps for a list of memory IDs."""
+    if not ids or _db_path is None:
+        return {}
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        with sqlite3.connect(_db_path) as conn:
+            rows = conn.execute(
+                f"SELECT id, created_at FROM memories WHERE id IN ({placeholders})",  # nosec B608
+                ids,
+            ).fetchall()
+        return {row_id: created_at for row_id, created_at in rows}
+    except Exception:
+        return {}
+
+
+def _apply_temporal_decay(score: float, created_at: int) -> float:
+    """Apply exponential half-life decay: score × e^(-ln(2)/halfLife × age_days)."""
+    age_days = (time.time() - created_at) / 86400
+    if age_days <= 0:
+        return score
+    decay = math.exp(-math.log(2) / TEMPORAL_HALF_LIFE_DAYS * age_days)
+    return score * decay
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Search operations
 # ────────────────────────────────────────────────────────────────────────────────
@@ -283,12 +312,16 @@ def search(
 
         # Merge candidates
         all_ids: set[str] = set(vector_results) | set(text_results)
+        creation_times = _get_creation_times(list(all_ids))
         scored: list[dict[str, Any]] = []
 
         for cand_id in all_ids:
             v_score = vector_results.get(cand_id, 0.0)
             t_score = text_results.get(cand_id, 0.0)
             final = VECTOR_WEIGHT * v_score + TEXT_WEIGHT * t_score
+            # Apply temporal decay — older memories score progressively lower
+            if cand_id in creation_times:
+                final = _apply_temporal_decay(final, creation_times[cand_id])
             if final < MIN_SCORE:
                 continue
             scored.append({"_id": cand_id, "score": final})

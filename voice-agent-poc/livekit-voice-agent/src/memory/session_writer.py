@@ -65,6 +65,22 @@ AIO learns about the user over time. This file is read at every session start.
 <!-- What the user is currently focused on -->
 """
 
+_SOUL_MD_TEMPLATE = """\
+# SOUL.md — AIO Agent Identity
+
+This file captures how AIO has learned to best serve this user over time.
+AIO updates this through conversations. Edit directly to adjust agent behavior.
+
+## Communication Adaptations
+<!-- How AIO has learned to communicate with this user -->
+
+## Working Patterns
+<!-- Recurring workflows and processes this user follows -->
+
+## Trusted Context
+<!-- Background knowledge that helps AIO be more useful -->
+"""
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Initialization
@@ -78,6 +94,7 @@ def ensure_memory_files(memory_dir: str) -> None:
     """
     os.makedirs(memory_dir, exist_ok=True)
     os.makedirs(os.path.join(memory_dir, "sessions"), exist_ok=True)
+    print(f"[Memory] Session writer ready at {memory_dir}", flush=True)
 
     memory_md = os.path.join(memory_dir, "MEMORY.md")
     if not os.path.exists(memory_md):
@@ -90,6 +107,12 @@ def ensure_memory_files(memory_dir: str) -> None:
         with open(user_md, "w", encoding="utf-8") as f:
             f.write(_USER_MD_TEMPLATE)
         logger.info("[SessionWriter] Created USER.md at %s", user_md)
+
+    soul_md = os.path.join(memory_dir, "SOUL.md")
+    if not os.path.exists(soul_md):
+        with open(soul_md, "w", encoding="utf-8") as f:
+            f.write(_SOUL_MD_TEMPLATE)
+        logger.info("[SessionWriter] Created SOUL.md at %s", soul_md)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -106,7 +129,11 @@ def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
     max_chars = max_tokens * 4  # rough estimate
     parts: list[str] = []
 
-    for filename, label in [("MEMORY.md", "Long-Term Memory"), ("USER.md", "User Profile")]:
+    for filename, label in [
+        ("SOUL.md", "Agent Identity"),
+        ("MEMORY.md", "Long-Term Memory"),
+        ("USER.md", "User Profile"),
+    ]:
         filepath = os.path.join(memory_dir, filename)
         try:
             if os.path.exists(filepath):
