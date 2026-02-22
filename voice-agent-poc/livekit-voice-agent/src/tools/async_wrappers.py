@@ -391,17 +391,24 @@ async def manage_connections_async(
             await publish_tool_completed(call_id, "Connection setup unavailable")
             return auth_url
 
-        # Step 2: Send auth link via n8n Gmail webhook
+        # Step 2: Send auth link via n8n Gmail webhook (using correct gated payload format)
+        import uuid as _uuid
         email_to = recipient if recipient else _AUTH_EMAIL_RECIPIENT
         email_payload = {
-            "to": email_to,
-            "subject": f"Connect {display_name} to AIO Voice Assistant",
-            "body": (
-                f"Click the link below to connect {display_name}:\n\n"
-                f"{auth_url}\n\n"
-                f"This link expires in 10 minutes."
-            ),
-            "isHtml": False,
+            "intent_id": f"lk_{_uuid.uuid4().hex[:12]}",
+            "session_id": "livekit-agent",
+            "callback_url": "https://jayconnorexe.app.n8n.cloud/webhook/callback-noop",
+            "parameters": {
+                "to": email_to,
+                "subject": f"Connect {display_name} to AIO Voice Assistant",
+                "body": (
+                    f"Hi, your AIO Voice Assistant needs authorization to connect {display_name}.\n\n"
+                    f"Click the link below to complete authentication:\n\n"
+                    f"{auth_url}\n\n"
+                    f"This link expires in 10 minutes. Once connected, tell your assistant "
+                    f"\"refresh my tools\" to activate the new connection."
+                ),
+            },
         }
 
         email_sent = False
@@ -410,9 +417,15 @@ async def manage_connections_async(
                 async with http_session.post(
                     _N8N_GMAIL_WEBHOOK,
                     json=email_payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
-                    email_sent = resp.status in (200, 201, 202)
+                    if resp.status in (200, 201, 202):
+                        try:
+                            body = await resp.json()
+                            # n8n returns {"status":"FAILED","error":true} on failure
+                            email_sent = not (isinstance(body, dict) and body.get("error"))
+                        except Exception:
+                            email_sent = True  # Non-JSON 200 → assume success
         except Exception as email_err:
             from ..utils.logging import setup_logging as _sl
             _sl(__name__).warning(f"manageConnections: email send failed: {email_err}")

@@ -1037,10 +1037,12 @@ async def get_connected_services_status() -> str:
 async def initiate_service_connection(service: str) -> tuple[str, str]:
     """Initiate a new Composio connection for a service.
 
-    Calls the COMPOSIO_INITIATE_CONNECTION tool to get an auth URL.
-    Returns (auth_url, display_name) on success, or (error_message, "") on failure.
+    Calls COMPOSIO_INITIATE_CONNECTION via SDK directly (bypassing _extract_voice_result
+    so the redirect URL is not lost). Returns (auth_url, display_name) on success,
+    or (error_message, "") on failure.
+
+    Response shape: data.response_data.redirect_url (confirmed via live test)
     """
-    # Normalize service name
     service_lower = service.lower().strip().replace(" ", "_")
     _VOICE_NAMES = {
         "teams": "Microsoft Teams",
@@ -1059,29 +1061,61 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         "slack": "Slack",
         "pinecone": "Pinecone",
         "gamma": "Gamma",
+        "notion": "Notion",
+        "hubspot": "HubSpot",
+        "salesforce": "Salesforce",
+        "linear": "Linear",
+        "jira": "Jira",
+        "asana": "Asana",
+        "dropbox": "Dropbox",
+        "box": "Box",
+        "zoom": "Zoom",
+        "typeform": "Typeform",
+        "airtable": "Airtable",
     }
-    display_name = _VOICE_NAMES.get(service_lower, service.title())
+    display_name = _VOICE_NAMES.get(service_lower, service.replace("_", " ").title())
 
-    # Try to initiate connection via Composio toolkit
-    # COMPOSIO_INITIATE_CONNECTION expects "toolkit" param, not "app_name"
-    result = await execute_composio_tool(
-        tool_slug="COMPOSIO_INITIATE_CONNECTION",
-        arguments={"toolkit": service_lower},
-    )
+    from ..config import get_settings
+    settings = get_settings()
+    if not settings.composio_api_key or not settings.composio_user_id:
+        return "Composio is not configured on this instance", ""
 
-    # Check if result contains a URL (auth link)
-    if result and ("http" in result.lower() or "url" in result.lower()):
-        # Extract URL from result
-        import re
-        url_match = re.search(r'https?://[^\s"\'<>]+', result)
-        if url_match:
-            return url_match.group(0), display_name
+    client = _get_client(settings)
+    user_id = settings.composio_user_id.strip()
 
-    # If no URL found, return the result as error
-    if "does not exist" in result.lower() or "not found" in result.lower():
-        return f"Connection setup for {display_name} is not available through voice. Please set it up at composio.dev", ""
+    def _execute():
+        return client.tools.execute(
+            "COMPOSIO_INITIATE_CONNECTION",
+            {"toolkit": service_lower, "parameters": {}},
+            user_id=user_id,
+            dangerously_skip_version_check=True,
+        )
 
-    return result, display_name
+    try:
+        result = await asyncio.to_thread(_execute)
+        if result.get("successful"):
+            data = result.get("data", {})
+            response_data = data.get("response_data", {})
+            # SDK returns redirect_url (snake_case confirmed via live test)
+            redirect_url = (
+                response_data.get("redirect_url")
+                or response_data.get("redirectUrl")
+                or response_data.get("connectionUrl")
+                or response_data.get("authUrl")
+            )
+            if redirect_url:
+                logger.info(f"Composio: Connection initiated for {service_lower}, status={response_data.get('status')}")
+                return redirect_url, display_name
+            # Already connected — redirect_url absent when no OAuth needed
+            status = response_data.get("status", "")
+            if status in ("ACTIVE", "CONNECTED"):
+                return f"{display_name} is already connected and active", ""
+        error = result.get("error") or "Could not get connection URL"
+        logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
+        return f"Connection setup for {display_name} is not available: {error}", ""
+    except Exception as exc:
+        logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
+        return f"Connection setup for {display_name} failed due to a system error", ""
 
 
 async def batch_execute_composio_tools(tools: list) -> str:
