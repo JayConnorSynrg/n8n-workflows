@@ -8,9 +8,8 @@ Design principles:
 - Thread-safe (state updated from synchronous callbacks, read from async loop)
 - Zero latency impact on normal conversation flow
 - Self-limiting: max 3 continuations per objective to prevent infinite loops
-- Stall detection only fires when tools were involved (not idle chat)
-- Silent after task completion: heartbeat NEVER fires after the agent has
-  already responded to a tool result — only fires on genuine unaddressed stalls
+- Three-case stall detection (see should_inject_continuation docstring)
+- Inspired by OpenClaw's isLikelyInterimCronMessage() for phrase detection
 """
 import time
 import threading
@@ -27,10 +26,55 @@ class TaskTracker:
       User message → record_user_message() → sets objective if task-like
       Tool starts  → record_tool_call_started()
       Tool ends    → record_tool_call_completed()
-      Agent speaks → record_agent_responding()
+      Agent thinks → record_agent_responding()
+      Agent speaks → record_agent_speech(text)
       Agent idle   → record_agent_idle()
       Heartbeat    → should_inject_continuation() → get_continuation_prompt()
     """
+
+    #: Short phrases the LLM uses when mid-task but hasn't called a tool yet.
+    #: Adapted from OpenClaw's isLikelyInterimCronMessage() heuristic.
+    #: Match condition: ≤50 words AND contains one of these phrases.
+    _INTERIM_PHRASES = (
+        "on it",
+        "working on it",
+        "let me try",
+        "let me check",
+        "let me look",
+        "let me find",
+        "let me get",
+        "let me fetch",
+        "let me send",
+        "let me create",
+        "let me search",
+        "let me see if",
+        "let me see what",
+        "let me attempt",
+        "give me a",
+        "one moment",
+        "one second",
+        "one sec",
+        "just a moment",
+        "just a second",
+        "hold on",
+        "i'll try",
+        "i will try",
+        "i'm trying",
+        "i am trying",
+        "trying to",
+        "attempting to",
+        "i need to create",
+        "i need to get",
+        "i need to find",
+        "i need to send",
+        "i need to fetch",
+        "pulling that",
+        "gathering that",
+        "stand by",
+        "bear with me",
+        "retrying",
+        "let me retry",
+    )
 
     #: Keywords that indicate the user is requesting an action (not just chatting)
     _TASK_KEYWORDS = (
@@ -61,13 +105,15 @@ class TaskTracker:
         # Tool call tracking
         self._tool_calls_pending: int = 0
         self._total_tool_calls_for_objective: int = 0
-        # True only between a tool completing and the agent responding.
-        # The heartbeat fires ONLY in this window — never after the agent has
-        # already addressed the tool result (which would be post-task noise).
+        # Armed when a tool completes, disarmed when agent starts responding.
+        # Case 1 stall detection window.
         self._tool_completed_since_last_response: bool = False
 
         # Agent state
         self._agent_is_responding: bool = False
+        # Set when agent's speech contains an interim phrase (OpenClaw-style).
+        # Stays armed until: tool runs, new user message, or definitive agent response.
+        self._agent_gave_interim_response: bool = False
 
         # Continuation limits
         self._continuation_count: int = 0
@@ -89,6 +135,7 @@ class TaskTracker:
             self._last_user_message_at = now
             # Reset continuation counter — new message, fresh start
             self._continuation_count = 0
+            self._agent_gave_interim_response = False
 
             if self._is_task_request(text):
                 self._current_objective = text[:300]
@@ -114,14 +161,15 @@ class TaskTracker:
     def record_tool_call_completed(self) -> None:
         """Called when a tool finishes executing.
 
-        Also increments the total counter — this is the sole production hook
-        (on_function_tools_executed). record_tool_call_started() is optional
-        and only used if a started hook becomes available.
+        This is the sole production hook (on_function_tools_executed).
+        Arms Case 1 stall detection and clears the interim-phrase flag
+        (agent acted, so prior interim speech is resolved).
         """
         with self._lock:
             self._tool_calls_pending = max(0, self._tool_calls_pending - 1)
             self._total_tool_calls_for_objective += 1
-            self._tool_completed_since_last_response = True  # arm the stall detector
+            self._tool_completed_since_last_response = True  # arm Case 1
+            self._agent_gave_interim_response = False          # resolved by tool action
             self._last_activity_at = time.monotonic()
             logger.debug(
                 f"[Heartbeat] Tool completed "
@@ -129,15 +177,43 @@ class TaskTracker:
             )
 
     def record_agent_responding(self) -> None:
-        """Called when agent starts speaking (thinking→speaking transition).
+        """Called when agent starts thinking (thinking state transition).
 
-        Disarms the stall detector — the agent has addressed the tool result,
-        so the heartbeat must not fire again until another tool completes.
+        Disarms Case 1 — the agent is addressing the tool result.
         """
         with self._lock:
             self._agent_is_responding = True
-            self._tool_completed_since_last_response = False  # disarm stall detector
+            self._tool_completed_since_last_response = False  # disarm Case 1
             self._last_activity_at = time.monotonic()
+
+    def record_agent_speech(self, text: str) -> None:
+        """Called with the agent's actual spoken text after speech completes.
+
+        OpenClaw-style interim-phrase detection: if the agent's response is
+        short (≤50 words) and contains a phrase like "let me try" or "working
+        on it", it's flagged as an interim response. Case 3 will fire if the
+        agent then goes idle without calling a tool.
+
+        If the text is substantive (not interim), the flag is cleared — the
+        agent gave a definitive response and the heartbeat should stay silent.
+        """
+        with self._lock:
+            if not text:
+                return
+            text_lower = text.lower()
+            word_count = len(text_lower.split())
+            is_interim = (
+                word_count <= 50 and
+                any(phrase in text_lower for phrase in self._INTERIM_PHRASES)
+            )
+            if is_interim:
+                self._agent_gave_interim_response = True
+                logger.debug(
+                    f"[Heartbeat] Interim phrase in agent speech: '{text[:80]}'"
+                )
+            else:
+                # Definitive response — agent addressed the situation
+                self._agent_gave_interim_response = False
 
     def record_agent_idle(self) -> None:
         """Called when agent transitions to listening/idle state."""
@@ -152,6 +228,7 @@ class TaskTracker:
             self._continuation_count = 0
             self._tool_calls_pending = 0
             self._tool_completed_since_last_response = False
+            self._agent_gave_interim_response = False
             logger.debug("[Heartbeat] Objective marked complete")
 
     # ── Heartbeat decision methods ────────────────────────────────────────────
@@ -159,21 +236,26 @@ class TaskTracker:
     def should_inject_continuation(self) -> bool:
         """Returns True if the heartbeat should inject a continuation signal.
 
-        Two detection cases:
+        Three detection cases (all require: active objective + agent idle +
+        < max continuations):
 
-        CASE 1 — Tool-result stall (tight 4s threshold):
-          A tool completed but the agent has not yet responded. The flag
-          `_tool_completed_since_last_response` is armed on tool completion and
-          disarmed when the agent starts speaking. Only fires within this window.
+        CASE 1 — Tool-result stall (tight stall_threshold):
+          A tool completed but the agent has NOT yet responded. Flag
+          `_tool_completed_since_last_response` is armed by tool completion
+          and disarmed when the agent starts thinking. Catches: agent freezes
+          between tool result and its next response.
 
-        CASE 2 — No-tool stall (16s threshold):
-          The current objective has zero tool calls. The agent spoke (or was
-          asked) but never executed a tool — catches LLM hallucination stalls
-          where the model claims to be working without actually calling anything.
-          `_total_tool_calls_for_objective` is reset to 0 on each new user task
-          message, so this correctly detects per-task inaction.
+        CASE 2 — No-tool stall (4× stall_threshold = 16s):
+          Zero tool calls for the current objective. Agent spoke (or was
+          asked) but never executed a tool. Catches: LLM hallucination stalls
+          where the model claims to be working without calling anything.
+          `_total_tool_calls_for_objective` resets on each new task message.
 
-        Both cases require: active objective + agent idle + < max continuations.
+        CASE 3 — Interim-phrase stall (stall_threshold):
+          Agent's last speech matched an interim phrase (≤50 words + "let me
+          try", "working on it", etc.) and the agent is now idle. Catches:
+          multi-step stalls where tool 1 ran, agent said an interim phrase for
+          tool 2, then stalled. Inspired by OpenClaw's isLikelyInterimCronMessage.
         """
         with self._lock:
             # No active task
@@ -193,17 +275,25 @@ class TaskTracker:
 
             idle_seconds = time.monotonic() - self._last_activity_at
 
-            # CASE 1: Tool completed, agent hasn't responded yet — tight stall window
+            # CASE 1: Tool completed, agent hasn't responded yet — tight stall
             if (self._total_tool_calls_for_objective > 0 and
                     self._tool_completed_since_last_response and
                     idle_seconds >= self._stall_threshold):
+                logger.info("[Heartbeat] CASE 1 stall: tool ran, no response yet")
                 return True
 
-            # CASE 2: No tools called for this objective — agent may be stalling
-            # without taking action (spoke but didn't execute). Longer threshold
-            # avoids false positives on brief agent responses.
+            # CASE 2: No tools called for objective — agent may be stalling without
+            # taking action (spoke but didn't execute). Longer threshold.
             if (self._total_tool_calls_for_objective == 0 and
                     idle_seconds >= self._stall_threshold * 4):  # 16s
+                logger.info("[Heartbeat] CASE 2 stall: no tools called, long idle")
+                return True
+
+            # CASE 3: Agent gave interim phrase response then went silent.
+            # Tool action (if any) would have cleared this flag.
+            if (self._agent_gave_interim_response and
+                    idle_seconds >= self._stall_threshold):
+                logger.info("[Heartbeat] CASE 3 stall: interim phrase + idle")
                 return True
 
             return False

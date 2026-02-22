@@ -676,6 +676,10 @@ async def entrypoint(ctx: JobContext):
                 json.dumps({"type": "transcript.assistant", "text": text}).encode(),
                 log_type="transcript.assistant"
             ))
+            # OpenClaw-style interim-phrase detection: feed agent speech to task
+            # tracker so Case 3 stall detection can arm if the LLM says something
+            # like "let me try" or "working on it" without calling a tool.
+            _task_tracker.record_agent_speech(text)
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
