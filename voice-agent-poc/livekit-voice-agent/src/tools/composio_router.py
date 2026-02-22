@@ -1041,6 +1041,7 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     Response shape: data.response_data.redirect_url (confirmed via live test)
     """
     service_lower = service.lower().strip().replace(" ", "_")
+    service_lower = _SERVICE_ALIASES.get(service_lower, service_lower)
     _VOICE_NAMES = {
         "teams": "Microsoft Teams",
         "microsoft_teams": "Microsoft Teams",
@@ -1109,7 +1110,7 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
                 return f"{display_name} is already connected and active", ""
         error = result.get("error") or "Could not get connection URL"
         logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
-        return f"Connection setup for {display_name} is not available: {error}", ""
+        return f"I couldn't set up the {display_name} connection right now. Please try again or check that {display_name} is available in your Composio account.", ""
     except Exception as exc:
         logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
         return f"Connection setup for {display_name} failed due to a system error", ""
