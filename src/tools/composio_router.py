@@ -65,7 +65,7 @@ _TIER_WORDS = 4    # unreliable — triggers SDK fallback
 _TIER_SUBSTR = 5
 _TIER_PARTIAL = 6
 
-# Service aliases for catalog filtering
+# Service aliases for catalog filtering and user input normalization
 _SERVICE_ALIASES: dict[str, str] = {
     "teams": "microsoft_teams",
     "onedrive": "one_drive",
@@ -74,6 +74,42 @@ _SERVICE_ALIASES: dict[str, str] = {
     "docs": "google_docs",
     "search": "composio_search",
     "web": "composio_search",
+}
+
+# Single source of truth for service → voice-friendly display name.
+# Used by initiate_service_connection and get_connected_services_status.
+# Keys: canonical Composio toolkit names AND common short aliases.
+_COMPOSIO_VOICE_NAMES: dict[str, str] = {
+    # Canonical toolkit names (what Composio API returns)
+    "microsoft_teams": "Microsoft Teams",
+    "one_drive": "OneDrive",
+    "gmail": "Gmail",
+    "google_sheets": "Google Sheets",
+    "google_docs": "Google Docs",
+    "github": "GitHub",
+    "canva": "Canva",
+    "supabase": "Supabase",
+    "excel": "Excel",
+    "slack": "Slack",
+    "pinecone": "Pinecone",
+    "recallai": "Recall AI",
+    "gamma": "Gamma",
+    "notion": "Notion",
+    "hubspot": "HubSpot",
+    "salesforce": "Salesforce",
+    "linear": "Linear",
+    "jira": "Jira",
+    "asana": "Asana",
+    "dropbox": "Dropbox",
+    "box": "Box",
+    "zoom": "Zoom",
+    "typeform": "Typeform",
+    "airtable": "Airtable",
+    # Short aliases (match what users say: "connect teams", "connect onedrive")
+    "teams": "Microsoft Teams",
+    "onedrive": "OneDrive",
+    "sheets": "Google Sheets",
+    "docs": "Google Docs",
 }
 
 
@@ -239,7 +275,10 @@ def _build_slug_index(client, user_id: str = "") -> None:
                     required_params[t.slug] = schema["required"]
             logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
         except Exception as exc:
-            logger.warning(f"Composio: Failed to load toolkit {toolkit}: {exc}")
+            logger.error(
+                f"Composio: TOOLKIT_LOAD_FAILED toolkit={toolkit!r} — "
+                f"all tools from this service will be unavailable: {exc!r}"
+            )
 
     _canonical_slugs = all_slugs
     _slug_to_toolkit = slug_toolkit_map
@@ -928,8 +967,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             is_auth_error = any(s in error_lower for s in [
                 "unauthorized", "401", "token expired", "invalid token",
                 "access token", "forbidden", "403", "access denied",
-                "reauthenticate", "re-authenticate", "auth", "credentials",
-                "not authorized", "permission denied",
+                "reauthenticate", "re-authenticate", "authentication failed",
+                "oauth", "credentials expired", "not authorized", "permission denied",
             ])
 
             if is_param_error:
@@ -1001,25 +1040,8 @@ async def get_connected_services_status() -> str:
     if not connected:
         return "No external services are connected yet"
 
-    # Format service names for voice
-    _VOICE_NAMES = {
-        "microsoft_teams": "Microsoft Teams",
-        "one_drive": "OneDrive",
-        "gmail": "Gmail",
-        "google_sheets": "Google Sheets",
-        "google_docs": "Google Docs",
-        "github": "GitHub",
-        "canva": "Canva",
-        "supabase": "Supabase",
-        "excel": "Excel",
-        "slack": "Slack",
-        "pinecone": "Pinecone",
-        "recallai": "Recall AI",
-        "gamma": "Gamma",
-    }
-
-    names = [_VOICE_NAMES.get(s, s.replace("_", " ").title()) for s in connected]
-    tool_counts = [f"{_VOICE_NAMES.get(s, s)} with {len(_slugs_by_service[s])} tools" for s in connected]
+    names = [_COMPOSIO_VOICE_NAMES.get(s, s.replace("_", " ").title()) for s in connected]
+    tool_counts = [f"{_COMPOSIO_VOICE_NAMES.get(s, s)} with {len(_slugs_by_service[s])} tools" for s in connected]
 
     if len(names) == 1:
         summary = names[0]
@@ -1042,36 +1064,7 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     """
     service_lower = service.lower().strip().replace(" ", "_")
     service_lower = _SERVICE_ALIASES.get(service_lower, service_lower)
-    _VOICE_NAMES = {
-        "teams": "Microsoft Teams",
-        "microsoft_teams": "Microsoft Teams",
-        "onedrive": "OneDrive",
-        "one_drive": "OneDrive",
-        "gmail": "Gmail",
-        "sheets": "Google Sheets",
-        "google_sheets": "Google Sheets",
-        "docs": "Google Docs",
-        "google_docs": "Google Docs",
-        "github": "GitHub",
-        "canva": "Canva",
-        "supabase": "Supabase",
-        "excel": "Excel",
-        "slack": "Slack",
-        "pinecone": "Pinecone",
-        "gamma": "Gamma",
-        "notion": "Notion",
-        "hubspot": "HubSpot",
-        "salesforce": "Salesforce",
-        "linear": "Linear",
-        "jira": "Jira",
-        "asana": "Asana",
-        "dropbox": "Dropbox",
-        "box": "Box",
-        "zoom": "Zoom",
-        "typeform": "Typeform",
-        "airtable": "Airtable",
-    }
-    display_name = _VOICE_NAMES.get(service_lower, service.replace("_", " ").title())
+    display_name = _COMPOSIO_VOICE_NAMES.get(service_lower, service.replace("_", " ").title())
 
     from ..config import get_settings
     settings = get_settings()
