@@ -478,7 +478,7 @@ async def manage_connections_async(
         catalog = await refresh_slug_index()
         tool_count = catalog.count("\n") if catalog else 0
         await publish_tool_completed(call_id, f"Refreshed {tool_count} tools")
-        return f"I refreshed my tools and now have access to the latest connected services"
+        return f"Tools refreshed. Use these exact slugs for composioBatchExecute:\n{catalog}"
 
     return "I can check your connection status or help you connect a new service. Just say status or connect or refresh"
 
