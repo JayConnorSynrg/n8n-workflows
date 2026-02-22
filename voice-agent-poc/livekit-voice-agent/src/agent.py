@@ -375,7 +375,6 @@ async def entrypoint(ctx: JobContext):
             api_key=settings.fireworks_api_key,
             temperature=settings.fireworks_temperature,
             parallel_tool_calls=True,
-            max_tokens=settings.fireworks_max_tokens,
         )
 
     def init_tts():
