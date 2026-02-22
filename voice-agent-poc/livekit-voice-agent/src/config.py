@@ -29,7 +29,7 @@ class Settings(BaseSettings):
         alias="FIREWORKS_MODEL"
     )
     fireworks_temperature: float = Field(default=0.6, alias="FIREWORKS_TEMPERATURE")
-    fireworks_max_tokens: int = Field(default=512, alias="FIREWORKS_MAX_TOKENS")
+    fireworks_max_tokens: int = Field(default=1024, alias="FIREWORKS_MAX_TOKENS")
 
     # Cartesia
     cartesia_api_key: str = Field(..., alias="CARTESIA_API_KEY")

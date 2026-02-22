@@ -8,6 +8,7 @@ Architecture:
 - Every tool publishes lifecycle events (tool.call → tool.executing → tool.completed)
   to the LiveKit data channel for real-time client-side observability
 """
+import time
 from typing import Optional
 
 from livekit.agents import llm
@@ -44,23 +45,12 @@ async def send_email_async(
     body: str,
     cc: Optional[str] = None,
 ) -> str:
-    """Send email after confirmation."""
+    """Send email synchronously — LLM gets real confirmation back to confirm task completion."""
     call_id = await publish_tool_start("sendEmail", {"to": to, "subject": subject})
     await publish_tool_executing(call_id)
-
-    worker = get_worker()
-    if not worker:
-        await email_tool.send_email_tool(to, subject, body, cc)
-        await publish_tool_completed(call_id, "Email sent")
-        return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
-
-    await worker.dispatch(
-        tool_name="sendEmail",
-        tool_func=email_tool.send_email_tool,
-        kwargs={"to": to, "subject": subject, "body": body, "cc": cc},
-    )
-    # Completed event will fire from AsyncToolWorker when done
-    return f"Sending email to {to.split('@')[0].replace('.', ' ').title()}"
+    await email_tool.send_email_tool(to, subject, body, cc)
+    await publish_tool_completed(call_id, "Email sent")
+    return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
 
 
 # =============================================================================
@@ -141,6 +131,7 @@ async def vector_store_async(
             tool_name="storeKnowledge",
             tool_func=vector_store_tool.store_knowledge_tool,
             kwargs={"content": content, "category": category or "general", "source": None},
+            call_id=call_id,
         )
         return "Storing to knowledge base"
 
@@ -437,8 +428,8 @@ async def manage_connections_async(
             # Email failed — tell user the situation without the raw URL
             await publish_tool_completed(call_id, f"Auth URL generated for {display_name}")
             return (
-                f"I have the connection link for {display_name} but could not send it via email. "
-                f"Please go to composio dot dev to connect {display_name}"
+                f"I have the connection link for {display_name} ready but could not send it via email right now. "
+                f"Please check your email settings and try again or contact support to connect {display_name} manually."
             )
 
     if action_lower == "refresh":
@@ -498,7 +489,13 @@ async def list_composio_tools_async(service: str = "") -> str:
 async def composio_batch_execute_async(
     tools_json: str,
 ) -> str:
-    """Execute Composio tools with step-based dependency ordering via AsyncToolWorker."""
+    """Execute Composio tools synchronously with step-based ordering.
+
+    Always returns real results — never dispatches to background.
+    This is essential for LLM task chaining: the LLM must receive actual data
+    from step N before it can reason about and execute step N+1.
+    Tools within each step run in parallel via asyncio.gather.
+    """
     import json
     from .composio_router import batch_execute_composio_tools
 
@@ -518,6 +515,10 @@ async def composio_batch_execute_async(
         if not isinstance(t, dict) or not t.get("tool_slug"):
             return "Each tool must have a tool_slug field"
 
+    batch_call_id = f"composioBatch_{int(time.time()*1000)%100000}"
+    tool_names_preview = "+".join([t.get("tool_slug", "?")[:15] for t in tools[:3]])
+    await publish_tool_start(batch_call_id, {"tools": tool_names_preview, "count": len(tools)})
+
     # Group tools by step for ordered execution
     # Default step=1 if not specified (all parallel)
     step_groups: dict[int, list] = {}
@@ -527,52 +528,16 @@ async def composio_batch_execute_async(
             step = 1
         step_groups.setdefault(step, []).append(t)
 
-    tool_names = [t.get("tool_slug", "unknown") for t in tools]
-    display = " and ".join(
-        t.replace("_", " ").lower() for t in tool_names[:3]
-    )
-    if len(tool_names) > 3:
-        display += f" and {len(tool_names) - 3} more"
+    # Always synchronous — LLM receives real results and can chain to next step.
+    # Tools within each step run in parallel via asyncio.gather inside
+    # batch_execute_composio_tools. Steps execute in order: step 1 → step 2 → step 3.
+    # This is the ONLY correct pattern — background dispatch breaks LLM task chaining.
+    all_results = []
+    for step_num in sorted(step_groups.keys()):
+        group_result = await batch_execute_composio_tools(step_groups[step_num])
+        all_results.append(group_result)
 
-    num_steps = len(step_groups)
-
-    # Single tool: execute synchronously so LLM gets real results back.
-    # Multi-tool: dispatch to background worker for parallel execution.
-    if len(tools) == 1:
-        return await batch_execute_composio_tools(tools)
-
-    # Multiple tools in single step — dispatch to background worker
-    if num_steps == 1:
-        worker = get_worker()
-        if worker:
-            await worker.dispatch(
-                tool_name=f"composio:batch:{'+'.join(tool_names)}",
-                tool_func=batch_execute_composio_tools,
-                kwargs={"tools": tools},
-            )
-            return f"Running {len(tools)} tools now {display}"
-        return await batch_execute_composio_tools(tools)
-
-    # Multi-step: dispatch ordered execution to background worker
-    async def _execute_ordered_steps(step_groups: dict, tool_names: list) -> str:
-        """Execute tool groups in step order, parallel within each step."""
-        all_results = []
-        for step_num in sorted(step_groups.keys()):
-            group = step_groups[step_num]
-            group_result = await batch_execute_composio_tools(group)
-            all_results.append(group_result)
-        return " then ".join(all_results)
-
-    worker = get_worker()
-    if worker:
-        await worker.dispatch(
-            tool_name=f"composio:ordered:{'+'.join(tool_names)}",
-            tool_func=_execute_ordered_steps,
-            kwargs={"step_groups": step_groups, "tool_names": tool_names},
-        )
-        return f"Running {len(tools)} tools in {num_steps} steps {display}"
-
-    return await _execute_ordered_steps(step_groups, tool_names)
+    return " | ".join(all_results) if len(all_results) > 1 else (all_results[0] if all_results else "No tools executed")
 
 
 @llm.function_tool(
@@ -598,11 +563,20 @@ async def composio_execute_async(
     except (json.JSONDecodeError, TypeError):
         return "Could not parse the arguments try again with valid JSON"
 
+    call_id = f"composioExecute_{tool_slug[:20]}_{int(time.time()*1000)%100000}"
+    await publish_tool_start(call_id, {"slug": tool_slug})
+
     # Synchronous execution — blocks until result, LLM can reason about it
-    return await execute_composio_tool(
-        tool_slug=tool_slug,
-        arguments=arguments,
-    )
+    try:
+        result_str = await execute_composio_tool(
+            tool_slug=tool_slug,
+            arguments=arguments,
+        )
+        await publish_tool_completed(call_id, result_str[:200])
+        return result_str
+    except Exception as e:
+        await publish_tool_error(call_id, str(e)[:200])
+        raise
 
 
 # =============================================================================
