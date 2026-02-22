@@ -159,18 +159,21 @@ class TaskTracker:
     def should_inject_continuation(self) -> bool:
         """Returns True if the heartbeat should inject a continuation signal.
 
-        Fires only when ALL of:
-        - Active incomplete objective exists
-        - Agent is NOT currently responding to the user
-        - A tool completed but the agent has NOT yet responded to it (stalled)
-        - No activity for stall_threshold_seconds
-        - At least one tool call was made for this objective (multi-step task)
-        - Max continuations not exceeded
+        Two detection cases:
 
-        KEY INVARIANT: The heartbeat is SILENT after the agent responds to a tool.
-        `_tool_completed_since_last_response` is armed by tool completion and
-        disarmed when the agent starts responding — so post-task idle chat never
-        triggers an injection.
+        CASE 1 — Tool-result stall (tight 4s threshold):
+          A tool completed but the agent has not yet responded. The flag
+          `_tool_completed_since_last_response` is armed on tool completion and
+          disarmed when the agent starts speaking. Only fires within this window.
+
+        CASE 2 — No-tool stall (16s threshold):
+          The current objective has zero tool calls. The agent spoke (or was
+          asked) but never executed a tool — catches LLM hallucination stalls
+          where the model claims to be working without actually calling anything.
+          `_total_tool_calls_for_objective` is reset to 0 on each new user task
+          message, so this correctly detects per-task inaction.
+
+        Both cases require: active objective + agent idle + < max continuations.
         """
         with self._lock:
             # No active task
@@ -188,22 +191,22 @@ class TaskTracker:
                 )
                 return False
 
-            # Not a tool-using task — skip idle chat
-            if self._total_tool_calls_for_objective == 0:
-                return False
-
-            # CRITICAL SILENCE GUARD: Only fire if the agent has NOT yet responded
-            # to the most recent tool result. Once the agent speaks after a tool,
-            # this flag is cleared — preventing spurious post-task continuations.
-            if not self._tool_completed_since_last_response:
-                return False
-
-            # Check idle time
             idle_seconds = time.monotonic() - self._last_activity_at
-            if idle_seconds < self._stall_threshold:
-                return False
 
-            return True
+            # CASE 1: Tool completed, agent hasn't responded yet — tight stall window
+            if (self._total_tool_calls_for_objective > 0 and
+                    self._tool_completed_since_last_response and
+                    idle_seconds >= self._stall_threshold):
+                return True
+
+            # CASE 2: No tools called for this objective — agent may be stalling
+            # without taking action (spoke but didn't execute). Longer threshold
+            # avoids false positives on brief agent responses.
+            if (self._total_tool_calls_for_objective == 0 and
+                    idle_seconds >= self._stall_threshold * 4):  # 16s
+                return True
+
+            return False
 
     def get_continuation_prompt(self) -> str:
         """Build the continuation instructions for the LLM.
