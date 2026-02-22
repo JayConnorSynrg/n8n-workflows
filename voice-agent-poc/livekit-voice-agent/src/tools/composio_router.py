@@ -53,6 +53,21 @@ _slug_to_toolkit: dict[str, str] = {}
 # Slug → required params list (pre-fetched during index build for catalog hints)
 _slug_required_params: dict[str, list[str]] = {}
 
+# Full parameter schemas cached at index build — required + all properties with descriptions.
+# Keys: slug → {"required": [...], "properties": {name: description_str}}
+# Used for: catalog param hints, pre-execution validation, inline error messages.
+# Zero extra API calls — populated from tool objects already fetched in _build_slug_index.
+_slug_schemas: dict[str, dict] = {}
+
+# Per-call active schema state — loaded at call start, cleared at call end (success OR failure).
+# Implements the "schema lives only for the duration of a tool call" contract:
+#   LOAD: schema pulled from _slug_schemas into _active_call_schemas[call_id] before execution
+#   USE:  pre-execution check + error messages read from _active_call_schemas[call_id]
+#   CLEAR: finally block removes call_id entry — schema leaves "context" when call finishes
+# Schema never enters LLM context on success (clean voice result only).
+# Schema enters LLM context ONLY on errors so the LLM can self-correct and retry.
+_active_call_schemas: dict[str, dict] = {}  # call_id → {"slug", "required", "properties"}
+
 # Dynamic prefix map: auto-generated from actual slug data at index build time.
 # Sorted longest-first to avoid partial matches. Empty until first build.
 _SERVICE_PREFIXES: list[tuple[str, str]] = []
@@ -235,7 +250,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     4. Auto-generate prefix map from loaded slugs (zero hardcoded lists)
     5. No config file or env var — 100% driven by Composio state
     """
-    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params
+    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params, _slug_schemas
 
     if _slug_index_built:
         return
@@ -260,6 +275,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     slug_toolkit_map: dict[str, str] = {}
     by_service: dict[str, list[str]] = {}
     required_params: dict[str, list[str]] = {}
+    schemas: dict[str, dict] = {}
 
     for toolkit in active_toolkits:
         try:
@@ -269,10 +285,22 @@ def _build_slug_index(client, user_id: str = "") -> None:
             by_service[toolkit] = slugs
             for t in tools:
                 slug_toolkit_map[t.slug] = toolkit
-                # Extract required params from tool schema (zero extra API calls)
+                # Extract full schema (required + all properties) from tool object.
+                # Zero extra API calls — tool objects already fetched above.
+                # Stores both required list (for pre-execution validation) and
+                # property descriptions (for catalog hints and error messages).
                 schema = getattr(t, "input_schema", None) or getattr(t, "args_schema", None) or getattr(t, "parameters", None)
-                if isinstance(schema, dict) and schema.get("required"):
-                    required_params[t.slug] = schema["required"]
+                if isinstance(schema, dict):
+                    req = schema.get("required", [])
+                    props = schema.get("properties", {})
+                    if req or props:
+                        prop_desc = {
+                            k: (v.get("description", v.get("type", "")) if isinstance(v, dict) else str(v))[:80]
+                            for k, v in props.items()
+                        }
+                        schemas[t.slug] = {"required": req, "properties": prop_desc}
+                    if req:
+                        required_params[t.slug] = req
             logger.debug(f"Composio: Loaded {len(slugs)} tools from {toolkit}")
         except Exception as exc:
             logger.error(
@@ -284,6 +312,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     _slug_to_toolkit = slug_toolkit_map
     _slugs_by_service = by_service
     _slug_required_params = required_params
+    _slug_schemas = schemas
 
     # Auto-generate prefix map from actual slug data (replaces hardcoded list)
     _SERVICE_PREFIXES = _auto_generate_prefixes(by_service)
@@ -319,10 +348,27 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
         return "No connected services available. Use manageConnections with action status to check what is connected."
 
     def _format_slug(slug: str) -> str:
-        """Format a slug with inline required params hint."""
-        req = _slug_required_params.get(slug)
-        if req:
-            return f"  {slug} (requires: {', '.join(req)})"
+        """Format a slug with inline parameter hints from cached schema.
+
+        Shows required params when declared. Falls back to showing key optional
+        params for tools that omit the 'required' array (e.g. ONE_DRIVE tools).
+        This prevents the agent from calling tools blind without param context.
+        """
+        schema = _slug_schemas.get(slug, {})
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+
+        hints = []
+        if required:
+            hints.append(f"requires: {', '.join(required)}")
+        elif properties:
+            # Tool has parameters but no declared required array.
+            # Show key params so the LLM knows what arguments exist.
+            key_params = list(properties.keys())[:5]
+            hints.append(f"key params: {', '.join(key_params)}")
+
+        if hints:
+            return f"  {slug} ({', '.join(hints)})"
         return f"  {slug}"
 
     # Resolve service alias
@@ -354,7 +400,8 @@ def get_tool_catalog(service_filter: str | None = None) -> str:
     action_slugs = {k: v for k, v in _slugs_by_service.items() if k not in _EXCLUDED_SERVICES}
     total = sum(len(v) for v in action_slugs.values())
     lines = [f"CONNECTED SERVICES CATALOG — {total} action tools"]
-    lines.append("Each tool shows required parameters in parentheses. Pass these as arguments_json keys.")
+    lines.append("(requires: X, Y) = MUST pass these as arguments_json keys or the call will fail before reaching the API.")
+    lines.append("(key params: A, B) = no required array declared but these are the available parameters.")
     for svc, slugs in sorted(action_slugs.items()):
         lines.append(f"\n=== {svc.upper()} ({len(slugs)} tools) ===")
         for slug in sorted(slugs):
@@ -740,11 +787,13 @@ async def refresh_slug_index() -> str:
 
     Returns the updated tool catalog string.
     """
-    global _slug_index_built, _slug_required_params
+    global _slug_index_built, _slug_required_params, _slug_schemas
     _slug_index_built = False
     _failed_slugs.clear()
     _service_auth_failed.clear()  # Re-auth completed — clear auth circuit breakers
     _slug_required_params = {}
+    _slug_schemas = {}
+    _active_call_schemas.clear()  # Defensive: discard any stale per-call states from before refresh
 
     from ..config import get_settings
     settings = get_settings()
@@ -838,6 +887,30 @@ async def get_tool_schema(tool_slug: str) -> str:
         desc_text = f" - {description[:80]}" if description else ""
         lines.append(f"  {prop_name} ({prop_type}, {marker}){desc_text}")
 
+    return "\n".join(lines)
+
+
+def _format_cached_schema(slug: str) -> str:
+    """Return cached schema as concise text for LLM error messages.
+
+    Uses data already populated in _slug_schemas during _build_slug_index.
+    Zero API calls — pure local dict lookup. Returns empty string if no schema.
+    """
+    schema = _slug_schemas.get(slug, {})
+    required = schema.get("required", [])
+    properties = schema.get("properties", {})
+
+    if not required and not properties:
+        return ""
+
+    lines = []
+    if required:
+        lines.append(f"Required params: {', '.join(required)}")
+    if properties:
+        for prop, desc in sorted(properties.items()):
+            marker = "[REQUIRED]" if prop in required else "[optional]"
+            desc_text = f" — {desc[:70]}" if desc else ""
+            lines.append(f"  {prop} {marker}{desc_text}")
     return "\n".join(lines)
 
 
@@ -935,6 +1008,41 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     ui_name = _display_name(resolved_slug)
     call_id = await publish_tool_start(ui_name, {k: str(v)[:60] for k, v in list(arguments.items())[:3]})
 
+    # ── SCHEMA LOAD ────────────────────────────────────────────────────────────
+    # Load cached schema into per-call active state.
+    # Schema lives only for the duration of this tool call:
+    #   LOAD here → USE in validation + error messages → CLEAR in finally block
+    # On SUCCESS → schema never enters LLM context (voice result only, clean output)
+    # On ERROR   → schema enters LLM context so LLM can self-correct and retry
+    call_schema = _slug_schemas.get(resolved_slug, {})
+    _active_call_schemas[call_id] = call_schema
+    call_required = call_schema.get("required", [])
+    call_properties = call_schema.get("properties", {})
+    logger.debug(
+        f"Composio: Schema LOADED call={call_id} slug={resolved_slug} "
+        f"required={call_required} props={len(call_properties)}"
+    )
+
+    # ── PRE-EXECUTION VALIDATION ───────────────────────────────────────────────
+    # Check required params BEFORE hitting the API (saves a network round-trip).
+    # Uses schema from _active_call_schemas — no separate API call needed.
+    if call_required:
+        missing = [p for p in call_required if p not in arguments]
+        if missing:
+            schema_text = _format_cached_schema(resolved_slug)
+            schema_hint = f"\n{schema_text}" if schema_text else ""
+            logger.warning(
+                f"Composio: Pre-exec param check FAILED call={call_id} slug={resolved_slug}: "
+                f"missing={missing}, passed={list(arguments.keys())}"
+            )
+            await publish_tool_error(call_id, f"Missing required params: {', '.join(missing)}")
+            _active_call_schemas.pop(call_id, None)  # CLEAR — schema leaves context
+            return (
+                f"Tool {resolved_slug} requires these parameters: {', '.join(call_required)}. "
+                f"You passed: {list(arguments.keys()) or 'nothing'}."
+                f"{schema_hint}\nRetry now with all required parameters."
+            )
+
     try:
         user_id = settings.composio_user_id.strip()
         logger.info(f"Composio SDK execute: slug={resolved_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
@@ -961,6 +1069,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
             await publish_tool_completed(call_id, voice_result[:100])
+            # Schema NOT included in return — clean voice result only.
+            # LLM context stays uncluttered on success. Schema cleared in finally.
             return voice_result
         else:
             error = result.get("error", "unknown error")
@@ -984,20 +1094,15 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             ])
 
             if is_param_error:
-                # Parameter validation error — auto-fetch schema and include in error response
-                # so LLM can retry immediately without a separate tool call.
-                # Do NOT increment circuit breaker — this is not a tool failure
-                logger.info(f"Composio: Parameter error for {resolved_slug} — fetching schema inline for LLM retry")
-                schema_str = ""
-                try:
-                    schema_info = await get_tool_schema(resolved_slug)
-                    schema_str = schema_info[:500]
-                except Exception:  # nosec B110 — best-effort schema lookup, fallback below
-                    pass
-                if schema_str:
+                # Parameter validation error — include schema in response so LLM can self-correct.
+                # Schema comes from _active_call_schemas (no extra API call).
+                # This IS the one case where schema enters LLM context — intentionally, to fix params.
+                logger.info(f"Composio: Param error for {resolved_slug} — injecting cached schema for LLM retry")
+                schema_text = _format_cached_schema(resolved_slug)
+                if schema_text:
                     return (
                         f"Tool {resolved_slug} failed — wrong arguments: {error_str}. "
-                        f"Required parameters: {schema_str}. Retry now with correct arguments."
+                        f"Correct parameters:\n{schema_text}\nRetry now with correct arguments."
                     )
                 else:
                     return (
@@ -1032,6 +1137,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
         await publish_tool_error(call_id, str(exc)[:100])
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
+
+    finally:
+        # ── SCHEMA CLEAR ───────────────────────────────────────────────────────
+        # Schema leaves per-call context regardless of success or failure.
+        # Keeps _active_call_schemas dict lean (no stale entries).
+        if call_id in _active_call_schemas:
+            _active_call_schemas.pop(call_id)
+            logger.debug(f"Composio: Schema CLEARED call={call_id} slug={resolved_slug}")
 
 
 async def get_connected_services_status() -> str:
