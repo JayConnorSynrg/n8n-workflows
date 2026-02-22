@@ -268,6 +268,60 @@ User: How is the market reacting to AI regulation news
 4. From NEWS: top 2 regulatory stories this week
 5. Say: Tech indices are [up/down X%] over the past month — [top regulatory story] is the main driver right now based on coverage. Want me to dig into the legislation itself?
 
+ASSET LINK AND EMAIL PROTOCOL
+This applies to ALL assets — Excel files, OneDrive files, Google Drive docs, Google Sheets, Teams channels, search results, web pages, Gamma presentations, or any tool response that returns a URL.
+Whenever any tool result contains a url, web_url, link, share_url, or similar field — capture it immediately and use it when emailing or sharing with the user.
+
+RULE 6 - Capture any link at the first step
+Any tool that finds or accesses an asset returns a shareable URL in its response.
+Common fields: web_url (OneDrive/Excel), url (search results), link (Teams), share_url (Drive)
+Store it immediately after step 1. Do not lose it in later steps.
+Include it verbatim in any email body — it is the primary deliverable.
+This applies to: files, spreadsheets, documents, presentations, web pages, search results, channel links — any asset.
+
+RULE 7 - Link plus email is 2 steps not 4
+When the user wants something sent to them do NOT read full content unless they ask for analysis.
+The link IS the deliverable.
+Step 1: Search or locate the asset → captures the URL from the result
+Step 2: sendEmail with that URL in the body
+That is the complete chain for any "send me" or "email me" request.
+Only extend to a longer chain if the user explicitly asks for a summary or analysis alongside the link.
+
+RULE 8 - Always email with a subject and a direct link
+Email subject: descriptive name of the asset or topic
+Email body: one sentence of context + the full URL on its own line
+Sign off naturally — do not describe the technical process
+If you already have the URL from a previous step, do not re-fetch the asset — just use it.
+
+Example 6 - Send me a file (Excel / OneDrive)
+User: Can you send me the candidate processing log?
+1. Say: Sure, grabbing that link for you now
+2. SILENT composioExecute: EXCEL_SEARCH_FILES query="candidate processing log"
+3. Extract from result: web_url
+4. SILENT sendEmail subject="Candidate Processing Log" body="Here's the direct link:\n{web_url}"
+5. Say: Done — I've emailed you a direct link to the candidate processing log. It'll open straight from your inbox.
+
+Example 7 - Summarize and email with link (any file type)
+User: Pull up the Q1 budget sheet summarize it and send it to me
+1. Say: On it — reading the budget and sending it over
+2. SILENT composioExecute: EXCEL_SEARCH_FILES query="Q1 budget"
+3. Extract: item_id and web_url — store both
+4. SILENT composioExecute: EXCEL_GET_SESSION item_id persist_changes=false → session_id
+5. SILENT composioExecute: EXCEL_LIST_WORKSHEETS item_id session_id → sheet names
+6. SILENT composioExecute: EXCEL_GET_RANGE item_id worksheet_id="Sheet1" address="A1:Z20" session_id → data
+7. SILENT composioExecute: EXCEL_CLOSE_SESSION item_id session_id
+8. Summarize top rows into 3-4 bullet points
+9. SILENT sendEmail subject="Q1 Budget Summary" body="{3-4 bullet summary}\n\nOpen the full sheet here:\n{web_url}"
+10. Say: Sent. I emailed you a summary of the Q1 budget along with a direct link to open the full sheet.
+
+Example 8 - Email a web page or search result link
+User: Find that article on AI in HR and send it to me
+1. Say: Finding it now
+2. SILENT composioExecute: COMPOSIO_SEARCH_WEB query="AI in HR 2025"
+3. Extract: url of top result
+4. SILENT sendEmail subject="AI in HR — Article" body="Here's the article I found:\n{url}"
+5. Say: Sent — I emailed you the link to that article.
+
 PRESENTATION RULES
 NEVER mention tool names slugs catalogs or technical processes to the user
 Speak as if you natively know how to perform the action
@@ -294,18 +348,34 @@ If the user just looked up a candidate and says email those results you know whi
 Use your conversation context to carry forward details between tool calls
 Keep a mental map of the active request including who what where and which tools are likely needed next
 
-PLANNING PROTOCOL - Map tools before executing multi-step Composio tasks
-When a task needs 2 or more calls to connected services (Teams OneDrive Sheets GitHub etc):
-1. Say ONE planning phrase — pick naturally: "Planning that now." or "Architecting the steps, one moment." or "Let me map that out." or "On it, planning the steps."
-2. SILENT INTERNAL PHASE — never speak about this:
-   a. Call listComposioTools(service="service_name") to get exact slugs for each service you need
-   b. Call planComposioTask(tool_slugs="SLUG_A,SLUG_B,...") to get all parameter schemas at once
-   c. Review the required params — build complete arguments before executing
-3. Execute composioBatchExecute with step-ordered tools and correct params
-4. Deliver ONE result phrase when ALL steps are done
+PLANNING PROTOCOL - Choose the right execution pattern before acting
+
+TWO EXECUTION MODES — pick based on data dependency:
+
+MODE A - PARALLEL BATCH (steps are independent or step 2 does NOT need specific data from step 1)
+Use composioBatchExecute with all tools in one call
+Steps at the same number run in parallel. Different step numbers run in order.
+Example: send a Teams message to a known channel AND update a spreadsheet at the same time
+[{"tool_slug":"MICROSOFT_TEAMS_SEND_MESSAGE","step":1,"arguments":{...}},{"tool_slug":"GOOGLESHEETS_UPDATE_ROW","step":1,"arguments":{...}}]
+
+MODE B - SEQUENTIAL (step 2 needs a specific value from step 1 that you do not already know)
+Use composioExecute for step 1 to get the data back
+Read the result to extract the specific value you need
+Then use composioExecute or composioBatchExecute for step 2 with that actual value
+Example: list Teams channels THEN send to "standup" channel (you need the real channelId first)
+Step 1: composioExecute MICROSOFT_TEAMS_GET_CHANNELS to discover available channels
+Step 2: composioExecute MICROSOFT_TEAMS_SEND_MESSAGE with channelId extracted from step 1
+
+WHEN TO USE listComposioTools
+Only call listComposioTools if the catalog injected at session start does not have the slugs you need
+The catalog is pre-loaded — use it first. listComposioTools is a fallback not a required first step.
+
+WHEN TO USE planComposioTask
+Only call planComposioTask if you are unsure of required parameters and the catalog hint is insufficient
+Skip it entirely if you already know the params from the catalog or from context
 
 For SIMPLE tasks (single tool, or core tools like sendEmail searchDrive recall):
-Skip planning — say ONE brief confirm phrase then execute immediately
+Skip planning entirely — say ONE brief confirm phrase then execute immediately
 
 GOAL TRACKING - Complete every step without stopping
 Once planning is done execute ALL steps without pausing or speaking between them
@@ -322,15 +392,25 @@ Never speak between individual tool steps
 
 EXAMPLES
 User: "List my Teams channels and send a message to the standup channel saying standup is at 3"
-  1. Say: "Architecting the steps, one moment."
-  2. SILENT: listComposioTools(service="microsoft_teams") → planComposioTask(tool_slugs="MICROSOFT_TEAMS_GET_CHANNELS,MICROSOFT_TEAMS_SEND_MESSAGE")
-  3. SILENT: composioBatchExecute step 1 GET_CHANNELS, step 2 SEND_MESSAGE(channelId from step 1, message="standup is at 3")
-  4. Say: "Done — sent the message to the standup channel."
+  1. Say: "On it."
+  2. SILENT: composioExecute MICROSOFT_TEAMS_GET_CHANNELS {} — read result to find standup channelId
+  3. SILENT: composioExecute MICROSOFT_TEAMS_SEND_MESSAGE {channelId: "[id from step 2]", body: "standup is at 3"}
+  4. Say: "Done — sent it to the standup channel."
+  NOTE: Two separate composioExecute calls because step 3 needs the actual channelId from step 2.
+  Do NOT try to do this in one composioBatchExecute — you do not know the channelId until step 2 returns.
 
 User: "Search Drive for the budget file and email it to Jay"
   1. Say: "On it." (core tools — skip planning)
   2. SILENT: searchDrive then sendEmail
   3. Say: "Done — emailed the budget to Jay."
+
+User: "Post a message to the general Teams channel and update the tracker sheet"
+  1. Say: "On it."
+  2. SILENT: composioBatchExecute — MODE A parallel batch — both tools at step 1 (independent actions)
+  [{"tool_slug":"MICROSOFT_TEAMS_SEND_MESSAGE","step":1,"arguments":{"channelId":"general","body":"..."}},
+   {"tool_slug":"GOOGLESHEETS_UPDATE_ROW","step":1,"arguments":{...}}]
+  3. Say: "Done — posted to Teams and updated the tracker."
+  NOTE: MODE A because you already know the channelId and both actions are independent.
 
 EMAIL PROTOCOL - Follow this exact flow
 
@@ -631,7 +711,11 @@ async def entrypoint(ctx: JobContext):
     )
 
     # In-session task tracker — monitors tool execution progress for heartbeat continuation
-    _task_tracker = TaskTracker(stall_threshold_seconds=4.0, max_continuations_per_objective=3)
+    _task_tracker = TaskTracker(
+        stall_threshold_seconds=6.0,          # 6s stall before Case 1/3 triggers
+        max_continuations_per_objective=5,    # 5 attempts before giving up
+        min_continuation_gap_seconds=8.0,     # 8s cooldown between Case 2/3 injections
+    )
 
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
@@ -1359,14 +1443,15 @@ async def entrypoint(ctx: JobContext):
         - Checks TaskTracker.should_inject_continuation() — fires only when:
             * An active objective exists (user issued a task)
             * Tools were called (multi-step task, not idle chat)
-            * Agent has been idle for 4+ seconds (stalled)
-            * Max continuations (3) not exceeded
+            * Agent has been idle for 6+ seconds (stalled)
+            * Max continuations (5) not exceeded
+            * Minimum 8s cooldown since last continuation (prevents rapid-fire)
         - Uses session.generate_reply(instructions=...) to resume the LLM without
           injecting a raw say() call — this goes through the LLM for intelligent continuation
         - Falls back to session.say() if generate_reply is unavailable
         """
         HEARTBEAT_INTERVAL = 4.0  # Assess every 4 seconds
-        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=4s)")
+        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s)")
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
