@@ -105,12 +105,19 @@ class TaskTracker:
             )
 
     def record_tool_call_completed(self) -> None:
-        """Called when a tool finishes executing."""
+        """Called when a tool finishes executing.
+
+        Also increments the total counter — this is the sole production hook
+        (on_function_tools_executed). record_tool_call_started() is optional
+        and only used if a started hook becomes available.
+        """
         with self._lock:
             self._tool_calls_pending = max(0, self._tool_calls_pending - 1)
+            self._total_tool_calls_for_objective += 1
             self._last_activity_at = time.monotonic()
             logger.debug(
-                f"[Heartbeat] Tool completed (pending={self._tool_calls_pending})"
+                f"[Heartbeat] Tool completed "
+                f"(pending={self._tool_calls_pending}, total={self._total_tool_calls_for_objective})"
             )
 
     def record_agent_responding(self) -> None:
