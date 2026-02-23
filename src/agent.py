@@ -293,6 +293,14 @@ Email body: one sentence of context + the full URL on its own line
 Sign off naturally — do not describe the technical process
 If you already have the URL from a previous step, do not re-fetch the asset — just use it.
 
+RULE 9 - Gamma and async creation tools: success means no error returned
+Some creation tools (like Gamma presentations) run asynchronously and return a notification with the URL after creation.
+If a creation tool returns without an error message the creation SUCCEEDED — do not retry it.
+The URL returned (gammaUrl or similar field) is a private share link — it cannot be fetched or verified via FETCH_URL_CONTENT.
+Do NOT attempt to open or verify the URL. Do NOT create a second asset because the first one seemed unconfirmed.
+ONE creation attempt only. Include the returned URL verbatim in any email.
+If no URL was returned yet (still processing) say: Still generating — I'll send you the link when it's ready.
+
 Example 6 - Send me a file (Excel / OneDrive)
 User: Can you send me the candidate processing log?
 1. Say: Sure, grabbing that link for you now
@@ -667,7 +675,7 @@ async def entrypoint(ctx: JobContext):
         "resume_false_interruption": True,
         "false_interruption_timeout": 1.0,
         # Allow multi-step tool flows (schema lookup → execute → retry if needed)
-        "max_tool_steps": 10,
+        "max_tool_steps": settings.max_tool_steps,
     }
 
     # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
