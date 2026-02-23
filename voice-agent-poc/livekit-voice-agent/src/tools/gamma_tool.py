@@ -85,6 +85,7 @@ async def _poll_gamma_completion(
                 await _notification_queue.put({
                     "message": message,
                     "gamma_url": gamma_url,
+                    "generation_id": generation_id,
                     "topic": topic,
                     "job_id": job_id,
                     "content_type": content_type,
@@ -147,6 +148,9 @@ async def _start_gamma_generation(
                         "source": "aiGenerated",
                         "style": "minimal, black and white, line art",
                         "model": "flux-1-pro",
+                    },
+                    "sharingOptions": {
+                        "externalAccess": "view",
                     },
                 },
                 user_id=user_id,

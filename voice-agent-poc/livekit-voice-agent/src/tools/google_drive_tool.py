@@ -10,9 +10,14 @@ Memory Offer Pattern:
 When data is retrieved, the workflow returns a memory_offer field that
 indicates the data can be saved to short-term memory for cross-tool use.
 The voice agent should prompt: "Would you like me to remember this for later?"
+
+Fallback: If n8n is unavailable or returns an error, Composio Google Drive
+tools are used automatically (GOOGLEDRIVE_FIND_FILE, GOOGLEDRIVE_DOWNLOAD_FILE).
 """
+import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any, Dict, Optional, Literal
 
@@ -30,6 +35,110 @@ from ..utils.short_term_memory import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# ---------------------------------------------------------------------------
+# Composio fallback client (lazy-initialised, module-level singleton)
+# ---------------------------------------------------------------------------
+
+_composio_client = None
+
+
+def _get_composio_client():
+    global _composio_client
+    if _composio_client is None:
+        try:
+            from composio import Composio
+            _composio_client = Composio(api_key=os.getenv("COMPOSIO_API_KEY"))
+        except Exception as e:
+            logger.warning(f"Could not initialise Composio client: {e}")
+    return _composio_client
+
+
+async def _composio_execute(slug: str, arguments: dict) -> dict:
+    """Run a Composio Drive tool in a thread (SDK is sync) and return data dict."""
+    def _run():
+        client = _get_composio_client()
+        if client is None:
+            raise RuntimeError("Composio client unavailable")
+        user_id = os.getenv("COMPOSIO_USER_ID", "default")
+        return client.tools.execute(
+            slug,
+            arguments,
+            user_id=user_id,
+            dangerously_skip_version_check=True,
+        )
+
+    result = await asyncio.to_thread(_run)
+    return result.get("data", {}) if isinstance(result, dict) else {}
+
+
+async def _composio_fallback_search(query: str, max_results: int) -> list:
+    """Search Drive via Composio GOOGLEDRIVE_FIND_FILE."""
+    try:
+        data = await _composio_execute(
+            "GOOGLEDRIVE_FIND_FILE",
+            {
+                "q": f"name contains '{query}' or fullText contains '{query}'",
+                "pageSize": max_results,
+            },
+        )
+        files = data.get("files", [])
+        return [
+            {
+                "file_name": f.get("name", ""),
+                "title": f.get("name", ""),
+                "snippet": f.get("mimeType", ""),
+                "id": f.get("id", ""),
+            }
+            for f in files
+        ]
+    except Exception as e:
+        logger.error(f"Composio Drive search fallback failed: {e}")
+        return []
+
+
+async def _composio_fallback_list(max_results: int) -> list:
+    """List Drive files via Composio GOOGLEDRIVE_FIND_FILE."""
+    try:
+        data = await _composio_execute(
+            "GOOGLEDRIVE_FIND_FILE",
+            {"q": "trashed = false", "pageSize": max_results},
+        )
+        return data.get("files", [])
+    except Exception as e:
+        logger.error(f"Composio Drive list fallback failed: {e}")
+        return []
+
+
+async def _composio_fallback_get(file_id: str) -> dict:
+    """Get document content via Composio GOOGLEDRIVE_DOWNLOAD_FILE."""
+    try:
+        data = await _composio_execute(
+            "GOOGLEDRIVE_DOWNLOAD_FILE",
+            {"file_id": file_id, "mime_type": "text/plain"},
+        )
+        content_obj = data.get("downloaded_file_content", {})
+        content = content_obj.get("content", "")
+        s3url = content_obj.get("s3url", "")
+
+        # Some file types return an S3 URL instead of inline content
+        if not content and s3url:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(s3url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    content = await resp.text()
+
+        return {
+            "extracted_text": content,
+            "content": content,
+            "title": data.get("name", "Document"),
+        }
+    except Exception as e:
+        logger.error(f"Composio Drive get fallback failed: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Short-term memory helpers
+# ---------------------------------------------------------------------------
 
 def _store_to_short_term_memory(
     operation: str,
@@ -69,6 +178,10 @@ def get_short_term_memory(
     return recall_by_category(ToolCategory.DRIVE, session_id)
 
 
+# ---------------------------------------------------------------------------
+# LLM-registered tools
+# ---------------------------------------------------------------------------
+
 @llm.function_tool(
     name="search_documents",
     description="""Search for documents in the shared Google Drive folder.
@@ -81,7 +194,7 @@ async def search_documents_tool(
     max_results: int = 5,
     save_to_memory: bool = True,
 ) -> str:
-    """Search documents in Google Drive via n8n webhook.
+    """Search documents in Google Drive via n8n webhook (Composio fallback on error).
 
     Args:
         query: Search query (searches titles and content)
@@ -102,6 +215,10 @@ async def search_documents_tool(
         "limit": max_results,
     }
 
+    documents = None
+    memory_offer = {}
+    used_fallback = False
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -113,42 +230,45 @@ async def search_documents_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle n8n response format: {result: {...}}
                     inner_result = result.get("result", result)
                     data = inner_result if isinstance(inner_result, dict) else result
                     documents = data.get("results", data.get("documents", data.get("files", [])))
                     memory_offer = result.get("memory_offer", {})
-
-                    if not documents:
-                        return "No documents found matching your query."
-
-                    # Format results for voice
-                    formatted = []
-                    for i, doc in enumerate(documents[:max_results], 1):
-                        title = doc.get("file_name", doc.get("title", doc.get("name", f"Document {i}")))
-                        snippet = doc.get("snippet", doc.get("extracted_text", ""))[:150]
-                        formatted.append(f"{i}. {title}: {snippet}")
-
-                    # Auto-save to short-term memory if enabled
-                    summary = memory_offer.get("summary", f"Found {len(documents)} documents")
-                    if save_to_memory:
-                        _store_to_short_term_memory("search", documents, summary)
-
-                    response_text = f"Found {len(documents)} documents:\n" + "\n".join(formatted)
-
-                    # Add memory offer hint for agent
-                    if memory_offer.get("available"):
-                        response_text += f"\n\n[Memory: {summary}. Available for vector store, email summary, or reference.]"
-
-                    return response_text
                 else:
-                    error_msg = result.get("error", "Unknown error")
-                    return f"Search failed: {error_msg}"
+                    logger.warning(f"n8n Drive search returned {response.status}, trying Composio fallback")
+                    documents = await _composio_fallback_search(query, max_results)
+                    used_fallback = True
 
     except aiohttp.ClientError as e:
-        return f"Network error searching documents: {str(e)}"
+        logger.warning(f"n8n Drive search network error, trying Composio fallback: {e}")
+        documents = await _composio_fallback_search(query, max_results)
+        used_fallback = True
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        logger.warning(f"n8n Drive search unexpected error, trying Composio fallback: {e}")
+        documents = await _composio_fallback_search(query, max_results)
+        used_fallback = True
+
+    if not documents:
+        return "No documents found matching your query."
+
+    formatted = []
+    for i, doc in enumerate(documents[:max_results], 1):
+        title = doc.get("file_name", doc.get("title", doc.get("name", f"Document {i}")))
+        snippet = doc.get("snippet", doc.get("extracted_text", ""))[:150]
+        formatted.append(f"{i}. {title}: {snippet}")
+
+    summary = memory_offer.get("summary", f"Found {len(documents)} documents")
+    if save_to_memory:
+        _store_to_short_term_memory("search", documents, summary)
+
+    response_text = f"Found {len(documents)} documents:\n" + "\n".join(formatted)
+
+    if used_fallback:
+        response_text += "\n\n[Note: Retrieved via Composio backup (n8n unavailable)]"
+    elif memory_offer.get("available"):
+        response_text += f"\n\n[Memory: {summary}. Available for vector store, email summary, or reference.]"
+
+    return response_text
 
 
 @llm.function_tool(
@@ -162,7 +282,7 @@ async def get_document_tool(
     file_id: str,
     save_to_memory: bool = True,
 ) -> str:
-    """Get full document content from Google Drive via n8n webhook.
+    """Get full document content from Google Drive via n8n webhook (Composio fallback on error).
 
     Args:
         file_id: The Google Drive file ID to retrieve
@@ -181,6 +301,10 @@ async def get_document_tool(
         "file_id": file_id,
     }
 
+    data = None
+    memory_offer = {}
+    used_fallback = False
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -192,49 +316,55 @@ async def get_document_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle n8n response format: {result: {...}}
                     inner_result = result.get("result", result)
                     data = inner_result if isinstance(inner_result, dict) else result
                     memory_offer = result.get("memory_offer", {})
-
-                    content = data.get("extracted_text", data.get("content", data.get("text", "")))
-                    title = data.get("file_name", data.get("title", data.get("name", "Document")))
-
-                    if not content:
-                        return f"Document '{title}' appears to be empty."
-
-                    # Auto-save full document to short-term memory
-                    summary = memory_offer.get("summary", f"Retrieved document: {title}")
-                    if save_to_memory:
-                        _store_to_short_term_memory("get", {
-                            "file_id": file_id,
-                            "title": title,
-                            "content": content,
-                            "full_data": data,
-                        }, summary)
-
-                    # Truncate for voice response if too long
-                    display_content = content
-                    if len(content) > 2000:
-                        display_content = content[:2000] + "... [truncated for voice]"
-
-                    response_text = f"Document: {title}\n\n{display_content}"
-
-                    # Add memory offer hint for agent
-                    if memory_offer.get("available"):
-                        suggested_uses = memory_offer.get("suggested_uses", [])
-                        uses_str = ", ".join(suggested_uses) if suggested_uses else "vector store, email, analysis"
-                        response_text += f"\n\n[Memory: Full document saved. Available for {uses_str}.]"
-
-                    return response_text
                 else:
-                    error_msg = result.get("error", "Unknown error")
-                    return f"Failed to retrieve document: {error_msg}"
+                    logger.warning(f"n8n Drive get returned {response.status}, trying Composio fallback")
+                    data = await _composio_fallback_get(file_id)
+                    used_fallback = True
 
     except aiohttp.ClientError as e:
-        return f"Network error retrieving document: {str(e)}"
+        logger.warning(f"n8n Drive get network error, trying Composio fallback: {e}")
+        data = await _composio_fallback_get(file_id)
+        used_fallback = True
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        logger.warning(f"n8n Drive get unexpected error, trying Composio fallback: {e}")
+        data = await _composio_fallback_get(file_id)
+        used_fallback = True
+
+    if not data:
+        return f"Failed to retrieve document '{file_id}'."
+
+    content = data.get("extracted_text", data.get("content", data.get("text", "")))
+    title = data.get("file_name", data.get("title", data.get("name", "Document")))
+
+    if not content:
+        return f"Document '{title}' appears to be empty."
+
+    summary = memory_offer.get("summary", f"Retrieved document: {title}")
+    if save_to_memory:
+        _store_to_short_term_memory("get", {
+            "file_id": file_id,
+            "title": title,
+            "content": content,
+            "full_data": data,
+        }, summary)
+
+    display_content = content
+    if len(content) > 2000:
+        display_content = content[:2000] + "... [truncated for voice]"
+
+    response_text = f"Document: {title}\n\n{display_content}"
+
+    if used_fallback:
+        response_text += "\n\n[Note: Retrieved via Composio backup (n8n unavailable)]"
+    elif memory_offer.get("available"):
+        suggested_uses = memory_offer.get("suggested_uses", [])
+        uses_str = ", ".join(suggested_uses) if suggested_uses else "vector store, email, analysis"
+        response_text += f"\n\n[Memory: Full document saved. Available for {uses_str}.]"
+
+    return response_text
 
 
 @llm.function_tool(
@@ -248,7 +378,7 @@ async def list_drive_files_tool(
     max_results: int = 10,
     save_to_memory: bool = True,
 ) -> str:
-    """List files in Google Drive via n8n webhook.
+    """List files in Google Drive via n8n webhook (Composio fallback on error).
 
     Args:
         max_results: Maximum number of files to list
@@ -267,6 +397,11 @@ async def list_drive_files_tool(
         "limit": max_results,
     }
 
+    files = None
+    file_count = 0
+    memory_offer = {}
+    used_fallback = False
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -278,44 +413,49 @@ async def list_drive_files_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    # Handle n8n response format: {result: {files: [...], count: N}}
-                    # Also supports legacy format: {files: [...]}
                     inner_result = result.get("result", result)
                     data = inner_result if isinstance(inner_result, dict) else result
                     memory_offer = result.get("memory_offer", {})
-
                     files = data.get("files", data.get("documents", []))
                     file_count = data.get("count", len(files))
-
-                    if not files:
-                        return "No files found in Drive folder."
-
-                    # Auto-save to short-term memory
-                    summary = memory_offer.get("summary", f"Found {file_count} files in Drive")
-                    if save_to_memory:
-                        _store_to_short_term_memory("list", files, summary)
-
-                    formatted = []
-                    for i, f in enumerate(files[:max_results], 1):
-                        name = f.get("name", f.get("title", f"File {i}"))
-                        file_type = f.get("mimeType", f.get("type", "unknown"))
-                        formatted.append(f"{i}. {name} ({file_type})")
-
-                    response_text = f"Found {file_count} files:\n" + "\n".join(formatted)
-
-                    # Add memory offer hint for agent
-                    if memory_offer.get("available"):
-                        response_text += f"\n\n[Memory: {summary}. Available for reference or email summary.]"
-
-                    return response_text
                 else:
-                    error_msg = result.get("error", "Unknown error")
-                    return f"Failed to list files: {error_msg}"
+                    logger.warning(f"n8n Drive list returned {response.status}, trying Composio fallback")
+                    files = await _composio_fallback_list(max_results)
+                    file_count = len(files)
+                    used_fallback = True
 
     except aiohttp.ClientError as e:
-        return f"Network error listing files: {str(e)}"
+        logger.warning(f"n8n Drive list network error, trying Composio fallback: {e}")
+        files = await _composio_fallback_list(max_results)
+        file_count = len(files)
+        used_fallback = True
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        logger.warning(f"n8n Drive list unexpected error, trying Composio fallback: {e}")
+        files = await _composio_fallback_list(max_results)
+        file_count = len(files)
+        used_fallback = True
+
+    if not files:
+        return "No files found in Drive folder."
+
+    summary = memory_offer.get("summary", f"Found {file_count} files in Drive")
+    if save_to_memory:
+        _store_to_short_term_memory("list", files, summary)
+
+    formatted = []
+    for i, f in enumerate(files[:max_results], 1):
+        name = f.get("name", f.get("title", f"File {i}"))
+        file_type = f.get("mimeType", f.get("type", "unknown"))
+        formatted.append(f"{i}. {name} ({file_type})")
+
+    response_text = f"Found {file_count} files:\n" + "\n".join(formatted)
+
+    if used_fallback:
+        response_text += "\n\n[Note: Retrieved via Composio backup (n8n unavailable)]"
+    elif memory_offer.get("available"):
+        response_text += f"\n\n[Memory: {summary}. Available for reference or email summary.]"
+
+    return response_text
 
 
 @llm.function_tool(
@@ -347,7 +487,6 @@ async def recall_drive_data_tool(
     summary = memory.get("summary", "Data retrieved")
     data = memory.get("data")
 
-    # Format based on operation type
     if stored_op == "search":
         docs = data if isinstance(data, list) else []
         doc_names = [d.get("file_name", d.get("title", "Unknown")) for d in docs[:5]]

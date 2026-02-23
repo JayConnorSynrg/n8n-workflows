@@ -25,6 +25,7 @@ from ..utils.short_term_memory import (
     recall_by_tool,
     recall_most_recent,
     get_memory_summary,
+    store_tool_result,
     ToolCategory,
 )
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
@@ -60,6 +61,17 @@ async def send_email_async(
     await publish_tool_executing(call_id)
     await email_tool.send_email_tool(to, subject, body, cc)
     await publish_tool_completed(call_id, "Email sent")
+    # Capture recipient preference for fast-path email (non-blocking, best-effort)
+    try:
+        store_tool_result(
+            tool_name="sendEmail",
+            operation="recipient_preference",
+            data={"email": to},
+            summary=f"Known email recipient: {to}",
+            metadata={"preference_key": f"known_email_recipient:{to}"},
+        )
+    except Exception:  # nosec B110
+        pass  # Never block email delivery for preference capture failure
     return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
 
 
