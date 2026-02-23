@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
 import { useStore } from '../lib/store'
+import { agentEventBus } from '../lib/AgentEventBus'
+import { toolCallTracker } from '../lib/ToolCallTracker'
 
 // LiveKit client types
 interface RoomOptions {
@@ -106,6 +108,10 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
       }
 
       console.log(`[Data ${timestamp}] Parsed:`, message.type, message)
+
+      // Fan-out to typed event bus — new handlers subscribe via agentEventBus.on()
+      // The existing switch below handles legacy/UI cases and is left untouched
+      agentEventBus.dispatchRaw(message)
 
       switch (message.type) {
         case 'agent.state':
@@ -252,6 +258,7 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
         room.on(RoomEvent.Reconnected, () => {
           audioDiag.log('Room reconnected')
           setConnectionState('connected')
+          setError(null)
         })
 
         room.on(RoomEvent.DataReceived, handleDataMessage)
@@ -611,6 +618,110 @@ export function useLiveKitAgent(options: UseLiveKitAgentOptions = {}) {
       const encoder = new TextEncoder()
       const payload = encoder.encode(JSON.stringify(data))
       roomRef.current.localParticipant.publishData(payload, { reliable: true })
+    }
+  }, [])
+
+  // Register handlers for the 5 new event types emitted by the backend.
+  // These subscribe to the agentEventBus which is fed by dispatchRaw() in
+  // handleDataMessage above. The existing switch statement handles the older
+  // event types — these handlers are additive and do not replace that logic.
+  useEffect(() => {
+    // Handler 1: tool_result — async tool completion from n8n backend
+    // call_id may be present directly; fall back to tracker lookup via task_id
+    const offToolResult = agentEventBus.on('tool_result', (event) => {
+      const callId = event.call_id || toolCallTracker.resolveCallId(event.task_id ?? '')
+      if (callId) {
+        useStore.getState().updateToolCall(callId, {
+          status: 'completed',
+          result: event.result,
+          duration: event.duration_ms,
+        })
+      }
+    })
+
+    // Handler 2: composio.searching — Composio is resolving the tool slug
+    const offSearching = agentEventBus.on('composio.searching', (event) => {
+      const callId = event.call_id
+      if (callId) {
+        useStore.getState().updateToolCall(callId, { subStatus: 'searching' })
+      }
+    })
+
+    // Handler 3: composio.executing — Composio is executing the resolved tool
+    const offExecuting = agentEventBus.on('composio.executing', (event) => {
+      const callId = event.call_id
+      if (callId) {
+        useStore.getState().updateToolCall(callId, { status: 'executing', subStatus: 'executing' })
+      }
+    })
+
+    // Handler 4: composio.completed — Composio tool execution succeeded
+    const offCompleted = agentEventBus.on('composio.completed', (event) => {
+      const callId = event.call_id
+      if (callId) {
+        useStore.getState().updateToolCall(callId, {
+          status: 'completed',
+          subStatus: 'done',
+          duration: event.duration_ms,
+        })
+      }
+    })
+
+    // Handler 5: composio.error — Composio tool execution failed
+    // Schema uses `detail` field (not `message` or `error`) for the error description
+    const offError = agentEventBus.on('composio.error', (event) => {
+      const callId = event.call_id
+      if (callId) {
+        useStore.getState().updateToolCall(callId, {
+          status: 'error',
+          error: event.detail,
+        })
+      }
+    })
+
+    // Handler 6: transcript.user — user speech (final transcripts only)
+    // Only add to store when is_final to avoid flooding with partials
+    const offTranscriptUser = agentEventBus.on('transcript.user', (event) => {
+      if (event.is_final && event.text.trim()) {
+        useStore.getState().addMessage({ role: 'user', content: event.text })
+      }
+    })
+
+    // Handler 7: transcript.assistant — agent speech transcription
+    const offTranscriptAssistant = agentEventBus.on('transcript.assistant', (event) => {
+      if (event.text.trim()) {
+        useStore.getState().addMessage({ role: 'assistant', content: event.text })
+      }
+    })
+
+    // Handler 8: tool.call — agent initiating a new tool call
+    // Creates the tool card in 'pending' state; subsequent events update it
+    const offToolCall = agentEventBus.on('tool.call', (event) => {
+      useStore.getState().addToolCall({
+        id: event.call_id,
+        name: event.name,
+        status: 'pending',
+        arguments: event.arguments,
+      })
+    })
+
+    // Handler 9: agent.state — agent lifecycle transitions
+    // 'idle' maps to null (store AgentState uses null for idle)
+    const offAgentState = agentEventBus.on('agent.state', (event) => {
+      const storeState = event.state === 'idle' ? null : event.state
+      useStore.getState().setAgentState(storeState)
+    })
+
+    return () => {
+      offToolResult()
+      offSearching()
+      offExecuting()
+      offCompleted()
+      offError()
+      offTranscriptUser()
+      offTranscriptAssistant()
+      offToolCall()
+      offAgentState()
     }
   }, [])
 

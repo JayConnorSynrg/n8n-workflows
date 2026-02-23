@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { toolCallTracker } from './ToolCallTracker'
 
 // =============================================================================
 // STORE LOGGING SYSTEM
@@ -29,6 +30,10 @@ interface ToolCall {
   arguments?: Record<string, unknown>
   result?: unknown
   timestamp: number
+  error?: string       // separate error field (was incorrectly stored in result before)
+  subStatus?: string   // composio sub-step: "Searching...", "Executing...", etc.
+  duration?: number    // ms from tool.call timestamp to completion
+  taskId?: string      // async correlation with tool_result events
 }
 
 type AudioStatus = 'waiting' | 'connecting' | 'playing' | 'error'
@@ -57,9 +62,11 @@ interface VoiceAgentStore {
   setAgentState: (state: AgentState) => void
   setInputVolume: (volume: number) => void
   setOutputVolume: (volume: number) => void
-  addMessage: (message: Omit<Message, 'id' | 'timestamp'>) => void
-  addToolCall: (toolCall: Omit<ToolCall, 'timestamp'>) => void
+  addMessage: (message: Omit<Message, 'id' | 'timestamp'> & { timestamp?: number }) => void
+  addToolCall: (toolCall: Omit<ToolCall, 'timestamp'> & { timestamp?: number }) => void
   updateToolCall: (id: string, updates: Partial<ToolCall>) => void
+  registerPendingTask: (callId: string, taskId: string) => void
+  resolveTaskByTaskId: (taskId: string, updates: Partial<ToolCall>) => void
   clearConversation: () => void
   reset: () => void
 }
@@ -110,10 +117,19 @@ export const useStore = create<VoiceAgentStore>((set) => ({
   addMessage: (message) => {
     storeLog('addMessage', { role: message.role, contentLength: message.content.length })
     set((state) => {
+      const now = message.timestamp ?? Date.now()
+      // Deduplicate: same role+content within 200ms window (prevents double-dispatch from legacy switch + EventBus)
+      const isDuplicate = state.messages.some(
+        m => m.role === message.role && m.content === message.content && Math.abs((m.timestamp ?? 0) - now) < 200
+      )
+      if (isDuplicate) {
+        storeWarn('addMessage:duplicate', { role: message.role })
+        return state
+      }
       const newMessage = {
         ...message,
         id: generateId(),
-        timestamp: Date.now()
+        timestamp: now,
       }
       storeLog('addMessage:complete', {
         id: newMessage.id,
@@ -132,15 +148,20 @@ export const useStore = create<VoiceAgentStore>((set) => ({
       status: toolCall.status,
       hasArgs: !!toolCall.arguments
     })
-    set((state) => ({
-      toolCalls: [
-        ...state.toolCalls,
-        {
-          ...toolCall,
-          timestamp: Date.now()
-        }
-      ]
-    }))
+    set((state) => {
+      // Deduplicate by ID: prevents double-dispatch from legacy switch + EventBus both firing
+      if (state.toolCalls.some(tc => tc.id === toolCall.id)) {
+        storeWarn('addToolCall:duplicate', { id: toolCall.id, name: toolCall.name })
+        return state
+      }
+      const newToolCall: ToolCall = {
+        ...toolCall,
+        timestamp: toolCall.timestamp ?? Date.now(),
+      }
+      return {
+        toolCalls: [...state.toolCalls, newToolCall]
+      }
+    })
   },
 
   updateToolCall: (id, updates) => {
@@ -155,6 +176,32 @@ export const useStore = create<VoiceAgentStore>((set) => ({
         toolCalls: state.toolCalls.map((tc) =>
           tc.id === id ? { ...tc, ...updates } : tc
         )
+      }
+    })
+  },
+
+  registerPendingTask: (callId, taskId) => {
+    storeLog('registerPendingTask', { callId, taskId })
+    toolCallTracker.register(callId, taskId)
+    set((state) => ({
+      toolCalls: state.toolCalls.map((tc) =>
+        tc.id === callId ? { ...tc, taskId } : tc
+      ),
+    }))
+  },
+
+  resolveTaskByTaskId: (taskId, updates) => {
+    storeLog('resolveTaskByTaskId', { taskId, updates })
+    set((state) => {
+      const tc = state.toolCalls.find((t) => t.taskId === taskId)
+      if (!tc) {
+        storeWarn('resolveTaskByTaskId:notFound', { taskId })
+        return state
+      }
+      return {
+        toolCalls: state.toolCalls.map((t) =>
+          t.taskId === taskId ? { ...t, ...updates } : t
+        ),
       }
     })
   },
