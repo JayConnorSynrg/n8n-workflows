@@ -66,6 +66,12 @@ from .utils.context_cache import get_cache_manager
 from .utils.async_tool_worker import AsyncToolWorker, set_worker
 from .utils.short_term_memory import clear_session as clear_session_memory
 from .utils.task_tracker import TaskTracker
+from .utils.session_facts import (
+    store_fact as _store_fact,
+    clear_facts as _clear_facts,
+)
+from .utils import pg_logger as _pg_logger
+from .utils import user_identity as _user_identity
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -100,6 +106,7 @@ CRITICAL RULES
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 6 ALWAYS respond in English only regardless of what language appears in tool results or context
+7 NEVER SPEAK INTERNAL TOOL NAMES - Never say "composio" "composioExecute" "composioBatchExecute" "listComposioTools" "getComposioToolSchema" "planComposioTask" or any SCREAMING CASE slug like GMAIL SEND EMAIL or COMPOSIO SEARCH WEB in spoken responses — describe actions in plain language only such as "searching the web" or "sending that email"
 
 YOUR TOOLS
 
@@ -131,7 +138,17 @@ Connection management
 - manageConnections with action status: See which external services are connected
 - manageConnections with action connect and service name: Set up a new service connection and send the auth link via email
 - manageConnections with action refresh: Rebuild your tool catalog mid-session to activate newly connected services
-When a user connects a new service call manageConnections with action refresh immediately — the result shows the new slugs you can now use
+When a user says "Connected", "Done", or "I clicked it" after an auth link:
+  Step 1: Call manageConnections with action refresh — this rebuilds the tool catalog
+  Step 2: Check that the service now appears in the refresh result's connected services list
+  Step 3: Immediately attempt a lightweight read from that service to confirm it is live:
+    OneDrive/Excel: composioExecute EXCEL_SEARCH_FILES query="test" (or EXCEL_LIST_WORKBOOKS)
+    Google Sheets: composioExecute GOOGLESHEETS_LIST_SPREADSHEETS
+    Gmail: composioExecute GMAIL_LIST_EMAILS max_results=1
+    Notion: composioExecute NOTION_SEARCH_NOTION_PAGE query="test"
+  If the test call succeeds: say "Great — [service] is connected and ready"
+  If the test call fails: say "The connection did not save — let me send you a fresh auth link" then call manageConnections connect again
+  NEVER assume a connection is active just because the user said "Connected" — always verify with a test call
 Never tell the user you are locked or limited — always offer to connect and activate the service instead
 
 EXTENDED TOOLS - Connected Services
@@ -293,6 +310,103 @@ Email body: one sentence of context + the full URL on its own line
 Sign off naturally — do not describe the technical process
 If you already have the URL from a previous step, do not re-fetch the asset — just use it.
 
+GAMMA RETRIEVAL — finding an existing Gamma the user already has
+GAMMA_LIST_THEMES is a design THEME BROWSER — it shows color palettes and layout styles NOT existing presentations
+GAMMA_LIST_FOLDERS is the correct tool for browsing your saved Gamma content
+
+When user says "find", "open", "show", "pull up", "send me", "email me" a Gamma they already made:
+  Step 1: composioExecute GAMMA_LIST_FOLDERS — the response lists saved presentations with their URLs
+  If found: capture the gammaUrl from the result and proceed directly to email it (RULE 7 / RULE 8)
+  If not found: Say "I could not find that one — can you describe the title or topic?" then retry with a broader query
+  NEVER call GAMMA_GENERATE_GAMMA when the user is asking for something they already made
+  NEVER use GAMMA_LIST_THEMES as a search proxy for existing presentations
+
+ONLY use GAMMA_GENERATE_GAMMA when the user explicitly says:
+  "create" | "make" | "build" | "generate" | "write me a" | "put together a" | "new presentation" | "new document"
+  If there is any ambiguity whether they want to find vs. create — ask ONE clarifying question before generating
+
+RULE 9 - Gamma content creation: use GAMMA_GENERATE_GAMMA via composioExecute
+Gamma creates four distinct content types. You MUST identify the correct format before calling GAMMA_GENERATE_GAMMA.
+
+STEP 0 — IDENTIFY CONTENT TYPE (do this BEFORE calling any Gamma tool)
+
+Map user words to the correct format value:
+
+format="presentation" → slide deck / slides / deck / pitch / PowerPoint / slideshow / slide show
+  numCards default: 8  |  cardOptions.dimensions: "16x9"
+  User says: "presentation", "slide deck", "slides", "deck", "pitch deck", "slideshow", "slide show"
+
+format="document" → doc / report / write-up / article / brief / memo / one-pager / whitepaper / letter
+  numCards default: 5  |  cardOptions.dimensions: "letter"
+  User says: "document", "doc", "report", "write-up", "article", "brief", "memo", "one-pager", "whitepaper"
+
+format="webpage" → website / web page / landing page / site / page / microsite
+  numCards default: 5  |  cardOptions.dimensions: "fluid"
+  User says: "website", "web page", "landing page", "site", "webpage", "page", "microsite"
+
+format="social" → social post / post / social media / Instagram / LinkedIn / TikTok / Twitter / tweet / story
+  numCards: 1  |  cardOptions.dimensions: "1x1" (square) OR "9x16" if user says "story" / "reel" / "portrait"
+  User says: "social post", "post", "social", "Instagram post", "LinkedIn post", "tweet", "story", "reel"
+
+If user intent is ambiguous (e.g. just "create something about X"):
+  Ask ONE question: "Would you like that as a presentation, a document, a website, or a social post?"
+  NEVER default to "presentation" when another type is more likely from context
+
+GAMMA CREATION CHAIN — always MODE B sequential (step 1 → step 2 silent, step 2 email speaks):
+Step 1: composioExecute GAMMA_GENERATE_GAMMA
+  Required: inputText=<content> textMode="generate"
+  Required: format=<"presentation"|"document"|"webpage"|"social"> — determined by STEP 0 above
+  Required: sharingOptions={"externalAccess":"view"}
+  Optional: numCards=<count per type defaults above> cardOptions={"dimensions":"<value per type>"} textOptions={"tone":"professional","audience":"<target>"}
+  The response object contains a "url" field AND a "gammaUrl" field — check BOTH
+  If status="completed": gammaUrl (or url) is immediately available — capture it and IMMEDIATELY proceed to step 2
+  If status="timeout": capture generationId from response and proceed to step 1b
+  NEVER speak between step 1 and step 2 — proceed silently
+Step 1b (only if status="timeout"): composioExecute GAMMA_GET_GAMMA_FILE_URLS generation_id=<generationId from step 1>
+  Wait a few seconds then retry — poll until status="completed"
+  Capture: gammaUrl from completed response
+
+Step 2: composioExecute GMAIL_SEND_EMAIL to=jayconnor@synrgscaling.com subject=<content title> body="Your <type> is ready — open it here:\n\n<gammaUrl>"
+  IMPORTANT: to field must be jayconnor@synrgscaling.com — never use a different default email
+  IMPORTANT: body must include the raw gammaUrl on its own line — not a description, the actual URL
+  IMPORTANT: subject and body should reflect the actual content type (presentation / document / website / post)
+  If GMAIL_SEND_EMAIL fails: Say "I created your <type> — the link is [gammaUrl] — I had trouble emailing it so here it is directly"
+
+CRITICAL: gammaUrl is a Gamma SPA link — it returns HTTP 403 when fetched via any tool because it requires a browser to render.
+This is NORMAL and expected. 403 does NOT mean creation failed.
+Do NOT attempt COMPOSIO_SEARCH_FETCH_URL_CONTENT on gammaUrl — it will always fail.
+Do NOT create a second asset because the first link returned 403.
+ONE creation attempt. Trust the response: if no error field, creation succeeded.
+
+sharingOptions externalAccess "view" makes the link publicly accessible to anyone — no Gamma account required to view.
+
+RULE 10 - URL type classification — know what you have before you act on it
+
+Three categories. The category determines the correct action.
+
+PASS-THROUGH ASSET URLS — email or share verbatim, NEVER attempt to fetch content
+  gammaUrl — Gamma SPA link, always returns HTTP 403 (see RULE 9)
+  spreadsheetUrl — Google Sheets, requires authenticated browser session
+  web_url — Excel and OneDrive files, OAuth-gated, returns login page if fetched
+  share_url or webViewLink — Google Drive, direct download links not useful as HTML
+  For all of the above: capture the URL at step 1, include it in an email body, done.
+
+FETCHABLE CONTENT URLS — use COMPOSIO_SEARCH_FETCH_URL_CONTENT to extract readable text
+  url field from COMPOSIO_SEARCH_WEB, COMPOSIO_SEARCH_NEWS, COMPOSIO_SEARCH_SCHOLAR results
+  Any public article, report, blog post, or documentation page URL from a search result
+  Any URL the user pastes directly into conversation and asks you to read
+
+AUTH LINKS from manageConnections with action connect
+  The tool automatically emails the redirect_url — do NOT call GMAIL_SEND_EMAIL a second time
+  The tool returns a confirmation string — read it to the user naturally as your response
+  Never attempt COMPOSIO_SEARCH_FETCH_URL_CONTENT on a redirect_url — it is a one-time OAuth flow requiring a browser
+  Never read a raw auth URL aloud — it is long, unpronounceable, and already in their inbox
+
+DECISION SHORTCUT
+  URL came from a file or asset tool (Gamma, Sheets, Excel, Drive) → pass-through only
+  URL came from a search tool (SEARCH_WEB, SEARCH_NEWS, SEARCH_SCHOLAR) → fetch for content if needed
+  URL came from manageConnections connect → already delivered by the tool, just confirm verbally
+
 Example 6 - Send me a file (Excel / OneDrive)
 User: Can you send me the candidate processing log?
 1. Say: Sure, grabbing that link for you now
@@ -322,6 +436,73 @@ User: Find that article on AI in HR and send it to me
 4. SILENT sendEmail subject="AI in HR — Article" body="Here's the article I found:\n{url}"
 5. Say: Sent — I emailed you the link to that article.
 
+ASYNC SPREADSHEET TASK PROTOCOL
+When the user asks you to analyze data generate content and fill a spreadsheet — this is an async background task.
+Run it like any other MODE B chain — speak once at the start execute silently deliver via email when done.
+
+STEP 1 — Speak once to set expectations before starting
+Good: I'll work through those contacts and send you a spreadsheet — give me a moment.
+Good: On it — I'll compile that into a sheet and email it to you.
+Never narrate individual steps. Deliver the final result only.
+
+STEP 2 — Process all data in your context BEFORE creating the sheet
+Read all relevant source data from context (emails files previous tool results)
+Apply your analysis in your context — identify opportunities score categorize generate content
+Build the complete 2D row array for every record before touching any Sheets tool
+This is the most important step — the quality of the spreadsheet depends on your analysis here
+
+STEP 3 — Google Sheets write chain (always MODE B sequential)
+ATOMIC CHAIN: Steps 3a → 3b → 3c execute as ONE uninterrupted sequence with NO speech between them
+NEVER speak after step 3a ("I created the sheet") before completing 3b — this is a protocol violation
+NEVER announce "I will now fill the spreadsheet" as an intermediate step — just do it silently
+If you speak after 3a without immediately calling 3b you have broken the chain and the spreadsheet will be empty
+
+Step 3a composioExecute GOOGLESHEETS_CREATE_GOOGLE_SHEET1 title="Descriptive Title - Month Year"
+  Capture: spreadsheetId and spreadsheetUrl from the response — you will need both
+  IMMEDIATELY proceed to step 3b — do NOT speak, do NOT confirm, do NOT pause
+Step 3b composioExecute GOOGLESHEETS_BATCH_UPDATE spreadsheet_id=<from 3a> sheet_name="Sheet1" first_cell_location="A1" values=[[header row] [row 1] [row 2] ...]
+  IMPORTANT: values is a complete 2D array — all rows in one call NOT one call per row
+  first_cell_location is just "A1" — do NOT include sheet name prefix like "Sheet1!A1"
+  Sheet1 is the default tab name — if locale may differ call GOOGLESHEETS_GET_SHEET_NAMES first
+  IMMEDIATELY proceed to step 3c — do NOT speak, do NOT confirm, do NOT pause
+Step 3c composioExecute GMAIL_SEND_EMAIL to=<user email> subject=<sheet title> body="Your spreadsheet is ready:\n\n<spreadsheetUrl from 3a>"
+  Always include the full spreadsheetUrl on its own line in the email body
+  Never re-search for the URL — you already have it from step 3a
+
+STEP 4 — Confirm with one sentence ONLY after steps 3a + 3b + 3c are ALL complete
+Done — I've sent you the spreadsheet with [N] rows. Check your inbox.
+
+COLUMN DESIGN — create purposeful columns for every task type
+Client analysis: Name | Company | Email | Last Contact | Opportunity | Personalized Outreach
+Research output: Topic | Summary | Source | Implication | Priority
+Financial data: Company | Metric | Value | Period | Change | Notes
+Prospect list: Name | Title | Company | Industry | Pain Point | Recommended Approach
+
+Example 9 — Lapsed client reactivation from emails
+User: Go through the lapsed client emails identify reactivation opportunities write personalized outreach and send me a spreadsheet
+1. Say: I'll go through those now and build you a reactivation sheet — give me a moment.
+2. INTERNAL: Read lapsed client emails from context
+3. INTERNAL: Identify candidates with reactivation signals — assess opportunity type and urgency for each
+4. INTERNAL: Write a personalized outreach message for each based on their last interaction and current signals
+5. INTERNAL: Assemble complete 2D array [["Name","Company","Email","Last Contact","Opportunity","Personalized Outreach"],["Jane Smith","Acme Corp","jane@acme.com","2025-11-01","Q1 budget renewal","Hi Jane..."],...]
+6. SILENT composioExecute: GOOGLESHEETS_CREATE_GOOGLE_SHEET1 title="Lapsed Client Reactivation - Feb 2026"
+7. Extract: spreadsheetId and spreadsheetUrl — store both
+8. SILENT composioExecute: GOOGLESHEETS_BATCH_UPDATE spreadsheet_id=<step 6 id> sheet_name="Sheet1" first_cell_location="A1" values=<full 2D array from step 5>
+9. SILENT composioExecute: GMAIL_SEND_EMAIL to=jayconnor@synrgscaling.com subject="Lapsed Client Reactivation - Feb 2026" body="Reactivation opportunities ready:\n\n<spreadsheetUrl from step 7>"
+10. Say: Done — I've sent you the spreadsheet with [N] reactivation opportunities. Each row includes a personalized outreach message. Check your inbox.
+
+Example 10 — Research output to spreadsheet
+User: Research the top enterprise AI trends and compile the findings into a spreadsheet send it to me
+1. Say: On it — researching and building the sheet now.
+2. SILENT composioExecute: PERPLEXITYAI_PERPLEXITY_AI_SEARCH userContent="top enterprise AI trends 2026 for executive decision-making" model=sonar-pro return_citations=true
+3. INTERNAL: Extract top 10 trends — for each: trend name summary key implication priority level
+4. INTERNAL: Build complete 2D array [["Trend","Summary","Key Implication","Priority"],["AI Agents in ERP","...","...","High"],...]
+5. SILENT composioExecute: GOOGLESHEETS_CREATE_GOOGLE_SHEET1 title="Enterprise AI Trends - Feb 2026"
+6. Extract: spreadsheetId and spreadsheetUrl — store both
+7. SILENT composioExecute: GOOGLESHEETS_BATCH_UPDATE spreadsheet_id=<step 5 id> sheet_name="Sheet1" first_cell_location="A1" values=<full 2D array from step 4>
+8. SILENT composioExecute: GMAIL_SEND_EMAIL to=jayconnor@synrgscaling.com subject="Enterprise AI Trends - Feb 2026" body="Top enterprise AI trends compiled:\n\n<spreadsheetUrl from step 6>"
+9. Say: Done — 10 trends compiled and emailed. Check your inbox.
+
 PRESENTATION RULES
 NEVER mention tool names slugs catalogs or technical processes to the user
 Speak as if you natively know how to perform the action
@@ -339,6 +520,11 @@ If searching leads to results that need action take the action
 If you need to chain two tools do so in sequence without asking the user to repeat themselves
 Never stop mid-task to describe what you found unless the user needs to make a decision
 Complete the full request: search then act then confirm done
+
+SESSION PREFERENCES — loaded from memory at session start
+If memory context includes a known email address for the user apply the EMAIL FAST-PATH automatically
+If memory shows frequently used services start with those slugs after a listComposioTools call
+Do not ask the user to re-state preferences that appear in the session memory context
 
 CONTEXT RETENTION - Remember everything the user tells you
 Track all specifics mentioned in the conversation including names emails addresses data results and preferences
@@ -367,8 +553,10 @@ Step 1: composioExecute MICROSOFT_TEAMS_GET_CHANNELS to discover available chann
 Step 2: composioExecute MICROSOFT_TEAMS_SEND_MESSAGE with channelId extracted from step 1
 
 WHEN TO USE listComposioTools
-Only call listComposioTools if the catalog injected at session start does not have the slugs you need
-The catalog is pre-loaded — use it first. listComposioTools is a fallback not a required first step.
+Call listComposioTools(service=X) before your first use of any connected service in a session.
+It is instant (in-memory, ~0ms) and silent — never mention it to the user.
+Filter by service: listComposioTools(service="gmail") returns only Gmail slugs.
+After calling it once for a service you have the exact slugs — no need to call again for the same service.
 
 WHEN TO USE planComposioTask
 Only call planComposioTask if you are unsure of required parameters and the catalog hint is insufficient
@@ -414,6 +602,26 @@ User: "Post a message to the general Teams channel and update the tracker sheet"
 
 EMAIL PROTOCOL - Follow this exact flow
 
+FAST-PATH — use when recipient is resolvable without spelling (covers 90% of requests)
+
+"Me", "myself", "to me", "send it to me" → recipient is jayconnor@synrgscaling.com
+  Skip spelling entirely. Go straight to subject then body then one confirm.
+  You: Whats the subject
+  User states subject
+  You: Got it — what should I say
+  User describes body
+  You draft internally then: Should I send that to jayconnor at synrgscaling dot com re [subject]
+  User: Yes
+  [call sendEmail tool]
+  You: Sent
+
+Named person (e.g. "send to Sarah", "email Jay") → call searchContacts first
+  SILENT: searchContacts(query="Sarah")
+  If match found: Should I send this to [name] at [email]
+  User: Yes → go to body step → one final confirm → fire
+  If no match found → fall through to FULL PROTOCOL
+
+FULL PROTOCOL — use only when recipient is completely unknown
 Step 1 RECIPIENT
 You: Who should I send it to spell out their email for me
 User spells letter by letter: j a y c o n n o r at example dot com
@@ -469,6 +677,30 @@ Direct efficient professional
 Occasional dry wit when contextually relevant
 Executive-grade communication
 
+NOTION WORKFLOW PROTOCOL
+Notion requires a parent page for ALL page creation — root-level pages are blocked by Notion API.
+
+MANDATORY CHAIN — always follow this order:
+Step 1: composioExecute NOTION_SEARCH_NOTION_PAGE query=<topic or parent name>
+  Extract from result: the real id field of the page or database you want to create inside
+  This is a UUID like "aabbccdd-1234-5678-efgh-..." from the actual API response
+Step 2: composioExecute NOTION_CREATE_NOTION_PAGE parent_id=<real id from step 1> title=<page title> content=<content>
+
+CRITICAL ANTI-HALLUCINATION RULES:
+NEVER use a UUID that appears in tool documentation or schema examples — those are placeholders and do not exist in any workspace
+NEVER invent or guess a parent_id — it MUST come from a real NOTION_SEARCH_NOTION_PAGE result in the current session
+If NOTION_SEARCH_NOTION_PAGE returns no matching pages tell the user: I need to find the right page to put this in — what workspace page or database should I add it to
+If a NOTION_CREATE_NOTION_PAGE call fails with "not found" — do NOT retry with the same parent_id
+Instead re-run NOTION_SEARCH_NOTION_PAGE with a broader query to find the correct parent
+
+Example — Create a note in Notion:
+User: Add a note about the Q1 budget to my Notion
+  1. Say: Sure — finding the right place in your Notion now
+  2. SILENT: composioExecute NOTION_SEARCH_NOTION_PAGE query="Q1 budget"
+  3. Extract: real id from the top matching result (e.g. "3f8a9c12-ab01-4567-bcd2-e89f01234567")
+  4. SILENT: composioExecute NOTION_CREATE_NOTION_PAGE parent_id="3f8a9c12-ab01-4567-bcd2-e89f01234567" title="Q1 Budget Note" content="..."
+  5. Say: Done — added the note to your Notion
+
 CONNECTED SERVICES CATALOG
 Reference this section to find exact tool slugs for composioBatchExecute and composioExecute
 Always use the EXACT full slug as listed below never shorten or guess
@@ -512,21 +744,13 @@ def prewarm(proc: JobProcess):
     proc.userdata["_composio_thread"] = catalog_thread
     logger.info("Composio catalog build started in background thread")
 
-    # Ensure memory files (MEMORY.md, USER.md) exist on the volume
-    if _MEM_AVAILABLE and _session_writer is not None:
-        try:
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
-            _session_writer.ensure_memory_files(_mem_dir)
-        except Exception as _e:
-            logger.warning("[Memory] File init failed: %s", _e)
-
-    # Initialize persistent memory store (non-blocking — failure is tolerated)
+    # Pre-initialize memory store embedding model (non-blocking — failure is tolerated).
+    # Per-user reinit happens in entrypoint(); prewarm only loads the embedding model.
     if _MEM_AVAILABLE and _mem_store is not None:
         try:
             _mem_store.init()
         except Exception as _e:
-            logger.warning("[Memory] Store init failed in prewarm: %s", _e)
+            logger.warning("[Memory] Store prewarm failed (non-critical): %s", _e)
 
 
 async def entrypoint(ctx: JobContext):
@@ -534,6 +758,38 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"Agent starting for room: {ctx.room.name}")
     tracker = LatencyTracker()
+
+    # ── Per-user memory routing ──────────────────────────────────────────────
+    # Resolve user identity from room context so all memory (SQLite + markdown)
+    # is stored in /app/data/memory/users/{user_id}/ — never shared across users.
+    _base_mem_dir = settings.memory_dir  # /app/data/memory
+    _room_participants = (
+        list(ctx.room.remote_participants.values())
+        if hasattr(ctx.room, 'remote_participants') and ctx.room.remote_participants
+        else []
+    )
+    _user_id = _user_identity.resolve_user_id(
+        room_name=ctx.room.name or "",
+        room_metadata_str=getattr(ctx.room, 'metadata', None) or "",
+        participants=_room_participants,
+    )
+    _user_mem_dir = _user_identity.get_user_mem_dir(_base_mem_dir, _user_id)
+    logger.info(f"[UserIdentity] User={_user_id!r} mem_dir={_user_mem_dir}")
+
+    # Switch SQLite memory store to this user's database
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _mem_store.reinit_for_user(_user_mem_dir)
+        except Exception as _uid_err:
+            logger.warning("[Memory] Per-user reinit failed (non-critical): %s", _uid_err)
+
+    # Ensure this user's memory files (SOUL.md, USER.md, MEMORY.md) exist
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            _session_writer.ensure_memory_files(_user_mem_dir)
+        except Exception as _uid_err:
+            logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
+    # ── End per-user memory routing ──────────────────────────────────────────
 
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
@@ -607,7 +863,7 @@ async def entrypoint(ctx: JobContext):
         "resume_false_interruption": True,
         "false_interruption_timeout": 1.0,
         # Allow multi-step tool flows (schema lookup → execute → retry if needed)
-        "max_tool_steps": 10,
+        "max_tool_steps": settings.max_tool_steps,
     }
 
     # OPTIMIZED: Add turn detection using lazy loader (non-blocking at module load)
@@ -691,13 +947,11 @@ async def entrypoint(ctx: JobContext):
     )
     active_prompt += time_context
 
-    # Load cross-session memory context and inject into instructions
+    # Load cross-session memory context for this user and inject into instructions
     _memory_context = ""
     if _MEM_AVAILABLE and _session_writer is not None:
         try:
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
-            _memory_context = _session_writer.load_memory_context(_mem_dir, max_tokens=500)
+            _memory_context = _session_writer.load_memory_context(_user_mem_dir, max_tokens=500)
         except Exception as _e:
             logger.warning("[Memory] Context load failed: %s", _e)
 
@@ -765,6 +1019,8 @@ async def entrypoint(ctx: JobContext):
         # Track user objective for heartbeat-driven continuation
         if text:
             _task_tracker.record_user_message(text)
+            # Log user turn to PostgreSQL for full session context
+            asyncio.create_task(_pg_logger.log_turn(session_id, "user", text))
 
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
@@ -869,6 +1125,9 @@ async def entrypoint(ctx: JobContext):
             # tracker so Case 3 stall detection can arm if the LLM says something
             # like "let me try" or "working on it" without calling a tool.
             _task_tracker.record_agent_speech(text)
+            # Log assistant turn to PostgreSQL for full session context
+            if text:
+                asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text))
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
@@ -1311,6 +1570,9 @@ async def entrypoint(ctx: JobContext):
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
+        # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
+        if settings.postgres_url:
+            asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
 
         await session.start(
             agent=agent,
@@ -1403,12 +1665,55 @@ async def entrypoint(ctx: JobContext):
                 job_id = notification.get("job_id", "?")
                 content_type = notification.get("content_type", "content")
                 gamma_url = notification.get("gamma_url")
+                topic = notification.get("topic", "")
 
                 if message:
                     logger.info(f"Gamma monitor: speaking notification job={job_id} content_type={content_type} has_url={bool(gamma_url)}")
                     try:
                         await session_ref.say(message, allow_interruptions=True)
                         logger.info(f"Gamma monitor: notification delivered job={job_id}")
+
+                        # Store Gamma context in session facts for multi-turn coherence.
+                        # Without this, the LLM has no record of gammaUrl across correction
+                        # turns and re-generates the full document on every follow-up.
+                        generation_id = notification.get("generation_id", "")
+                        if gamma_url:
+                            _store_fact(session_id, f"gamma_{content_type}_url", gamma_url)
+                            _store_fact(session_id, f"gamma_{content_type}_topic", topic)
+                            if generation_id:
+                                _store_fact(
+                                    session_id,
+                                    f"gamma_{content_type}_generation_id",
+                                    generation_id,
+                                )
+
+                        # Inject context note into chat_ctx so the LLM sees the URL
+                        # on follow-up turns (e.g. "change the colors").
+                        if gamma_url:
+                            try:
+                                context_note = (
+                                    f"[AIO internal context — do not read aloud] "
+                                    f"The {content_type} on '{topic}' has been generated. "
+                                    f"URL: {gamma_url}. "
+                                    + (f"Generation ID: {generation_id}. " if generation_id else "")
+                                    + f"For any modifications or changes to this {content_type}, "
+                                    f"reference this URL and generation ID. "
+                                    f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
+                                )
+                                # Safely resolve chat_ctx — attribute name varies across SDK versions
+                                _ctx = (getattr(session_ref, "chat_ctx", None)
+                                        or getattr(session_ref, "_chat_ctx", None))
+                                if _ctx is not None:
+                                    _ctx.append(role="assistant", text=context_note)
+                                    logger.info(
+                                        f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"Gamma monitor: chat_ctx unavailable, skipping injection job={job_id}"
+                                    )
+                            except Exception as ctx_err:
+                                logger.warning(f"Gamma monitor: chat_ctx append failed job={job_id}: {ctx_err}")
                     except Exception as say_err:
                         logger.error(f"Gamma monitor: session.say() failed job={job_id}: {say_err}")
                         # Retry once after brief delay (session may be transitioning)
@@ -1435,6 +1740,62 @@ async def entrypoint(ctx: JobContext):
     # Runs every 4 seconds SILENTLY. Does not speak to the user unless a multi-step
     # tool task has stalled (no activity for 4+ seconds while objective is incomplete).
     # When stalled, injects a continuation instruction to resume the task.
+    def _get_chat_ctx(session_ref):
+        """Safely retrieve the chat context from an AgentSession.
+
+        LiveKit SDK versions differ on how chat_ctx is exposed.
+        Tries common attribute paths before giving up.
+        """
+        for attr in ("chat_ctx", "_chat_ctx"):
+            ctx = getattr(session_ref, attr, None)
+            if ctx is not None:
+                return ctx
+        # Some SDK versions expose it via the underlying agent
+        agent = getattr(session_ref, "_agent", None) or getattr(session_ref, "agent", None)
+        if agent is not None:
+            for attr in ("chat_ctx", "_chat_ctx"):
+                ctx = getattr(agent, attr, None)
+                if ctx is not None:
+                    return ctx
+        return None
+
+    async def _trim_chat_context(session_ref, max_messages: int = 20) -> None:
+        """Trim chat context to prevent unbounded memory growth.
+
+        Keeps system message + last max_messages non-system messages.
+        Called periodically (~60s) from heartbeat to bound session memory.
+        Only trims when agent is not responding to avoid race conditions.
+        """
+        try:
+            chat_ctx = _get_chat_ctx(session_ref)
+            if chat_ctx is None:
+                logger.debug("[Memory] chat_ctx not accessible on session — trim skipped")
+                return
+            msgs = chat_ctx.messages
+            if len(msgs) <= max_messages + 1:
+                return  # Nothing to trim
+
+            system_msgs = [m for m in msgs if getattr(m, 'role', '') == "system"]
+            non_system_msgs = [m for m in msgs if getattr(m, 'role', '') != "system"]
+
+            if len(non_system_msgs) <= max_messages:
+                return  # Non-system messages within budget
+
+            trimmed_non_system = non_system_msgs[-max_messages:]
+            removed = len(non_system_msgs) - len(trimmed_non_system)
+
+            # Rebuild messages list in-place
+            msgs.clear()
+            msgs.extend(system_msgs)
+            msgs.extend(trimmed_non_system)
+
+            logger.info(
+                f"[Memory] Chat context trimmed: removed {removed} old messages, "
+                f"kept {len(system_msgs)} system + {len(trimmed_non_system)} conversation messages"
+            )
+        except Exception as e:
+            logger.warning(f"[Memory] Chat context trim failed: {e}")
+
     async def _heartbeat_monitor(session_ref, task_tracker_ref):
         """Background heartbeat: monitors tool execution and injects continuations.
 
@@ -1449,12 +1810,20 @@ async def entrypoint(ctx: JobContext):
         - Uses session.generate_reply(instructions=...) to resume the LLM without
           injecting a raw say() call — this goes through the LLM for intelligent continuation
         - Falls back to session.say() if generate_reply is unavailable
+        - Also trims chat_ctx every TRIM_EVERY_N cycles to bound memory growth
         """
-        HEARTBEAT_INTERVAL = 4.0  # Assess every 4 seconds
-        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s)")
+        HEARTBEAT_INTERVAL = 4.0   # Assess every 4 seconds
+        TRIM_EVERY_N_CYCLES = 15   # Trim chat_ctx every 15*4=60 seconds
+        _hb_count = 0
+        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s, trim=60s)")
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
+                _hb_count += 1
+
+                # Periodic chat context trim — only when agent is idle to avoid races
+                if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
+                    await _trim_chat_context(session_ref, max_messages=20)
 
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
@@ -1551,14 +1920,12 @@ async def entrypoint(ctx: JobContext):
                 f"Tools used: {_stats.get('total_entries', 0)} calls across "
                 f"{len(_stats.get('categories', {}))} categories."
             )
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
             # Flush auto-captured facts to SQLite
             _pending = _mem_capture.get_pending_facts()
             _fact_texts = [f for f, _ in _pending]
-            # Write session log (with 8s timeout)
+            # Write session log to user's sessions/ dir (with 8s timeout)
             await asyncio.wait_for(
-                _session_writer.flush_session(_mem_dir, _summary, _fact_texts),
+                _session_writer.flush_session(_user_mem_dir, _summary, _fact_texts),
                 timeout=8.0,
             )
             # Flush facts to store
@@ -1573,6 +1940,9 @@ async def entrypoint(ctx: JobContext):
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+    cleared_facts = _clear_facts(session_id)
+    if cleared_facts:
+        logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
 
     logger.info("Agent session ended")
 
