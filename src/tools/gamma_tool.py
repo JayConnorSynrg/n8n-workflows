@@ -148,6 +148,9 @@ async def _start_gamma_generation(
                         "style": "minimal, black and white, line art",
                         "model": "flux-1-pro",
                     },
+                    "sharingOptions": {
+                        "externalAccess": "view",
+                    },
                 },
                 user_id=user_id,
                 dangerously_skip_version_check=True,
