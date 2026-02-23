@@ -611,6 +611,30 @@ Direct efficient professional
 Occasional dry wit when contextually relevant
 Executive-grade communication
 
+NOTION WORKFLOW PROTOCOL
+Notion requires a parent page for ALL page creation — root-level pages are blocked by Notion API.
+
+MANDATORY CHAIN — always follow this order:
+Step 1: composioExecute NOTION_SEARCH_NOTION_PAGE query=<topic or parent name>
+  Extract from result: the real id field of the page or database you want to create inside
+  This is a UUID like "aabbccdd-1234-5678-efgh-..." from the actual API response
+Step 2: composioExecute NOTION_CREATE_NOTION_PAGE parent_id=<real id from step 1> title=<page title> content=<content>
+
+CRITICAL ANTI-HALLUCINATION RULES:
+NEVER use a UUID that appears in tool documentation or schema examples — those are placeholders and do not exist in any workspace
+NEVER invent or guess a parent_id — it MUST come from a real NOTION_SEARCH_NOTION_PAGE result in the current session
+If NOTION_SEARCH_NOTION_PAGE returns no matching pages tell the user: I need to find the right page to put this in — what workspace page or database should I add it to
+If a NOTION_CREATE_NOTION_PAGE call fails with "not found" — do NOT retry with the same parent_id
+Instead re-run NOTION_SEARCH_NOTION_PAGE with a broader query to find the correct parent
+
+Example — Create a note in Notion:
+User: Add a note about the Q1 budget to my Notion
+  1. Say: Sure — finding the right place in your Notion now
+  2. SILENT: composioExecute NOTION_SEARCH_NOTION_PAGE query="Q1 budget"
+  3. Extract: real id from the top matching result (e.g. "3f8a9c12-ab01-4567-bcd2-e89f01234567")
+  4. SILENT: composioExecute NOTION_CREATE_NOTION_PAGE parent_id="3f8a9c12-ab01-4567-bcd2-e89f01234567" title="Q1 Budget Note" content="..."
+  5. Say: Done — added the note to your Notion
+
 CONNECTED SERVICES CATALOG
 Reference this section to find exact tool slugs for composioBatchExecute and composioExecute
 Always use the EXACT full slug as listed below never shorten or guess
@@ -1610,10 +1634,18 @@ async def entrypoint(ctx: JobContext):
                                     f"reference this URL and generation ID. "
                                     f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
                                 )
-                                session_ref.chat_ctx.append(role="assistant", text=context_note)
-                                logger.info(
-                                    f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
-                                )
+                                # Safely resolve chat_ctx — attribute name varies across SDK versions
+                                _ctx = (getattr(session_ref, "chat_ctx", None)
+                                        or getattr(session_ref, "_chat_ctx", None))
+                                if _ctx is not None:
+                                    _ctx.append(role="assistant", text=context_note)
+                                    logger.info(
+                                        f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"Gamma monitor: chat_ctx unavailable, skipping injection job={job_id}"
+                                    )
                             except Exception as ctx_err:
                                 logger.warning(f"Gamma monitor: chat_ctx append failed job={job_id}: {ctx_err}")
                     except Exception as say_err:
@@ -1642,6 +1674,25 @@ async def entrypoint(ctx: JobContext):
     # Runs every 4 seconds SILENTLY. Does not speak to the user unless a multi-step
     # tool task has stalled (no activity for 4+ seconds while objective is incomplete).
     # When stalled, injects a continuation instruction to resume the task.
+    def _get_chat_ctx(session_ref):
+        """Safely retrieve the chat context from an AgentSession.
+
+        LiveKit SDK versions differ on how chat_ctx is exposed.
+        Tries common attribute paths before giving up.
+        """
+        for attr in ("chat_ctx", "_chat_ctx"):
+            ctx = getattr(session_ref, attr, None)
+            if ctx is not None:
+                return ctx
+        # Some SDK versions expose it via the underlying agent
+        agent = getattr(session_ref, "_agent", None) or getattr(session_ref, "agent", None)
+        if agent is not None:
+            for attr in ("chat_ctx", "_chat_ctx"):
+                ctx = getattr(agent, attr, None)
+                if ctx is not None:
+                    return ctx
+        return None
+
     async def _trim_chat_context(session_ref, max_messages: int = 20) -> None:
         """Trim chat context to prevent unbounded memory growth.
 
@@ -1650,7 +1701,11 @@ async def entrypoint(ctx: JobContext):
         Only trims when agent is not responding to avoid race conditions.
         """
         try:
-            msgs = session_ref.chat_ctx.messages
+            chat_ctx = _get_chat_ctx(session_ref)
+            if chat_ctx is None:
+                logger.debug("[Memory] chat_ctx not accessible on session — trim skipped")
+                return
+            msgs = chat_ctx.messages
             if len(msgs) <= max_messages + 1:
                 return  # Nothing to trim
 
