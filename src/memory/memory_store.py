@@ -193,6 +193,20 @@ def _create_schema(db_path: str) -> None:
                 VALUES (new.rowid, new.text, new.id, new.category);
             END
         """)
+        # Deep store — unlimited content, label-indexed, no FTS or vector search
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deep_store (
+                id          TEXT PRIMARY KEY,
+                label       TEXT NOT NULL DEFAULT '',
+                content     TEXT NOT NULL,
+                session_id  TEXT NOT NULL DEFAULT '',
+                created_at  INTEGER NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS deep_store_label_idx
+            ON deep_store(label)
+        """)
         conn.commit()
 
 
@@ -503,3 +517,116 @@ def get_stats() -> dict[str, Any]:
         }
     except Exception as exc:
         return {"available": True, "error": str(exc)}
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Deep Store — unlimited persistent storage, label-indexed
+# ────────────────────────────────────────────────────────────────────────────────
+
+def deep_store_save(
+    content: str,
+    label: str = "",
+    session_id: str = "",
+) -> Optional[str]:
+    """Store content in deep_store with NO size limit.
+
+    Unlike the memories table (capped at 1KB), deep_store holds arbitrary-length
+    content — full documents, large datasets, transcript excerpts, etc.
+
+    Args:
+        content: The content to store (no length limit).
+        label: Human-readable label for retrieval (truncated to 200 chars).
+        session_id: Optional session identifier for filtering.
+
+    Returns:
+        Entry ID on success, None on failure.
+    """
+    if not _initialized or _init_failed:
+        return None
+
+    entry_id = str(uuid.uuid4())
+    now = int(time.time())
+    safe_label = (label or "unlabeled").strip()[:200]
+
+    with _lock:
+        try:
+            with sqlite3.connect(_db_path) as conn:  # type: ignore[arg-type]
+                conn.execute(
+                    "INSERT INTO deep_store (id, label, content, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (entry_id, safe_label, content, session_id or "", now),
+                )
+                conn.commit()
+            logger.info("[DeepStore] Saved: label=%r len=%d", safe_label[:40], len(content))
+            return entry_id
+        except Exception as exc:
+            logger.error("[DeepStore] Save error: %s", exc)
+            return None
+
+
+def deep_store_search(
+    query: str = "",
+    label: str = "",
+    top_k: int = 3,
+) -> list[dict[str, Any]]:
+    """Retrieve from deep_store by label (exact/fuzzy) or full-text content search.
+
+    Resolution order:
+    1. Exact label match (if label provided)
+    2. Label LIKE match (if label provided and exact fails)
+    3. Label + content LIKE search (if query provided)
+    4. Most recent entries (if neither label nor query provided)
+
+    Returns list of {id, label, content, created_at} dicts.
+    """
+    if not _initialized or _init_failed:
+        return []
+
+    try:
+        with sqlite3.connect(_db_path) as conn:  # type: ignore[arg-type]
+            rows: list[tuple] = []
+
+            if label:
+                # 1. Exact label match
+                rows = conn.execute(
+                    "SELECT id, label, content, created_at FROM deep_store WHERE label = ? ORDER BY created_at DESC LIMIT ?",
+                    (label.strip(), top_k),
+                ).fetchall()
+                if not rows:
+                    # 2. Fuzzy label match
+                    rows = conn.execute(
+                        "SELECT id, label, content, created_at FROM deep_store WHERE label LIKE ? ORDER BY created_at DESC LIMIT ?",
+                        (f"%{label.strip()}%", top_k),
+                    ).fetchall()
+
+            if not rows and query:
+                # 3. Search label then content, deduplicated
+                label_rows = conn.execute(
+                    "SELECT id, label, content, created_at FROM deep_store WHERE label LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    (f"%{query}%", top_k),
+                ).fetchall()
+                content_rows = conn.execute(
+                    "SELECT id, label, content, created_at FROM deep_store WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    (f"%{query}%", top_k),
+                ).fetchall()
+                seen: set[str] = set()
+                for row in label_rows + content_rows:
+                    if row[0] not in seen:
+                        seen.add(row[0])
+                        rows.append(row)
+                rows = rows[:top_k]
+
+            if not rows:
+                # 4. Most recent
+                rows = conn.execute(
+                    "SELECT id, label, content, created_at FROM deep_store ORDER BY created_at DESC LIMIT ?",
+                    (top_k,),
+                ).fetchall()
+
+        return [
+            {"id": r[0], "label": r[1], "content": r[2], "created_at": r[3]}
+            for r in rows
+        ]
+
+    except Exception as exc:
+        logger.error("[DeepStore] Search error: %s", exc)
+        return []

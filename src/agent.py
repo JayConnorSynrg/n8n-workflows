@@ -7,8 +7,35 @@ Based on LiveKit Agents 1.3.x documentation:
 import asyncio
 import json
 import logging
+import re as _re
 import threading
 from typing import Optional
+
+# ── Wake word detection ───────────────────────────────────────────────────────
+# AIO is pronounced AYE-YO, eyoh, or aye oh.
+# Deepgram nova-3 may transcribe it as: AIO, A.I.O., aye-oh, aye oh, ayo,
+# eyoh, eye oh, a i o.  We use word boundaries to avoid false positives like
+# "mayo", "Cairo", "radio", "Heyo", or "hey those".
+_AIO_WAKE_RE = _re.compile(
+    r'\b(?:'
+    r'A\.?I\.?O\.?'             # AIO, A.I.O., A.I.O
+    r'|aye[\s\-]?(?:oh?|yo?)'  # aye-oh, aye oh, aye-yo, ayo (from "aye-y")
+    r'|eye[\s\-]?oh?'          # eye-oh, eye oh
+    r'|a[\s\-]i[\s\-]o'        # a-i-o, a i o (letter-by-letter)
+    r'|eyoh?'                  # eyoh, eyo
+    r'|ayo'                    # standalone ayo (word-boundary protected)
+    r')\b',
+    _re.IGNORECASE,
+)
+
+
+def _detect_aio_wake_word(transcript: str) -> bool:
+    """Return True if transcript contains a clear AIO wake word utterance.
+
+    Matches: AIO, A.I.O., aye-oh, aye oh, ayo, eyoh, eye-oh, a-i-o.
+    Does NOT match: mayo, Cairo, radio, heyo, hey-those, or partial substrings.
+    """
+    return bool(_AIO_WAKE_RE.search(transcript or ""))
 
 from livekit import rtc
 from livekit.agents import (
@@ -99,6 +126,23 @@ ROLE
 Senior executive assistant with access to Drive email database and knowledge base
 Communicate like a trusted chief of staff - concise insightful action-oriented
 
+WAKE WORD PROTOCOL — ABSOLUTE HIGHEST PRIORITY RULE
+After your opening greeting you enter SILENT MODE
+You will NOT respond to any user input unless the user explicitly addresses you as AIO
+AIO is pronounced AYE-YO or eyoh or aye oh — it will appear in transcripts as AIO or ayo or aye-oh or similar
+If the user speaks and does NOT address you as AIO generate zero output — complete silence — not even a filler word
+After every response you automatically return to SILENT MODE and wait for AIO to be spoken again
+EXCEPTIONS where you MUST respond even without wake word
+- You are mid-task continuing a multi-step tool sequence already in progress
+- A heartbeat continuation instruction arrives from the system
+This rule is absolute and overrides all other response instructions
+
+DEEP STORE PROTOCOL
+When the user says deep store that or deep store this or any acknowledgement that they want content permanently saved call deepStore immediately
+Provide a concise descriptive label based on what the content is about
+When the user asks to retrieve deep stored data call deepRecall with their query or label
+Deep stored items have no size limit and persist across all future sessions — they never expire
+
 CRITICAL RULES
 1 VOICE OUTPUT - Write responses as spoken words without punctuation marks
 2 TOOL EXECUTION - When using tools call them via function calling not as text
@@ -127,10 +171,12 @@ Immediate read tools no confirmation needed
 - memoryStatus: See what is in session memory
 - getContact: Look up a contact
 - searchContacts: Find contacts by name email or company
+- deepRecall: Retrieve content previously deep stored by label or text search
 
 Write tools ask the user to confirm first
 - sendEmail: Send email follow the EMAIL PROTOCOL below
 - knowledgeBase with action store: Save new information
+- deepStore: Permanently archive any content the user says to deep store — no size limit no expiry — user confirmation is implicit when they say deep store that
 - addContact: Add a new contact uses spelling confirmation
 
 Connection management
@@ -759,6 +805,15 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(**session_kwargs)
 
+    # ── Wake word gate state ─────────────────────────────────────────────────
+    # After the opening greeting AIO goes into SILENT MODE.  It only responds
+    # when the user says "AIO" (AYE-YO / eyoh / aye oh).  Using a mutable dict
+    # so nested event handler closures can update shared state without nonlocal.
+    _wake_state = {
+        "active": False,        # True on the turn AIO was addressed; resets after agent speaks
+        "suppress_next": False, # Pending interrupt for utterances without a wake word
+    }
+
     # =========================================================================
     # VAD DEBUG: Monitor if VAD is receiving audio frames
     # =========================================================================
@@ -899,6 +954,20 @@ async def entrypoint(ctx: JobContext):
         text_preview = text[:100] if text and len(text) > 100 else (text or "(empty)")
         logger.info(f"User said (final): {text_preview}")
 
+        # ── Wake word gate ───────────────────────────────────────────────────
+        # AIO stays silent after the greeting until user says "AIO" (AYE-YO).
+        # If wake word detected → activate reply for this turn.
+        # If not detected → schedule an interrupt to suppress the LLM response.
+        if text:
+            if _detect_aio_wake_word(text):
+                _wake_state["active"] = True
+                _wake_state["suppress_next"] = False
+                logger.info("[WakeWord] Detected — activating AIO reply")
+            else:
+                _wake_state["suppress_next"] = True
+                logger.debug("[WakeWord] Not detected — will suppress LLM reply: %r", text_preview)
+        # ── End wake word gate ───────────────────────────────────────────────
+
         # Track user objective for heartbeat-driven continuation
         if text:
             _task_tracker.record_user_message(text)
@@ -923,6 +992,15 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
+            # ── Wake word suppression ────────────────────────────────────────
+            # If the user spoke without saying "AIO", interrupt the LLM
+            # immediately before it generates any output.
+            if _wake_state["suppress_next"]:
+                _wake_state["suppress_next"] = False
+                logger.debug("[WakeWord] Suppressing — interrupting LLM (no wake word)")
+                asyncio.create_task(session.interrupt())
+                return  # Do not arm heartbeat tracker for suppressed replies
+            # ── End wake word suppression ────────────────────────────────────
             _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}',
@@ -934,12 +1012,20 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
         elif "listening" in state_str:
+            # Agent finished speaking — return to silent mode
+            if _wake_state["active"]:
+                _wake_state["active"] = False
+                logger.debug("[WakeWord] Agent done speaking — returning to silent mode")
             _task_tracker.record_agent_idle()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"listening"}',
                 log_type="agent.state"
             ))
         elif "idle" in state_str:
+            # Agent finished speaking — return to silent mode
+            if _wake_state["active"]:
+                _wake_state["active"] = False
+                logger.debug("[WakeWord] Agent idle — returning to silent mode")
             _task_tracker.record_agent_idle()
             total = tracker.end("total_latency")
             if total:
