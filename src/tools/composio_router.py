@@ -750,11 +750,39 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
     return f"Completed {tool_display}"
 
 
-def prewarm_slug_index() -> str:
-    """Synchronous slug index build + catalog generation for prewarm phase.
+def _build_compact_catalog() -> str:
+    """Build a compact service-only catalog summary for system prompt injection."""
+    if not _slugs_by_service:
+        return "No connected services available."
 
-    Called once at worker process start (not per-meeting). Returns the
-    full tool catalog string for injection into the system prompt.
+    services = sorted(k for k in _slugs_by_service.keys() if k != "other")
+    service_counts = {svc: len(slugs) for svc, slugs in _slugs_by_service.items()}
+
+    lines = ["CONNECTED SERVICES — call listComposioTools(service=X) for exact slugs"]
+    for svc in services:
+        count = service_counts.get(svc, 0)
+        lines.append(f"  {svc} ({count} tools)")
+    lines.append("")
+    lines.append("Examples:")
+    lines.append('  listComposioTools(service="gmail") → all Gmail slugs')
+    lines.append('  listComposioTools(service="googlesheets") → all Sheets slugs')
+    lines.append('  listComposioTools(service="composio_search") → all search slugs')
+    lines.append("")
+    lines.append("KEY SEARCH SLUGS (always available — no lookup needed):")
+    # Add known search slugs inline since they're critical
+    search_slugs = [s for s in _canonical_slugs if s.startswith("COMPOSIO_SEARCH_")]
+    for slug in sorted(search_slugs)[:10]:  # top 10 search slugs
+        lines.append(f"  {slug}")
+
+    return "\n".join(lines)
+
+
+def prewarm_slug_index() -> str:
+    """Synchronous slug index build + compact catalog generation for prewarm phase.
+
+    Called once at worker process start (not per-meeting). Returns a compact
+    service summary string for injection into the system prompt. Full slug
+    catalogs are fetched on-demand via listComposioTools(service=X).
     """
     from ..config import get_settings
     settings = get_settings()
@@ -765,8 +793,8 @@ def prewarm_slug_index() -> str:
         client = _get_client(settings)
         user_id = settings.composio_user_id.strip()
         _build_slug_index(client, user_id)
-        catalog = get_tool_catalog()
-        logger.info(f"Composio: Prewarm complete — catalog {len(catalog)} chars")
+        catalog = _build_compact_catalog()
+        logger.info(f"Composio: Prewarm complete — compact catalog {len(catalog)} chars")
         return catalog
     except Exception as exc:
         logger.warning(f"Composio: Prewarm failed: {exc}")
