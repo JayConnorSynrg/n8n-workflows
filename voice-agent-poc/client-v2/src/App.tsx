@@ -3,6 +3,9 @@ import { WebGLOrb } from './components/WebGLOrb'
 import { LiveWaveform } from './components/LiveWaveform'
 import { TranscriptCycler } from './components/TranscriptCycler'
 import { ToolCallPanel } from './components/ToolCallCard'
+import { DevTestPanel } from './components/DevTestPanel'
+import { SessionReplay } from './components/SessionReplay'
+import { DemoRunner } from './components/DemoRunner'
 import { useLiveKitAgent } from './hooks/useLiveKitAgent'
 import { useStore } from './lib/store'
 
@@ -45,6 +48,13 @@ function App() {
   const livekitToken = params.get('token') || params.get('livekit_token')
   const mockMode = params.get('mock') === 'true'
   const hasConnectionParams = !!(livekitUrl && livekitToken) || mockMode
+
+  // Dev test panel activation: ?devtest=1 OR localStorage.getItem('aio_dev_test') === 'true'
+  const isDevTest = import.meta.env.DEV && (params.has('devtest') || localStorage.getItem('aio_dev_test') === 'true')
+
+  // Replay panel activation: ?replay=<scriptId> (defaults to 'emailSend' if value is empty)
+  const isReplay = params.has('replay')
+  const replayScript = params.get('replay') ?? 'emailSend'
 
   // Track if we've signaled readiness
   const readinessSignaled = useRef(false)
@@ -140,7 +150,7 @@ function App() {
         status: window.voiceAgentStatus
       }
 
-      console.log('🟢 VOICE_AGENT_READY - Page fully initialized', integrationContext)
+      if (import.meta.env.DEV) { console.log('🟢 VOICE_AGENT_READY - Page fully initialized', integrationContext) }
 
       // Dispatch custom event that Recall.ai can listen for
       window.dispatchEvent(new CustomEvent('voiceAgentReady', {
@@ -148,19 +158,28 @@ function App() {
       }))
 
       // Log that event was dispatched
-      console.log('[Recall.ai] voiceAgentReady event dispatched to window')
+      if (import.meta.env.DEV) { console.log('[Recall.ai] voiceAgentReady event dispatched to window') }
 
-      // If in iframe, try to signal parent
+      // FIX: Resilient postMessage with retry — handles transient iframe comm failures
       if (window !== window.parent) {
-        try {
-          window.parent.postMessage({
-            type: 'voiceAgentReady',
-            payload: window.voiceAgentStatus
-          }, '*')
-          console.log('[Recall.ai] Posted message to parent window')
-        } catch (e) {
-          console.warn('[Recall.ai] Could not post to parent:', e)
+        const signalReadiness = (attempt = 0) => {
+          try {
+            window.parent.postMessage({
+              type: 'voiceAgentReady',
+              timestamp: Date.now(),
+              payload: window.voiceAgentStatus
+            }, '*')
+            // Also set local flag immediately as confirmation
+            window.voiceAgentReady = true
+            if (import.meta.env.DEV) { console.log('[Recall.ai] Posted message to parent window (attempt', attempt + 1, ')') }
+          } catch (e) {
+            if (import.meta.env.DEV) { console.warn('[Recall.ai] Could not post to parent (attempt', attempt + 1, '):', e) }
+            if (attempt < 3) {
+              setTimeout(() => signalReadiness(attempt + 1), 500 * (attempt + 1))
+            }
+          }
         }
+        signalReadiness()
       }
     }
   }, [isConnected, agentConnected, audioStatus, error])
@@ -177,7 +196,9 @@ function App() {
   const displayInputVolume = mockMode ? mockVolume : inputVolume
   const displayOutputVolume = mockMode ? mockVolume : outputVolume
   const displayMessages = mockMode ? MOCK_MESSAGES : messages
-  const displayToolCalls = mockMode ? MOCK_TOOL_CALLS : toolCalls
+  // In mock mode, use store toolCalls if any exist (allows Playwright event injection);
+  // fall back to MOCK_TOOL_CALLS only when store is empty
+  const displayToolCalls = mockMode && toolCalls.length === 0 ? MOCK_TOOL_CALLS : toolCalls
 
   // Only pass output volume to orb when speaking (for bounce/ripple effect)
   const orbOutputVolume = displayAgentState === 'speaking' ? displayOutputVolume : 0
@@ -185,7 +206,7 @@ function App() {
   // FULLY CONNECTED: Show complete UI - user sees "Ready" immediately
   // Layout: Orb → State Label → Transcript (center) → Waveform → Logo
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center overflow-hidden py-6">
+    <div data-testid="app-root" className="min-h-screen bg-white flex flex-col items-center justify-center overflow-hidden py-6">
 
       {/* Mode badge - top left */}
       <div className="absolute top-3 left-3">
@@ -210,7 +231,11 @@ function App() {
 
         {/* Agent state label - 25% smaller */}
         <div className="h-6 flex items-center justify-center">
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          <p
+            data-testid="agent-state-label"
+            data-state={displayAgentState ?? 'idle'}
+            className="text-xs font-medium text-gray-400 uppercase tracking-wider"
+          >
             {displayAgentState === 'listening' && 'Listening...'}
             {displayAgentState === 'thinking' && 'Processing...'}
             {displayAgentState === 'speaking' && 'Speaking...'}
@@ -221,7 +246,11 @@ function App() {
         {/* Transcript with Tool Call Panels on sides */}
         <div className="w-full flex items-center justify-center gap-6">
           {/* Left Tool Call Panel - flex centered with padding */}
-          <div className="hidden md:flex items-center justify-end flex-shrink-0" style={{ minWidth: '180px' }}>
+          <div
+            data-testid="tool-call-panel-left"
+            className="flex items-center justify-end flex-shrink-0"
+            style={{ minWidth: '180px' }}
+          >
             <ToolCallPanel
               toolCalls={displayToolCalls}
               position="left"
@@ -230,7 +259,7 @@ function App() {
           </div>
 
           {/* Transcript Cycler - CENTER */}
-          <div className="flex-1 max-w-md min-w-0">
+          <div data-testid="transcript-cycler" className="flex-1 max-w-md min-w-0">
             <TranscriptCycler
               messages={displayMessages}
               toolCalls={displayToolCalls}
@@ -239,7 +268,7 @@ function App() {
           </div>
 
           {/* Right Tool Call Panel - flex centered with padding */}
-          <div className="hidden md:flex items-center justify-start flex-shrink-0" style={{ minWidth: '180px' }}>
+          <div className="flex items-center justify-start flex-shrink-0" style={{ minWidth: '180px' }}>
             <ToolCallPanel
               toolCalls={displayToolCalls}
               position="right"
@@ -279,6 +308,15 @@ function App() {
           </p>
         </div>
       </div>
+
+      {/* Dev stress-test panel — only active when ?devtest=1 or aio_dev_test=true in localStorage */}
+      {isDevTest && <DevTestPanel />}
+
+      {/* Session replay panel — only active when ?replay=<scriptId> is present in URL */}
+      {isReplay && <SessionReplay initialScript={replayScript} />}
+
+      {/* Demo runner — only in dev (excluded from production build) */}
+      {import.meta.env.DEV && <DemoRunner />}
     </div>
   )
 }

@@ -42,6 +42,18 @@ export function LiveWaveform({
   // Calculate number of bars based on container width
   const numBars = Math.floor(dimensions.width / (barWidth + barGap))
 
+  // FIX: Safe color helper — avoids fragile regex alpha replacement
+  const getBarColor = (baseColor: string, alpha: number): string => {
+    try {
+      const rgbaMatch = baseColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+      if (rgbaMatch) {
+        return `rgba(${rgbaMatch[1]}, ${rgbaMatch[2]}, ${rgbaMatch[3]}, ${alpha})`
+      }
+    } catch {}
+    // Fallback: default brand purple
+    return `rgba(139, 92, 246, ${alpha})`
+  }
+
   // Draw waveform using volume history
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -49,6 +61,24 @@ export function LiveWaveform({
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+
+    // FIX: roundRect browser compatibility polyfill
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function(
+        x: number, y: number, w: number, h: number, r: number
+      ) {
+        if (w < 2 * r) r = w / 2
+        if (h < 2 * r) r = h / 2
+        this.beginPath()
+        this.moveTo(x + r, y)
+        this.arcTo(x + w, y, x + w, y + h, r)
+        this.arcTo(x + w, y + h, x, y + h, r)
+        this.arcTo(x, y + h, x, y, r)
+        this.arcTo(x, y, x + w, y, r)
+        this.closePath()
+        return this
+      }
+    }
 
     // Update volume history (shift left, add new value)
     const history = volumeHistoryRef.current
@@ -94,8 +124,8 @@ export function LiveWaveform({
         alpha = Math.min(1, edgeRatio)
       }
 
-      // Parse color and apply alpha
-      ctx.fillStyle = barColor.replace(/[\d.]+\)$/, `${alpha * parseFloat(barColor.match(/[\d.]+\)$/)?.[0] || '1')})`);
+      // FIX: Use safe getBarColor helper instead of fragile regex
+      ctx.fillStyle = getBarColor(barColor, alpha);
 
       // Center vertically
       const y = (canvas.height / dpr - barHeight) / 2
@@ -143,6 +173,11 @@ export function LiveWaveform({
   // Start/stop animation based on active prop
   useEffect(() => {
     if (active && dimensions.width > 0) {
+      // FIX: Cancel any existing animation (active or idle) before starting active loop
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
+      }
       // Clear history when becoming active
       volumeHistoryRef.current = []
       draw()
@@ -171,7 +206,12 @@ export function LiveWaveform({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    let frame: number
+    // FIX: Cancel any existing RAF (active or previous idle) before starting idle loop
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current)
+      animationRef.current = null
+    }
+
     let time = 0
 
     const drawIdle = () => {
@@ -196,7 +236,8 @@ export function LiveWaveform({
           alpha = Math.min(0.3, edgeRatio * 0.3)
         }
 
-        ctx.fillStyle = barColor.replace(/[\d.]+\)$/, `${alpha})`)
+        // FIX: Use safe getBarColor helper instead of fragile regex
+        ctx.fillStyle = getBarColor(barColor, alpha)
 
         const radius = barWidth / 2
         ctx.beginPath()
@@ -205,11 +246,17 @@ export function LiveWaveform({
       }
 
       time += 0.016
-      frame = requestAnimationFrame(drawIdle)
+      // FIX: Store idle RAF in shared animationRef (not a local variable)
+      animationRef.current = requestAnimationFrame(drawIdle)
     }
 
     drawIdle()
-    return () => cancelAnimationFrame(frame)
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
+      }
+    }
   }, [active, numBars, barWidth, barGap, barColor, fadeEdges, dimensions])
 
   return (

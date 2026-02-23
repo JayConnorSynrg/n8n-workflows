@@ -63,11 +63,22 @@ export function WebGLOrb({
     const container = canvasContainerRef.current
     if (!container || !useWebGL) return
 
+    // FIX: Cancel any existing RAF before starting a new animation loop on size change
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current)
+      animationRef.current = 0
+    }
+
+    // Guard against StrictMode double-mount and rapid re-renders:
+    // if cleanup runs before the async init finishes, bail out rather than
+    // appending a stale canvas to the container.
+    let cancelled = false
     let cleanup: (() => void) | null = null
 
     const initWebGL = async () => {
       try {
         const { Mesh, Program, Renderer, Triangle, Vec3 } = await import('ogl')
+        if (cancelled) return
 
         const renderer = new Renderer({ alpha: true, premultipliedAlpha: false })
         const gl = renderer.gl
@@ -226,13 +237,18 @@ export function WebGLOrb({
           try { gl.getExtension('WEBGL_lose_context')?.loseContext() } catch (e) {}
         }
       } catch (error) {
-        console.warn('WebGL initialization failed:', error)
-        setUseWebGL(false)
+        if (!cancelled) {
+          console.warn('WebGL initialization failed:', error)
+          setUseWebGL(false)
+        }
       }
     }
 
     initWebGL()
-    return () => { if (cleanup) cleanup() }
+    return () => {
+      cancelled = true
+      if (cleanup) cleanup()
+    }
   }, [innerSize, useWebGL])
 
   // Inject CSS keyframes for outer ring rotation
@@ -344,6 +360,7 @@ export function WebGLOrb({
       )}
 
       {/* CSS Fallback for inner orb */}
+      {/* FIX: Use ringColor prop instead of hardcoded colors so fallback matches state */}
       {!useWebGL && (
         <div
           className="absolute rounded-full"
@@ -353,9 +370,9 @@ export function WebGLOrb({
             width: innerSize,
             height: innerSize,
             background: `radial-gradient(circle at 40% 40%,
-              rgba(139, 92, 246, 0.9) 0%,
-              rgba(78, 234, 170, 0.7) 40%,
-              rgba(139, 92, 246, 0.5) 70%,
+              rgba(${ringColor.r}, ${ringColor.g}, ${ringColor.b}, 0.9) 0%,
+              rgba(${ringColor.r}, ${ringColor.g}, ${ringColor.b}, 0.7) 40%,
+              rgba(${ringColor.r}, ${ringColor.g}, ${ringColor.b}, 0.5) 70%,
               transparent 100%)`,
           }}
         />

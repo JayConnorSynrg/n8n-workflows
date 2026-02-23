@@ -42,7 +42,8 @@ export function TranscriptCycler({
     const combined: TranscriptItem[] = [
       ...messages.map(m => ({ ...m, type: 'message' as const })),
       ...toolCalls.map(t => ({ ...t, type: 'tool' as const }))
-    ].sort((a, b) => b.timestamp - a.timestamp) // newest first
+    // FIX: Null-safe sort — missing timestamps default to now instead of NaN comparison
+    ].sort((a, b) => (b.timestamp ?? Date.now()) - (a.timestamp ?? Date.now()))
 
     // Only show the most recent items
     const visible = combined.slice(0, maxVisible)

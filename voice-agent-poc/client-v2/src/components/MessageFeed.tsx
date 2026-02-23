@@ -36,7 +36,8 @@ export function MessageFeed({
     const combined = [
       ...messages.map(m => ({ ...m, type: 'message' as const })),
       ...toolCalls.map(t => ({ ...t, type: 'tool' as const }))
-    ].sort((a, b) => b.timestamp - a.timestamp) // newest first
+    // FIX: Null-safe sort — missing timestamps default to now instead of NaN comparison
+    ].sort((a, b) => (b.timestamp ?? Date.now()) - (a.timestamp ?? Date.now()))
 
     // Only show the most recent items
     setVisibleItems(combined.slice(0, maxVisible))
@@ -96,7 +97,8 @@ function MessageBubble({ message }: { message: Message }) {
           shadow-sm
         `}
       >
-        <p className="text-sm leading-relaxed">{message.content}</p>
+        {/* FIX: Null-safe content render — guards against missing content at runtime */}
+        <p className="text-sm leading-relaxed">{message.content ?? ''}</p>
       </div>
     </div>
   )
