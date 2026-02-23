@@ -115,6 +115,34 @@ def init(memory_dir: Optional[str] = None) -> bool:
         return False
 
 
+def reinit_for_user(user_mem_dir: str) -> bool:
+    """Re-initialize the memory store for a specific user's directory.
+
+    Called at session start to switch the singleton to the user's SQLite db.
+    Idempotent: no-op if already initialized for the same path.
+
+    Args:
+        user_mem_dir: Per-user memory directory (e.g., /app/data/memory/users/jay)
+
+    Returns:
+        True if initialized successfully, False otherwise.
+    """
+    global _initialized, _init_failed, _db_path
+
+    target_db = os.path.join(user_mem_dir, "aio-voice-memory.sqlite")
+
+    # Already on the right database — skip reinit
+    if _initialized and _db_path == target_db:
+        logger.info("[Memory] Already initialized for: %s", target_db)
+        return True
+
+    # Reset singleton state so init() will run fresh for this user
+    _initialized = False
+    _init_failed = False
+    logger.info("[Memory] Switching memory store to user dir: %s", user_mem_dir)
+    return init(user_mem_dir)
+
+
 def _create_schema(db_path: str) -> None:
     """Create tables if they don't exist. Idempotent."""
     with sqlite3.connect(db_path) as conn:

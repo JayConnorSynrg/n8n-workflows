@@ -71,6 +71,7 @@ from .utils.session_facts import (
     clear_facts as _clear_facts,
 )
 from .utils import pg_logger as _pg_logger
+from .utils import user_identity as _user_identity
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -599,21 +600,13 @@ def prewarm(proc: JobProcess):
     proc.userdata["_composio_thread"] = catalog_thread
     logger.info("Composio catalog build started in background thread")
 
-    # Ensure memory files (MEMORY.md, USER.md) exist on the volume
-    if _MEM_AVAILABLE and _session_writer is not None:
-        try:
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
-            _session_writer.ensure_memory_files(_mem_dir)
-        except Exception as _e:
-            logger.warning("[Memory] File init failed: %s", _e)
-
-    # Initialize persistent memory store (non-blocking — failure is tolerated)
+    # Pre-initialize memory store embedding model (non-blocking — failure is tolerated).
+    # Per-user reinit happens in entrypoint(); prewarm only loads the embedding model.
     if _MEM_AVAILABLE and _mem_store is not None:
         try:
             _mem_store.init()
         except Exception as _e:
-            logger.warning("[Memory] Store init failed in prewarm: %s", _e)
+            logger.warning("[Memory] Store prewarm failed (non-critical): %s", _e)
 
 
 async def entrypoint(ctx: JobContext):
@@ -621,6 +614,38 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"Agent starting for room: {ctx.room.name}")
     tracker = LatencyTracker()
+
+    # ── Per-user memory routing ──────────────────────────────────────────────
+    # Resolve user identity from room context so all memory (SQLite + markdown)
+    # is stored in /app/data/memory/users/{user_id}/ — never shared across users.
+    _base_mem_dir = settings.memory_dir  # /app/data/memory
+    _room_participants = (
+        list(ctx.room.remote_participants.values())
+        if hasattr(ctx.room, 'remote_participants') and ctx.room.remote_participants
+        else []
+    )
+    _user_id = _user_identity.resolve_user_id(
+        room_name=ctx.room.name or "",
+        room_metadata_str=getattr(ctx.room, 'metadata', None) or "",
+        participants=_room_participants,
+    )
+    _user_mem_dir = _user_identity.get_user_mem_dir(_base_mem_dir, _user_id)
+    logger.info(f"[UserIdentity] User={_user_id!r} mem_dir={_user_mem_dir}")
+
+    # Switch SQLite memory store to this user's database
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _mem_store.reinit_for_user(_user_mem_dir)
+        except Exception as _uid_err:
+            logger.warning("[Memory] Per-user reinit failed (non-critical): %s", _uid_err)
+
+    # Ensure this user's memory files (SOUL.md, USER.md, MEMORY.md) exist
+    if _MEM_AVAILABLE and _session_writer is not None:
+        try:
+            _session_writer.ensure_memory_files(_user_mem_dir)
+        except Exception as _uid_err:
+            logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
+    # ── End per-user memory routing ──────────────────────────────────────────
 
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
@@ -778,13 +803,11 @@ async def entrypoint(ctx: JobContext):
     )
     active_prompt += time_context
 
-    # Load cross-session memory context and inject into instructions
+    # Load cross-session memory context for this user and inject into instructions
     _memory_context = ""
     if _MEM_AVAILABLE and _session_writer is not None:
         try:
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
-            _memory_context = _session_writer.load_memory_context(_mem_dir, max_tokens=500)
+            _memory_context = _session_writer.load_memory_context(_user_mem_dir, max_tokens=500)
         except Exception as _e:
             logger.warning("[Memory] Context load failed: %s", _e)
 
@@ -1722,14 +1745,12 @@ async def entrypoint(ctx: JobContext):
                 f"Tools used: {_stats.get('total_entries', 0)} calls across "
                 f"{len(_stats.get('categories', {}))} categories."
             )
-            import os
-            _mem_dir = os.environ.get("AIO_MEMORY_DIR", "/app/data/memory")
             # Flush auto-captured facts to SQLite
             _pending = _mem_capture.get_pending_facts()
             _fact_texts = [f for f, _ in _pending]
-            # Write session log (with 8s timeout)
+            # Write session log to user's sessions/ dir (with 8s timeout)
             await asyncio.wait_for(
-                _session_writer.flush_session(_mem_dir, _summary, _fact_texts),
+                _session_writer.flush_session(_user_mem_dir, _summary, _fact_texts),
                 timeout=8.0,
             )
             # Flush facts to store
