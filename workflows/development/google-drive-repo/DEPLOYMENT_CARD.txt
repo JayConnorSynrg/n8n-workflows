@@ -1,0 +1,76 @@
+================================================================================
+DEPLOYMENT CARD: Prepare DB Insert Node Fix
+================================================================================
+
+WORKFLOW ID:     IamjzfFxjHviJvJg
+NODE ID:         merge-extractions
+NODE NAME:       Prepare DB Insert
+PARAMETER:       jsCode
+
+ISSUE:           Node only processes first item, causing data loss
+FIX:             Use $input.getAll().map() instead of $input.first()
+IMPACT:          All files from different extraction paths now processed
+
+================================================================================
+DEPLOYMENT STEPS
+================================================================================
+
+1. BACKUP
+   - Save current workflow state in n8n UI
+   - Reference file: IamjzfFxjHviJvJg-UPDATED-PREPARE-DB-INSERT.json
+
+2. NAVIGATE
+   - Go to n8n cloud: jayconnorexe.app.n8n.cloud
+   - Open workflow: "Google Drive Document Repository"
+   - Find node: "Prepare DB Insert"
+
+3. UPDATE
+   - Click the Code node "Prepare DB Insert"
+   - Click the "Code" tab
+   - Clear existing jsCode completely
+   - Paste NEW CODE (see PREPARE_DB_INSERT_UPDATE.md)
+   - Hit Ctrl+S to format the code
+
+4. VERIFY
+   - Check for syntax errors (red squiggles)
+   - Click Test to validate code compiles
+   - No errors = ready for save
+
+5. ACTIVATE
+   - Click Save node
+   - Click Save workflow
+   - Workflow should remain ACTIVE
+
+6. TEST
+   - Use /file-download-email webhook or test UI
+   - Send sync request with 3+ files of different types
+   - Verify all files in documents table:
+     SELECT COUNT(*) FROM documents WHERE extraction_status = 'SUCCESS';
+
+================================================================================
+ROLLBACK PROCEDURE (if needed)
+================================================================================
+
+If something goes wrong:
+
+1. Open the same node
+2. Paste the BEFORE code from CODE_DIFF.md
+3. Save
+4. The original behavior will be restored
+
+No database changes are needed - the issue is code logic only.
+
+================================================================================
+KEY FILES
+================================================================================
+
+Implementation Guide:    PREPARE_DB_INSERT_UPDATE.md
+Fix Summary:             FIX_SUMMARY.md
+Code Comparison:         CODE_DIFF.md
+Complete Workflow:       IamjzfFxjHviJvJg-UPDATED-PREPARE-DB-INSERT.json
+
+================================================================================
+ESTIMATED TIME: 2-3 minutes to deploy
+RISK LEVEL:     Low (Code fix only, no structure changes)
+TESTING TIME:   5-10 minutes with sample files
+================================================================================

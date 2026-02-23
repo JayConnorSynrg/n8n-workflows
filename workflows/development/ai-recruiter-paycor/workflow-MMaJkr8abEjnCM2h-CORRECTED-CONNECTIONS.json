@@ -1,0 +1,2192 @@
+{
+  "updatedAt": "2026-02-15T19:42:13.408Z",
+  "createdAt": "2025-11-03T00:01:14.323Z",
+  "id": "MMaJkr8abEjnCM2h",
+  "name": "Resume Analysis with AI Evaluation (PAYCOR TRIGGER)",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "resumeText",
+              "name": "resumeText",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.candidateResume }}",
+              "type": "string"
+            },
+            {
+              "id": "fileName",
+              "name": "fileName",
+              "value": "={{ $('Transform to Workflow Format').item.json.metadata.originalFileName }}",
+              "type": "string"
+            },
+            {
+              "id": "candidateName",
+              "name": "candidateName",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.candidateName }}",
+              "type": "string"
+            },
+            {
+              "id": "candidateEmail",
+              "name": "candidateEmail",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "jobTitle",
+              "name": "jobTitle",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobTitle }}",
+              "type": "string"
+            },
+            {
+              "id": "jobDescription",
+              "name": "jobDescription",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobDescription }}",
+              "type": "string"
+            },
+            {
+              "id": "jobDepartment",
+              "name": "jobDepartment",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobDepartment }}",
+              "type": "string"
+            },
+            {
+              "id": "jobLocation",
+              "name": "jobLocation",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobLocation }}",
+              "type": "string"
+            },
+            {
+              "id": "jobPayRange",
+              "name": "jobPayRange",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobPayRange }}",
+              "type": "string"
+            },
+            {
+              "id": "jobRemoteStatus",
+              "name": "jobRemoteStatus",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.jobRemoteStatus }}",
+              "type": "string"
+            },
+            {
+              "id": "paycor_full_name",
+              "name": "paycor_full_name",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.paycor_full_name }}",
+              "type": "string"
+            },
+            {
+              "id": "paycor_email",
+              "name": "paycor_email",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.paycor_email }}",
+              "type": "string"
+            },
+            {
+              "id": "paycor_phone",
+              "name": "paycor_phone",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.paycor_phone }}",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.source }}",
+              "type": "string"
+            },
+            {
+              "id": "applied_date",
+              "name": "applied_date",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.applied_date }}",
+              "type": "string"
+            },
+            {
+              "id": "pipeline_stage",
+              "name": "pipeline_stage",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.pipeline_stage }}",
+              "type": "number"
+            },
+            {
+              "id": "candidate_status",
+              "name": "candidate_status",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.candidate_status }}",
+              "type": "number"
+            },
+            {
+              "id": "candidate_city",
+              "name": "candidate_city",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.candidate_city }}",
+              "type": "string"
+            },
+            {
+              "id": "candidate_state",
+              "name": "candidate_state",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.candidate_state }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c7a9889f-3a3a-4766-b433-3055d8b9caba",
+      "name": "Standardize Resume Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1600,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-candidate-data",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.candidateName && $json.candidateName !== 'Unknown' && $json.candidateEmail && $json.jobTitle }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bf0fb1f3-ab8d-425a-a930-0c4041461193",
+      "name": "Resume Quality Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2000,
+        448
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=**CANDIDATE APPLICATION:**\n\n**Name:** {{ $('Standardize Resume Data').item.json.candidateName }}\n**Email:** {{ $('Standardize Resume Data').item.json.candidateEmail }}\n**Applied For:** {{ $('Standardize Resume Data').item.json.jobTitle }}\n\n**RESUME TEXT (if available):**\n{{ $('Standardize Resume Data').item.json.candidateResume || 'Resume text not available from Paycor API. Evaluate based on job fit and available data.' }}\n\n---\n\n**JOB DETAILS FROM PAYCOR:**\n\n**Position:** {{ $('Standardize Resume Data').item.json.jobTitle }}\n**Department:** {{ $('Standardize Resume Data').item.json.jobDepartment }}\n**Location:** {{ $('Standardize Resume Data').item.json.jobLocation }}\n**Pay Range:** {{ $('Standardize Resume Data').item.json.jobPayRange }}\n**Remote Status:** {{ $('Standardize Resume Data').item.json.jobRemoteStatus }}\n\n**Full Job Description:**\n{{ $('Standardize Resume Data').item.json.jobDescription }}\n\n---\n\n**YOUR TASK:**\n\nEvaluate this candidate application for the position above.\n\nProvide your structured evaluation following the output schema. For each candidate, also generate 3-5 personalized follow-up questions that reference specific details from their resume and application. These questions should help reduce data collection needed during the interview.\n\nIf resume text is available, perform full analysis. If not, provide a preliminary assessment recommending next steps like requesting resume or scheduling screening call.\n\nUse matched_job_title: {{ $('Standardize Resume Data').item.json.jobTitle }}",
+        "options": {
+          "systemMessage": "🔴 CRITICAL DATA INTEGRITY RULES - VIOLATION IS UNACCEPTABLE 🔴\n\n1. EXTRACT ONLY - Never invent, assume, or fabricate ANY data\n2. If a field is not explicitly stated in the resume, return \"NOT FOUND\" or empty - NEVER guess\n3. Names MUST come directly from the resume - NEVER use placeholders like \"John Doe\" or \"Jane Doe\"\n4. Contact info MUST be extracted verbatim - NEVER invent email addresses or phone numbers\n5. Skills MUST be explicitly mentioned - NEVER infer or assume skills\n6. Experience MUST be calculated from stated dates only - NEVER estimate\n7. If the resume is blank, malformed, or unreadable, return ALL fields as \"INSUFFICIENT DATA\"\n\nPOSITIVE REINFORCEMENT:\n✅ DO extract exactly what is written\n✅ DO preserve original formatting of names, emails, phones\n✅ DO return \"NOT FOUND\" for missing fields\n✅ DO flag incomplete data rather than fill gaps\n\n❌ NEVER invent a name when none is provided\n❌ NEVER create placeholder contact information\n❌ NEVER assume skills not explicitly listed\n❌ NEVER fabricate job titles or experience\n\nThis system processes REAL job candidates. Invented data sabotages hiring decisions and wastes human time reviewing fake profiles.\n\n---\n\nYou are a top 1% enterprise talent acquisition expert.\n\n# YOUR ROLE\nEvaluate candidates against job descriptions. Your assessments inform executive hiring decisions.\n\n# INPUT DATA\n1. Candidate Info - Name, email, and potentially resume text\n2. Job Details from Paycor - Full job description provided directly\n\n# HANDLING MISSING RESUME TEXT\nIf resume text is not available:\n- Score in 5-6 range (unknown quality)\n- Strengths: [\"Application submitted for relevant position\"]\n- Weaknesses: [\"Resume not yet reviewed - text not available\"]\n- Risk level: Medium (unknown background)\n- Opportunity level: Medium (potential to be discovered)\n- AI Adoption: Medium (cannot assess without resume)\n- Recommend requesting full resume or scheduling screening call\n\n# SCORING (when resume available)\n9-10 exceptional, 8 strong, 6-7 good, 4-5 marginal, 1-3 not recommended\n\n# AI ADOPTION ASSESSMENT\nAutoPayPlus is a forward-thinking payroll technology company that heavily leverages AI tools and automation. Evaluate the candidate's:\n- Experience with AI tools, automation, or machine learning\n- Adaptability indicators (learning new technologies, embracing change)\n- Evidence of working with modern tech stacks\n- Growth mindset and curiosity about emerging technologies\n- Any explicit mentions of ChatGPT, Copilot, automation tools, etc.\n\nLevels:\n- High: Clear evidence of AI/automation experience or strong adaptability signals\n- Medium: Some tech adaptability but no explicit AI experience\n- Low: Traditional skillset with limited tech evolution evidence\n\n# OUTPUT REQUIREMENTS\n- matched_job_title MUST be the position title from input\n- Always provide actionable next steps\n- Be concise but thorough\n- ALWAYS include ai_adoption_assessment with level and explanation"
+        }
+      },
+      "id": "f5aa356f-0313-4eaa-8491-0c74d511dd21",
+      "name": "AI Recruiter Analysis",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2208,
+        416
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "5092afbf-73d1-43dd-b5d8-45d34d38e358",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2432,
+        624
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 3,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "no-error",
+              "operator": {
+                "type": "string",
+                "operation": "notExists"
+              },
+              "leftValue": "={{ $json.error }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9cbef48b-1fb5-40ad-8a4d-0efb5a8a0f6b",
+      "name": "AI Analysis Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2496,
+        400
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.resumeText }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "current_title",
+              "description": "Current job title EXACTLY as written in resume. If no current title is present, return 'NOT FOUND'. NEVER infer or assume titles."
+            },
+            {
+              "name": "years_experience",
+              "description": "Total years of experience calculated ONLY from explicitly stated dates in resume. If dates are not clear, return 'INSUFFICIENT DATA'. NEVER estimate or guess."
+            },
+            {
+              "name": "key_skills",
+              "description": "List of skills EXPLICITLY mentioned in resume, comma-separated. Extract ONLY skills that are directly stated. If no skills section exists, return 'NOT FOUND'. NEVER infer or assume skills."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "13cb15b9-99b2-4cca-ac98-9cb318a4bbe6",
+      "name": "Extract Candidate Info",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        2704,
+        336
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "disabled": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Data Completeness\n// Outputs field names that EXACTLY match Excel column headers for autoMap\n\nconst extractedData = $json.output || {};\n\n// DEFENSIVE PARSING: If Structured Output Parser failed (onError: continueRegularOutput),\n// aiAnalysis will be a STRING instead of an object. Detect and parse it.\nlet aiAnalysis = $('AI Recruiter Analysis').item.json.output || {};\n\nif (typeof aiAnalysis === 'string') {\n  try {\n    // Strip markdown code fences if present\n    let cleaned = aiAnalysis.trim();\n    if (cleaned.startsWith('```')) {\n      cleaned = cleaned.replace(/^```(?:json)?\\s*\\n?/, '').replace(/\\n?```\\s*$/, '');\n    }\n    cleaned = cleaned.trim();\n    aiAnalysis = JSON.parse(cleaned);\n  } catch (e) {\n    // If direct parse fails, try to extract the outermost JSON object\n    try {\n      const str = aiAnalysis;\n      // Find first { and last }\n      const firstBrace = str.indexOf('{');\n      const lastBrace = str.lastIndexOf('}');\n      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {\n        const jsonCandidate = str.substring(firstBrace, lastBrace + 1);\n        aiAnalysis = JSON.parse(jsonCandidate);\n      } else {\n        aiAnalysis = {};\n      }\n    } catch (e2) {\n      // All parsing failed - use empty object, fields will be empty\n      aiAnalysis = {};\n    }\n  }\n}\n\n// Also check if output is nested in an unexpected wrapper\nif (aiAnalysis.output && typeof aiAnalysis.output === 'object' && aiAnalysis.output.candidate_strengths) {\n  aiAnalysis = aiAnalysis.output;\n}\n\nconst transformData = $('Transform to Workflow Format').item.json || {};\nconst standardizedData = $('Standardize Resume Data').item.json || {};\n\n// CONTACT INFO - Use Paycor as PRIMARY source (more reliable than AI extraction)\nconst full_name = standardizedData.paycor_full_name || transformData.body?.candidateName || extractedData.full_name || 'Unknown';\nconst email_address = standardizedData.paycor_email || transformData.body?.email || extractedData.email_address || '';\nconst phone_number = standardizedData.paycor_phone || transformData.body?.phone || extractedData.phone_number || '';\n\n// AI EXTRACTION FIELDS - Now from aiAnalysis instead of extractedData\nconst current_title = aiAnalysis.current_title || '';\nconst years_experience = aiAnalysis.years_experience || '';\nconst key_skills = aiAnalysis.key_skills || '';\n\n// PAYCOR ANALYTICS FIELDS\nconst source = standardizedData.source || '';\nconst applied_date = standardizedData.applied_date || '';\nconst pipeline_stage = standardizedData.pipeline_stage ?? 0;\nconst candidate_status = standardizedData.candidate_status ?? 3;\nconst candidate_city = standardizedData.candidate_city || '';\nconst candidate_state = standardizedData.candidate_state || '';\n\n// AI ANALYSIS FIELDS\nconst overall_score = aiAnalysis.overall_score || 0;\nconst matched_job_title = aiAnalysis.matched_job_title || '';\nconst candidate_strengths = aiAnalysis.candidate_strengths || [];\nconst candidate_weaknesses = aiAnalysis.candidate_weaknesses || [];\nconst risk_level = aiAnalysis.risk_assessment?.level || '';\nconst risk_explanation = aiAnalysis.risk_assessment?.explanation || '';\nconst opportunity_level = aiAnalysis.opportunity_assessment?.level || '';\nconst opportunity_explanation = aiAnalysis.opportunity_assessment?.explanation || '';\nconst ai_adoption_level = aiAnalysis.ai_adoption_assessment?.level || '';\nconst ai_adoption_explanation = aiAnalysis.ai_adoption_assessment?.explanation || '';\nconst score_justification = aiAnalysis.score_justification || '';\nconst recruiter_note = aiAnalysis.recruiter_note || '';\nconst next_steps = aiAnalysis.next_steps_recommendation || '';\n\n// METADATA FIELDS\nconst resume_link = standardizedData.driveLink || '';\nconst candidateId = transformData.body?.candidateId || '';\nconst jobId = transformData.body?.jobId || '';\nconst resumeText = standardizedData.resumeText || '';\nconst jobTitle = standardizedData.jobTitle || '';\n\n// TIMESTAMPS\nconst now = new Date().toISOString();\n\n// CRITICAL: Name + Email + Score (per user preference)\nconst CRITICAL_FIELDS = { full_name, email_address, overall_score };\n\n// Check for missing fields\nconst missingCritical = [];\nconst missingOptional = [];\n\nfor (const [field, value] of Object.entries(CRITICAL_FIELDS)) {\n  if (value === undefined || value === null || value === '') {\n    missingCritical.push(field);\n  }\n}\n\nconst isComplete = missingCritical.length === 0;\n\n// Get operation from earlier deduplication\nconst operation = $('Transform to Workflow Format').item.json._operation || 'INSERT';\nconst compositeKey = $('Transform to Workflow Format').item.json._compositeKey ||\n  `${transformData.body?.candidateId}_${transformData.body?.jobId}`;\n\n// Format arrays as strings for Excel\nconst strengthsStr = Array.isArray(candidate_strengths) ? candidate_strengths.join(' | ') : candidate_strengths;\nconst weaknessesStr = Array.isArray(candidate_weaknesses) ? candidate_weaknesses.join(' | ') : candidate_weaknesses;\n\nreturn [{\n  json: {\n    // ===== EXCEL COLUMN NAMES (EXACT MATCH REQUIRED) =====\n    \n    // Row 1-4: Source & Dates\n    source: source,\n    Date: now.split('T')[0],\n    applied_date: applied_date,\n    pipeline_stage: pipeline_stage,\n    \n    // Row 5-8: Candidate Info\n    Candidate_Name: full_name,\n    candidate_status: candidate_status,\n    candidate_city: candidate_city,\n    candidate_state: candidate_state,\n    \n    // Row 9-13: Contact & Skills\n    Email: email_address,\n    Phone: phone_number,\n    Current_Title: current_title,\n    Years_Experience: years_experience,\n    Key_Skills: key_skills,\n    \n    // Row 14-16: Job Info\n    Job_ID: jobId,\n    Matched_Job_Title: matched_job_title,\n    Overall_Score: overall_score,\n    \n    // Row 17-18: Strengths/Weaknesses\n    Strengths: strengthsStr,\n    Weaknesses: weaknessesStr,\n    \n    // Row 19-22: Risk & Opportunity\n    Risk_Level: risk_level,\n    Risk_Details: risk_explanation,\n    Opportunity_Level: opportunity_level,\n    Opportunity_Details: opportunity_explanation,\n    \n    // Row 23-24: Justification & Next Steps\n    Justification: score_justification,\n    Next_Steps: next_steps,\n    \n    // Row 25-26: Resume & Dates\n    resumeText: resumeText.substring(0, 32000),\n    Evaluated_Date: now,\n    \n    // Row 27-29: IDs\n    candidateId: candidateId,\n    jobId: jobId,\n    paycorJobTitle: jobTitle,\n    \n    // Row 30-32: AI Adoption & Key\n    AI_Adoption_Level: ai_adoption_level,\n    AI_Adoption_Details: ai_adoption_explanation,\n    compositeKey: compositeKey,\n\n    // ===== INTERNAL FIELDS (for downstream nodes) =====\n    full_name: full_name,\n    email_address: email_address,\n    phone_number: phone_number,\n    current_title: current_title,\n    years_experience: years_experience,\n    key_skills: key_skills,\n    overall_score: overall_score,\n    matched_job_title: matched_job_title,\n    candidate_strengths: candidate_strengths,\n    candidate_weaknesses: candidate_weaknesses,\n    risk_level: risk_level,\n    risk_explanation: risk_explanation,\n    opportunity_level: opportunity_level,\n    opportunity_explanation: opportunity_explanation,\n    ai_adoption_level: ai_adoption_level,\n    ai_adoption_explanation: ai_adoption_explanation,\n    score_justification: score_justification,\n    recruiter_note: recruiter_note,\n    next_steps: next_steps,\n    resume_link: resume_link,\n\n    // ORIGINAL PASSTHROUGH DATA\n    output: extractedData,\n    aiOutput: aiAnalysis,\n    transformData: transformData,\n    standardizedData: standardizedData,\n    _operation: operation,\n    _compositeKey: compositeKey,\n\n    // COMPLETENESS METADATA\n    completeness: {\n      status: isComplete ? 'COMPLETE' : 'INCOMPLETE',\n      isComplete: isComplete,\n      missingCritical: missingCritical,\n      missingOptional: missingOptional,\n      missingFields: [...missingCritical, ...missingOptional].join(', '),\n      criticalCount: missingCritical.length,\n      optionalCount: missingOptional.length,\n      totalMissing: missingCritical.length + missingOptional.length\n    }\n  }\n}];"
+      },
+      "id": "29c22a76-da9e-49b0-95a3-7bda26135623",
+      "name": "Validate Data Completeness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2992,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "incomplete-check",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.completeness.isComplete }}",
+              "rightValue": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "is-incomplete-check",
+      "name": "Is Incomplete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3184,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "operation-check",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json._operation }}",
+              "rightValue": "UPDATE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "operation-router",
+      "name": "Operation Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "worksheet",
+        "operation": "upsert",
+        "workbook": {
+          "__rl": true,
+          "value": "01SXZDVWXSMT6LLJSWIBBYJTJMSTP7LUEX",
+          "mode": "list",
+          "cachedResultName": "AUTO PAY PLUS CANDIDATE PROCESSING LOG",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=AUTO%20PAY%20PLUS%20CANDIDATE%20PROCESSING%20LOG.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1"
+        },
+        "worksheet": {
+          "__rl": true,
+          "value": "{96A0F21B-F93F-4B67-BE3F-47BE7184FE1E}",
+          "mode": "list",
+          "cachedResultName": "in",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=AUTO%20PAY%20PLUS%20CANDIDATE%20PROCESSING%20LOG.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1&activeCell=in!A1"
+        },
+        "columnToMatchOn": "compositeKey",
+        "valueToMatchOn": "={{ $json.compositeKey }}",
+        "fieldsUi": {
+          "values": [
+            {
+              "column": "source",
+              "fieldValue": "={{ $json.source }}"
+            },
+            {
+              "column": "Date",
+              "fieldValue": "={{ $json.Date }}"
+            },
+            {
+              "column": "applied_date",
+              "fieldValue": "={{ $json.applied_date }}"
+            },
+            {
+              "column": "pipeline_stage",
+              "fieldValue": "={{ $json.pipeline_stage }}"
+            },
+            {
+              "column": "Candidate_Name",
+              "fieldValue": "={{ $json.Candidate_Name }}"
+            },
+            {
+              "column": "candidate_status",
+              "fieldValue": "={{ $json.candidate_status }}"
+            },
+            {
+              "column": "candidate_city",
+              "fieldValue": "={{ $json.candidate_city }}"
+            },
+            {
+              "column": "candidate_state",
+              "fieldValue": "={{ $json.candidate_state }}"
+            },
+            {
+              "column": "Email",
+              "fieldValue": "={{ $json.Email }}"
+            },
+            {
+              "column": "Phone",
+              "fieldValue": "={{ $json.Phone }}"
+            },
+            {
+              "column": "Current_Title",
+              "fieldValue": "={{ $json.Current_Title }}"
+            },
+            {
+              "column": "Years_Experience",
+              "fieldValue": "={{ $json.Years_Experience }}"
+            },
+            {
+              "column": "Key_Skills",
+              "fieldValue": "={{ $json.Key_Skills }}"
+            },
+            {
+              "column": "Job_ID",
+              "fieldValue": "={{ $json.Job_ID }}"
+            },
+            {
+              "column": "Matched_Job_Title",
+              "fieldValue": "={{ $json.Matched_Job_Title }}"
+            },
+            {
+              "column": "Overall_Score",
+              "fieldValue": "={{ $json.Overall_Score }}"
+            },
+            {
+              "column": "Strengths",
+              "fieldValue": "={{ $json.Strengths }}"
+            },
+            {
+              "column": "Weaknesses",
+              "fieldValue": "={{ $json.Weaknesses }}"
+            },
+            {
+              "column": "Risk_Level",
+              "fieldValue": "={{ $json.Risk_Level }}"
+            },
+            {
+              "column": "Risk_Details",
+              "fieldValue": "={{ $json.Risk_Details }}"
+            },
+            {
+              "column": "Opportunity_Level",
+              "fieldValue": "={{ $json.Opportunity_Level }}"
+            },
+            {
+              "column": "Opportunity_Details",
+              "fieldValue": "={{ $json.Opportunity_Details }}"
+            },
+            {
+              "column": "Justification",
+              "fieldValue": "={{ $json.Justification }}"
+            },
+            {
+              "column": "Next_Steps",
+              "fieldValue": "={{ $json.Next_Steps }}"
+            },
+            {
+              "column": "resumeText",
+              "fieldValue": "={{ $json.resumeText }}"
+            },
+            {
+              "column": "Evaluated_Date",
+              "fieldValue": "={{ $json.Evaluated_Date }}"
+            },
+            {
+              "column": "candidateId",
+              "fieldValue": "={{ $json.candidateId }}"
+            },
+            {
+              "column": "jobId",
+              "fieldValue": "={{ $json.jobId }}"
+            },
+            {
+              "column": "paycorJobTitle",
+              "fieldValue": "={{ $json.paycorJobTitle }}"
+            },
+            {
+              "column": "AI_Adoption_Level",
+              "fieldValue": "={{ $json.AI_Adoption_Level }}"
+            },
+            {
+              "column": "AI_Adoption_Details",
+              "fieldValue": "={{ $json.AI_Adoption_Details }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dba4b6f4-1881-4e10-91b7-2cc7ac04b49c",
+      "name": "Append New Record",
+      "type": "n8n-nodes-base.microsoftExcel",
+      "typeVersion": 2.2,
+      "position": [
+        3552,
+        320
+      ],
+      "credentials": {
+        "microsoftExcelOAuth2Api": {
+          "id": "Z5UHqE9BfIUtpwzk",
+          "name": "JayConnor@synrgscaling.com - Azure"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "worksheet",
+        "operation": "upsert",
+        "workbook": {
+          "__rl": true,
+          "value": "01SXZDVWXSMT6LLJSWIBBYJTJMSTP7LUEX",
+          "mode": "list",
+          "cachedResultName": "Log Successful Processing(Sheet1) (1) - Copy",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1"
+        },
+        "worksheet": {
+          "__rl": true,
+          "value": "{96A0F21B-F93F-4B67-BE3F-47BE7184FE1E}",
+          "mode": "list",
+          "cachedResultName": "in",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1&activeCell=in!A1"
+        },
+        "dataMode": "autoMap",
+        "columnToMatchOn": "compositeKey",
+        "options": {
+          "updateAll": false
+        }
+      },
+      "id": "update-existing-record",
+      "name": "Update Existing Record",
+      "type": "n8n-nodes-base.microsoftExcel",
+      "typeVersion": 2.2,
+      "position": [
+        3552,
+        80
+      ],
+      "credentials": {
+        "microsoftExcelOAuth2Api": {
+          "id": "Z5UHqE9BfIUtpwzk",
+          "name": "JayConnor@synrgscaling.com - Azure"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error_id",
+              "name": "error_id",
+              "value": "={{ $executionId }}_{{ Date.now() }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ new Date().toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true }) }}",
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "name": "execution_id",
+              "value": "={{ $executionId }}",
+              "type": "string"
+            },
+            {
+              "id": "error_type",
+              "name": "error_type",
+              "value": "Poor Resume Quality",
+              "type": "string"
+            },
+            {
+              "id": "error_message",
+              "name": "error_message",
+              "value": "Resume does not contain sufficient content for analysis",
+              "type": "string"
+            },
+            {
+              "id": "candidate_name",
+              "name": "candidate_name",
+              "value": "={{ $json.candidateName || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "candidate_email",
+              "name": "candidate_email",
+              "value": "={{ $json.candidateEmail || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "job_title",
+              "name": "job_title",
+              "value": "={{ $json.jobTitle || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "={{ $json.source || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "failing_node",
+              "name": "failing_node",
+              "value": "Resume Quality Check",
+              "type": "string"
+            },
+            {
+              "id": "error_details",
+              "name": "error_details",
+              "value": "={{ JSON.stringify({ resumeLength: ($json.candidateResume || '').length }) }}",
+              "type": "string"
+            },
+            {
+              "id": "resume_preview",
+              "name": "resume_preview",
+              "value": "={{ ($json.candidateResume || '').substring(0, 200) }}",
+              "type": "string"
+            },
+            {
+              "id": "resolution_status",
+              "name": "resolution_status",
+              "value": "PENDING",
+              "type": "string"
+            },
+            {
+              "id": "resolution_notes",
+              "name": "resolution_notes",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "244b4b78-61bf-47f9-bb80-a8e99d355ac7",
+      "name": "Set Quality Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2080,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error_id",
+              "name": "error_id",
+              "value": "={{ $executionId }}_{{ Date.now() }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ new Date().toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true }) }}",
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "name": "execution_id",
+              "value": "={{ $executionId }}",
+              "type": "string"
+            },
+            {
+              "id": "error_type",
+              "name": "error_type",
+              "value": "AI Processing Failed",
+              "type": "string"
+            },
+            {
+              "id": "error_message",
+              "name": "error_message",
+              "value": "AI analysis did not complete successfully",
+              "type": "string"
+            },
+            {
+              "id": "candidate_name",
+              "name": "candidate_name",
+              "value": "={{ $('Standardize Resume Data').item.json.candidateName || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "candidate_email",
+              "name": "candidate_email",
+              "value": "={{ $('Standardize Resume Data').item.json.candidateEmail || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "job_title",
+              "name": "job_title",
+              "value": "={{ $('Standardize Resume Data').item.json.jobTitle || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "={{ $('Transform to Workflow Format').item.json.body.source || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "failing_node",
+              "name": "failing_node",
+              "value": "AI Recruiter Analysis",
+              "type": "string"
+            },
+            {
+              "id": "error_details",
+              "name": "error_details",
+              "value": "={{ JSON.stringify($json) }}",
+              "type": "string"
+            },
+            {
+              "id": "resume_preview",
+              "name": "resume_preview",
+              "value": "={{ ($('Standardize Resume Data').item.json.resumeText || '').substring(0, 200) }}",
+              "type": "string"
+            },
+            {
+              "id": "resolution_status",
+              "name": "resolution_status",
+              "value": "PENDING",
+              "type": "string"
+            },
+            {
+              "id": "resolution_notes",
+              "name": "resolution_notes",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3aebc23f-df9a-44da-a432-3feae91004ea",
+      "name": "Set AI Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2800,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error_id",
+              "name": "error_id",
+              "value": "={{ $executionId }}_{{ Date.now() }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ new Date().toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true }) }}",
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "name": "execution_id",
+              "value": "={{ $executionId }}",
+              "type": "string"
+            },
+            {
+              "id": "error_type",
+              "name": "error_type",
+              "value": "Incomplete Candidate Data",
+              "type": "string"
+            },
+            {
+              "id": "error_message",
+              "name": "error_message",
+              "value": "={{ 'Missing critical fields: ' + ($json.completeness && $json.completeness.missingCritical ? $json.completeness.missingCritical.join(', ') : 'unknown') }}",
+              "type": "string"
+            },
+            {
+              "id": "candidate_name",
+              "name": "candidate_name",
+              "value": "={{ $json.full_name || ($json.output && $json.output.full_name) || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "candidate_email",
+              "name": "candidate_email",
+              "value": "={{ $json.email_address || ($json.output && $json.output.email_address) || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "job_title",
+              "name": "job_title",
+              "value": "={{ $json.matched_job_title || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "={{ $json.source || 'UNKNOWN' }}",
+              "type": "string"
+            },
+            {
+              "id": "failing_node",
+              "name": "failing_node",
+              "value": "Validate Data Completeness",
+              "type": "string"
+            },
+            {
+              "id": "error_details",
+              "name": "error_details",
+              "value": "={{ JSON.stringify({ missingFields: $json.completeness && $json.completeness.missingFields, completeness: $json.completeness }) }}",
+              "type": "string"
+            },
+            {
+              "id": "resume_preview",
+              "name": "resume_preview",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "resolution_status",
+              "name": "resolution_status",
+              "value": "PENDING",
+              "type": "string"
+            },
+            {
+              "id": "resolution_notes",
+              "name": "resolution_notes",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-incomplete-error",
+      "name": "Set Incomplete Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3440,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "toRecipients": "jayconnor@synrgscaling.com",
+        "subject": "=Resume Processing Alert - {{ $json.error_type }}",
+        "bodyContent": "=<html>\n<body style=\"font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; line-height: 1.6; max-width: 640px; margin: 0 auto;\">\n  \n  <div style=\"background: #c0392b; color: white; padding: 20px 24px; border-radius: 8px 8px 0 0;\">\n    <h2 style=\"margin: 0; font-size: 20px;\">Resume Processing Alert</h2>\n    <p style=\"margin: 6px 0 0; opacity: 0.9; font-size: 14px;\">{{ $json.error_type }}</p>\n  </div>\n\n  <div style=\"background: #f8f9fa; padding: 24px; border: 1px solid #e9ecef; border-top: none;\">\n\n    <div style=\"background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 14px; margin: 0 0 20px;\">\n      <p style=\"margin: 0; font-weight: 600; color: #856404;\">{{ $json.error_message }}</p>\n    </div>\n\n    <table style=\"width: 100%; border-collapse: collapse; margin: 0 0 20px;\">\n      <tr>\n        <td style=\"padding: 8px 12px; background: #f1f3f5; font-weight: 600; width: 140px; border: 1px solid #dee2e6;\">Candidate</td>\n        <td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">{{ $json.candidate_name }}</td>\n      </tr>\n      <tr>\n        <td style=\"padding: 8px 12px; background: #f1f3f5; font-weight: 600; border: 1px solid #dee2e6;\">Email</td>\n        <td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">{{ $json.candidate_email }}</td>\n      </tr>\n      <tr>\n        <td style=\"padding: 8px 12px; background: #f1f3f5; font-weight: 600; border: 1px solid #dee2e6;\">Position</td>\n        <td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">{{ $json.job_title }}</td>\n      </tr>\n      <tr>\n        <td style=\"padding: 8px 12px; background: #f1f3f5; font-weight: 600; border: 1px solid #dee2e6;\">Source</td>\n        <td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">{{ $json.source }}</td>\n      </tr>\n      <tr>\n        <td style=\"padding: 8px 12px; background: #f1f3f5; font-weight: 600; border: 1px solid #dee2e6;\">Failing Node</td>\n        <td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">{{ $json.failing_node }}</td>\n      </tr>\n    </table>\n\n    <p style=\"margin: 0 0 8px; font-weight: 600; color: #495057;\">Error Details:</p>\n    <pre style=\"background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 12px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;\">{{ $json.error_details || 'No additional details' }}</pre>\n\n    <p style=\"margin: 16px 0 8px; font-weight: 600; color: #495057;\">Resume Preview:</p>\n    <pre style=\"background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 12px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;\">{{ $json.resume_preview || 'No resume text available' }}</pre>\n\n    <p style=\"margin: 16px 0 4px; color: #6c757d; font-size: 12px;\">\n      <strong>Timestamp:</strong> {{ $json.timestamp }}<br/>\n      <strong>Execution:</strong> {{ $json.execution_id }}<br/>\n      <strong>Error ID:</strong> {{ $json.error_id }}<br/>\n      <strong>Status:</strong> {{ $json.resolution_status }}\n    </p>\n\n    <p style=\"margin: 16px 0 0; color: #868e96; font-size: 12px; font-style: italic;\">\n      This candidate has been logged. If more data becomes available, the record will be updated automatically on the next run.\n    </p>\n\n  </div>\n\n  <div style=\"background: #343a40; color: #adb5bd; padding: 12px; border-radius: 0 0 8px 8px; text-align: center; font-size: 11px;\">\n    AutoPayPlus Talent Acquisition - Automated Alert\n  </div>\n\n</body>\n</html>",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "c0f6b9d9-136a-49d6-a1cd-a0037771323c",
+      "name": "Send Error Notification",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        3696,
+        896
+      ],
+      "webhookId": "77a52fde-aa17-4b0e-8d3b-f89e29763371",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "qzrP8JlhlagruCvQ",
+          "name": "AutoPay Plus - Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## PAYCOR RESUME ANALYSIS\n\n**Status:** COMPLETENESS TRACKING ENABLED\n\n### Flow:\n1. Paycor API polls for candidates\n2. Enhanced dedup (INSERT/UPDATE aware)\n3. AI evaluates candidate\n4. Extract contact info\n5. **Validate completeness**\n6. Route: INSERT new / UPDATE incomplete\n7. Log with completeness status\n8. Email all candidates\n9. Loop back\n\n### Completeness Tracking:\n- CRITICAL: name, email, score\n- INCOMPLETE records can be updated\n- Dedup allows reprocessing of INCOMPLETE",
+        "height": 576,
+        "width": 380,
+        "color": 4
+      },
+      "id": "adb3563d-f402-4772-9c37-6ecb3df9b6cb",
+      "name": "Workflow Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1280,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## AI Analysis Engine\n\n**Top 1% Enterprise Reviewer**\n\n**Analysis Dimensions:**\n- Strengths (array)\n- Weaknesses (array)\n- Risk Assessment (Low/Med/High)\n- Opportunity Assessment\n- Overall Score (1-10)\n- Justification\n- Next Steps\n\n**Models:**\n- GPT-4o (low temp for consistency)\n- Structured output parser",
+        "height": 560,
+        "width": 524,
+        "color": 5
+      },
+      "id": "3340f0e9-3f30-4686-a6c7-1863e433292b",
+      "name": "AI Engine",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2064,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Completeness Tracking\n\n**New Architecture:**\n1. Validate ALL fields\n2. Categorize: CRITICAL/OPTIONAL\n3. Route: INSERT vs UPDATE\n4. Log with status column\n5. Notify on incomplete\n\n**Dedup Matrix:**\n- NEW → INSERT\n- COMPLETE → SKIP\n- INCOMPLETE → UPDATE if now complete\n- INCOMPLETE → SKIP if still incomplete",
+        "height": 560,
+        "width": 340,
+        "color": 3
+      },
+      "id": "4159f0f2-5141-4ffe-a26a-03b8bbff4a4d",
+      "name": "Completeness Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3184,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format date for executive readability: YYYY-MM-DD HH:MM AM/PM\nfunction formatDate(isoString) {\n  if (!isoString) return 'N/A';\n  const date = new Date(isoString);\n  const year = date.getFullYear();\n  const month = String(date.getMonth() + 1).padStart(2, '0');\n  const day = String(date.getDate()).padStart(2, '0');\n  let hours = date.getHours();\n  const minutes = String(date.getMinutes()).padStart(2, '0');\n  const ampm = hours >= 12 ? 'PM' : 'AM';\n  hours = hours % 12;\n  hours = hours ? hours : 12; // 0 should be 12\n  return `${year}-${month}-${day} ${hours}:${minutes} ${ampm}`;\n}\n\n// Prepare Email Data\n// FIXED: Data comes from Validate Data Completeness which outputs fields at TOP LEVEL\n// NOTE: Merge After Logging may output 2 items - use the FIRST one (from Validate Data Completeness)\n\nconst items = $input.all();\n\n// Find the item with proper candidate data (has full_name field)\nconst candidateItem = items.find(item => item.json.full_name && item.json.full_name !== '');\n\nif (!candidateItem) {\n  // Fallback to first item if no candidate data found\n  console.log('Warning: No candidate item found with full_name');\n  return [{ json: { error: true, message: 'No valid candidate data found' } }];\n}\n\nconst data = candidateItem.json;\n\n// PRIMARY: Use top-level fields from Validate Data Completeness\nconst full_name = data.full_name || 'Unknown';\nconst email_address = data.email_address || '';\nconst phone_number = data.phone_number || '';\nconst current_title = data.current_title || '';\nconst years_experience = data.years_experience || '';\nconst key_skills = data.key_skills || '';\n\n// AI Analysis - also at top level from Validate Data Completeness\nconst overall_score = data.overall_score || 'N/A';\nconst matched_job_title = data.matched_job_title || '';\nconst candidate_strengths = data.candidate_strengths || [];\nconst candidate_weaknesses = data.candidate_weaknesses || [];\nconst risk_level = data.risk_level || 'Unknown';\nconst risk_explanation = data.risk_explanation || '';\nconst opportunity_level = data.opportunity_level || 'Unknown';\nconst opportunity_explanation = data.opportunity_explanation || '';\nconst ai_adoption_level = data.ai_adoption_level || 'Unknown';\nconst ai_adoption_explanation = data.ai_adoption_explanation || 'Not evaluated';\nconst score_justification = data.score_justification || '';\nconst next_steps = data.next_steps || '';\nconst recruiter_note = data.recruiter_note || '';\nconst candidate_questions = data.candidate_questions || [];\n\n// Paycor Analytics - at top level\nconst source = data.source || '';\nconst applied_date = data.applied_date || '';\nconst pipeline_stage = data.pipeline_stage ?? 0;\nconst candidate_status = data.candidate_status ?? 0;\nconst candidate_city = data.candidate_city || '';\nconst candidate_state = data.candidate_state || '';\n\n// Metadata - at top level\nconst candidateId = data.candidateId || '';\nconst jobId = data.jobId || '';\n\n// Nested data for job details (from transformData passthrough)\nconst transformData = data.transformData || {};\nconst body = transformData.body || {};\nconst standardizedData = data.standardizedData || {};\n\n// Job details from standardizedData\nconst jobTitle = standardizedData.jobTitle || matched_job_title || '';\nconst jobDepartment = standardizedData.jobDepartment || '';\nconst jobLocation = standardizedData.jobLocation || '';\nconst jobPayRange = standardizedData.jobPayRange || '';\nconst jobRemoteStatus = standardizedData.jobRemoteStatus || '';\n\n// Completeness metadata\nconst completeness = data.completeness || {};\n\n// Operation and timestamps\nconst operation = data._operation || 'INSERT';\nconst now = new Date().toISOString();\n\nreturn [{\n  json: {\n    // Candidate Info (PRIMARY - from Paycor via Validate Data Completeness)\n    full_name: full_name,\n    email_address: email_address,\n    phone_number: phone_number,\n    current_title: current_title,\n    years_experience: years_experience,\n    key_skills: key_skills,\n    \n    // AI Analysis\n    matched_job_title: matched_job_title || jobTitle || 'Position',\n    overall_score: overall_score,\n    candidate_strengths: candidate_strengths,\n    candidate_weaknesses: candidate_weaknesses,\n    risk_level: risk_level,\n    risk_explanation: risk_explanation,\n    opportunity_level: opportunity_level,\n    opportunity_explanation: opportunity_explanation,\n    ai_adoption_level: ai_adoption_level,\n    ai_adoption_explanation: ai_adoption_explanation,\n    score_justification: score_justification,\n    next_steps: next_steps,\n    recruiter_note: recruiter_note,\n    candidate_questions: candidate_questions,\n    \n    // Job Details\n    job_title: jobTitle,\n    job_department: jobDepartment,\n    job_location: jobLocation,\n    job_pay_range: jobPayRange,\n    job_remote_status: jobRemoteStatus,\n    \n    // Paycor Analytics\n    source: source,\n    applied_date: applied_date,\n    pipeline_stage: pipeline_stage,\n    candidate_status: candidate_status,\n    candidate_city: candidate_city,\n    candidate_state: candidate_state,\n    \n    // Metadata\n    candidateId: candidateId,\n    jobId: jobId,\n    candidate_entered_database: formatDate(applied_date) || formatDate(now),\n    \n    // Completeness\n    completeness_status: completeness.status || 'UNKNOWN',\n    missing_fields: completeness.missingFields || '',\n    \n    // Timestamps\n    processed_timestamp: formatDate(now),\n    \n    // Operation\n    _operation: operation\n  }\n}];"
+      },
+      "id": "prepare-email-data",
+      "name": "Prepare Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3936,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "toRecipients": "jcreationsrai@gmail.com",
+        "subject": "=Application Status Update for {{ $json.full_name }}",
+        "bodyContent": "=<html>\n<body style=\"font-family: 'Segoe UI', Arial, sans-serif; color:#2c3e50; line-height:1.6; max-width:600px; margin:0 auto; padding:20px;\">\n  \n  <div style=\"background:#1a2332; color:white; padding:28px 24px; border-radius:8px 8px 0 0; text-align:center;\">\n    <h1 style=\"margin:0; font-size:22px; font-weight:600; letter-spacing:0.5px;\">Application Status Update</h1>\n    <p style=\"margin:8px 0 0; opacity:0.85; font-size:13px; text-transform:uppercase; letter-spacing:1px;\">AutoPayPlus Talent Acquisition</p>\n  </div>\n\n  <div style=\"background:#ffffff; padding:28px 24px; border:1px solid #e2e8f0; border-top:none;\">\n    \n    <p style=\"margin:0 0 16px; font-size:15px;\">Dear {{ $json.full_name || 'Candidate' }},</p>\n    \n    <p style=\"margin:0 0 16px; font-size:15px;\">Thank you for your interest in the <strong>{{ $json.matched_job_title }}</strong> position{{ $json.job_department ? ' in our ' + $json.job_department + ' department' : '' }} at AutoPayPlus. We have reviewed your application and wanted to provide you with an update.</p>\n\n    {{ $json.current_title && $json.current_title !== 'NOT FOUND' ? '<div style=\"background:#f0f4f8; border-radius:6px; padding:14px 16px; margin:0 0 20px;\"><p style=\"margin:0; font-size:14px; color:#4a5568;\"><strong>Your Profile:</strong> ' + ($json.current_title || '') + ($json.years_experience && $json.years_experience !== 'INSUFFICIENT DATA' ? ' · ' + $json.years_experience + ' experience' : '') + ($json.key_skills && $json.key_skills !== 'NOT FOUND' ? '<br/><strong>Key Skills:</strong> ' + $json.key_skills : '') + '</p></div>' : '' }}\n\n    <div style=\"background:#d4edda; border:1px solid #28a745; border-radius:6px; padding:16px; margin:0 0 20px;\">\n      <p style=\"margin:0; font-size:16px; font-weight:600; color:#155724;\">\n        Current Stage: <span style=\"color:#28a745;\">UNDER REVIEW</span>\n      </p>\n      <p style=\"margin:6px 0 0; color:#155724; font-size:13px;\">\n        Estimated Timeline: Approximately 2 weeks\n      </p>\n    </div>\n\n    <h3 style=\"color:#1a2332; margin:24px 0 12px; border-bottom:2px solid #1a2332; padding-bottom:8px; font-size:15px; text-transform:uppercase; letter-spacing:0.5px;\">\n      What Caught Our Attention\n    </h3>\n\n    <div style=\"background:#f8fafc; border-left:4px solid #1a2332; padding:16px; margin:0 0 20px; color:#4a5568;\">\n      <p style=\"margin:0; font-size:14px; font-style:italic;\">\n        \"{{ $json.recruiter_note || 'Your application has been received and is under review. We will be in touch if there is a match.' }}\"\n      </p>\n    </div>\n\n    <div style=\"background:#fff8e1; border:1px solid #f9a825; border-radius:6px; padding:18px; margin:20px 0;\">\n      <h4 style=\"margin:0 0 10px; color:#7b6b00; font-size:14px; text-transform:uppercase; letter-spacing:0.5px;\">A Few Quick Questions</h4>\n      <p style=\"margin:0 0 12px; color:#8d7600; font-size:13px;\">To help us better evaluate your fit for the {{ $json.matched_job_title }} role, please reply with brief answers to the following:</p>\n      <ol style=\"margin:0; padding-left:20px; color:#7b6b00; font-size:14px;\">\n        {{ $json.candidate_questions && $json.candidate_questions.length > 0 ? $json.candidate_questions.map(q => '<li style=\"margin-bottom:10px;\">' + q + '</li>').join('') : '<li style=\"margin-bottom:10px;\">What is your current availability for a potential start date?</li><li style=\"margin-bottom:10px;\">Can you describe a recent project or achievement that you feel is most relevant to this role?</li><li style=\"margin-bottom:10px;\">What are your salary expectations for this position?</li><li style=\"margin-bottom:10px;\">Is there anything else you would like us to know that was not covered in your resume?</li>' }}\n      </ol>\n    </div>\n\n    <h3 style=\"color:#1a2332; margin:24px 0 12px; border-bottom:2px solid #1a2332; padding-bottom:8px; font-size:15px; text-transform:uppercase; letter-spacing:0.5px;\">\n      What to Expect Next\n    </h3>\n    \n    <p style=\"margin:0 0 12px; font-size:14px;\">Our hiring team will review your responses and may reach out to schedule a phone screen or interview. Please ensure your contact information is up to date and check your email — including your spam folder — for any communications from our team.</p>\n\n    <div style=\"background:#f0f4f8; border-radius:6px; padding:14px 16px; margin:20px 0;\">\n      <p style=\"margin:0; font-size:12px; color:#718096;\">\n        <strong>Application Received:</strong> {{ $json.candidate_entered_database || 'Processing' }}<br/>\n        <strong>Review Completed:</strong> {{ $json.processed_timestamp || 'Processing' }}\n      </p>\n    </div>\n\n    <p style=\"margin:16px 0 0; font-size:14px;\">We appreciate your patience and interest in joining the AutoPayPlus team.</p>\n    \n    <p style=\"margin:16px 0 0; font-size:14px;\">\n      Best regards,<br/>\n      <strong>AutoPayPlus Talent Acquisition Team</strong>\n    </p>\n\n  </div>\n\n  <div style=\"background:#1a2332; color:#a0aec0; padding:14px; border-radius:0 0 8px 8px; text-align:center; font-size:11px;\">\n    <p style=\"margin:0;\">This is an automated message from AutoPayPlus.</p>\n    <p style=\"margin:4px 0 0;\">Please reply directly to this email to answer the questions above.</p>\n  </div>\n\n</body>\n</html>",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "9b3adace-689d-450d-9167-a25f1de2ad12",
+      "name": "Send Candidate Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        544
+      ],
+      "webhookId": "e9d42f57-8d63-4c64-9591-8bafc1a7846b",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "qzrP8JlhlagruCvQ",
+          "name": "AutoPay Plus - Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toRecipients": "jayconnor@synrgscaling.com",
+        "subject": "=Candidate Evaluation - {{ $json.matched_job_title }} {{ $json.completeness_status === 'INCOMPLETE' ? '(INCOMPLETE)' : '' }}",
+        "bodyContent": "=<html>\n<body style=\"margin:0; padding:0; background:#f0f2f5; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;\">\n  <div style=\"max-width:640px; margin:0 auto; background:#ffffff;\">\n\n    <!-- Header -->\n    <div style=\"background:linear-gradient(135deg, #1a2332 0%, #2c3e56 100%); padding:32px 40px; text-align:left;\">\n      <p style=\"margin:0 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:2px; color:#8b9cb6;\">Talent Intelligence Report</p>\n      <h1 style=\"margin:0; font-size:22px; font-weight:600; color:#ffffff; letter-spacing:-0.3px;\">{{ $json.matched_job_title }}</h1>\n      {{ $json.completeness_status === 'INCOMPLETE' ? '<div style=\"margin-top:12px; display:inline-block; background:rgba(255,193,7,0.15); border:1px solid rgba(255,193,7,0.4); border-radius:4px; padding:6px 14px;\"><span style=\"color:#ffd54f; font-size:12px; font-weight:500;\">INCOMPLETE DATA &mdash; Missing: ' + $json.missing_fields + '</span></div>' : '' }}\n    </div>\n\n    <!-- Executive Summary Metrics -->\n    <div style=\"padding:28px 40px 20px; background:#f8f9fb; border-bottom:1px solid #e8ecf1;\">\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n        <tr>\n          <td width=\"33%\" style=\"text-align:center; padding:0 8px;\">\n            <div style=\"background:#ffffff; border-radius:8px; padding:18px 12px; border:1px solid #e2e6ec;\">\n              <p style=\"margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5;\">Overall Score</p>\n              <p style=\"margin:6px 0 0; font-size:36px; font-weight:700; color:#1a2332; line-height:1;\">{{ $json.overall_score }}<span style=\"font-size:16px; color:#8b95a5; font-weight:400;\">/10</span></p>\n            </div>\n          </td>\n          <td width=\"33%\" style=\"text-align:center; padding:0 8px;\">\n            <div style=\"background:#ffffff; border-radius:8px; padding:18px 12px; border:1px solid #e2e6ec;\">\n              <p style=\"margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5;\">Risk Level</p>\n              <p style=\"margin:6px 0 0; font-size:18px; font-weight:600; color:#c0392b; line-height:1.3;\">{{ $json.risk_level }}</p>\n            </div>\n          </td>\n          <td width=\"33%\" style=\"text-align:center; padding:0 8px;\">\n            <div style=\"background:#ffffff; border-radius:8px; padding:18px 12px; border:1px solid #e2e6ec;\">\n              <p style=\"margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5;\">Opportunity</p>\n              <p style=\"margin:6px 0 0; font-size:18px; font-weight:600; color:#27ae60; line-height:1.3;\">{{ $json.opportunity_level }}</p>\n            </div>\n          </td>\n        </tr>\n      </table>\n    </div>\n\n    <!-- Candidate Profile -->\n    <div style=\"padding:28px 40px;\">\n      <h2 style=\"margin:0 0 16px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5; font-weight:600; border-bottom:2px solid #1a2332; padding-bottom:8px;\">Candidate Profile</h2>\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; width:120px; font-size:13px; color:#8b95a5;\">Name</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332; font-weight:500;\">{{ $json.full_name }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Email</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.email_address }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Phone</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.phone_number || 'Not provided' }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Current Title</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.current_title || 'Not specified' }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Experience</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.years_experience || 'Not specified' }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Key Skills</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.key_skills || 'Not provided' }}</td>\n        </tr>\n      </table>\n    </div>\n\n    <!-- Position Details -->\n    <div style=\"padding:0 40px 28px;\">\n      <h2 style=\"margin:0 0 16px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5; font-weight:600; border-bottom:2px solid #1a2332; padding-bottom:8px;\">Position Details</h2>\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; width:120px; font-size:13px; color:#8b95a5;\">Position</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332; font-weight:500;\">{{ $json.matched_job_title }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Department</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.job_department }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Location</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.job_location }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Pay Range</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.job_pay_range }}</td>\n        </tr>\n        <tr>\n          <td style=\"padding:8px 0; vertical-align:top; font-size:13px; color:#8b95a5;\">Remote Status</td>\n          <td style=\"padding:8px 0; font-size:14px; color:#1a2332;\">{{ $json.job_remote_status }}</td>\n        </tr>\n      </table>\n    </div>\n\n    <!-- Strengths & Concerns - Side by Side -->\n    <div style=\"padding:0 40px 28px;\">\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n        <tr>\n          <td width=\"50%\" style=\"vertical-align:top; padding-right:12px;\">\n            <h2 style=\"margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#27ae60; font-weight:600;\">Strengths</h2>\n            <div style=\"background:#f0faf3; border-radius:6px; padding:14px 16px; border-left:3px solid #27ae60;\">\n              <ul style=\"margin:0; padding:0 0 0 16px; font-size:13px; color:#2d3748; line-height:1.8;\">\n                {{ $json.candidate_strengths.length > 0 ? '<li>' + $json.candidate_strengths.slice(0,3).join('</li><li>') + '</li>' : '<li style=\"color:#8b95a5;\">None identified</li>' }}\n              </ul>\n            </div>\n          </td>\n          <td width=\"50%\" style=\"vertical-align:top; padding-left:12px;\">\n            <h2 style=\"margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#c0392b; font-weight:600;\">Areas of Concern</h2>\n            <div style=\"background:#fdf2f2; border-radius:6px; padding:14px 16px; border-left:3px solid #c0392b;\">\n              <ul style=\"margin:0; padding:0 0 0 16px; font-size:13px; color:#2d3748; line-height:1.8;\">\n                {{ $json.candidate_weaknesses.length > 0 ? '<li>' + $json.candidate_weaknesses.slice(0,2).join('</li><li>') + '</li>' : '<li style=\"color:#8b95a5;\">None identified</li>' }}\n              </ul>\n            </div>\n          </td>\n        </tr>\n      </table>\n    </div>\n\n    <!-- Risk Assessment -->\n    <div style=\"padding:0 40px 20px;\">\n      <div style=\"background:#fdf2f2; border-radius:8px; padding:20px 24px; border-left:4px solid #c0392b;\">\n        <h3 style=\"margin:0 0 8px; font-size:14px; color:#c0392b; font-weight:600;\">Risk Assessment</h3>\n        <p style=\"margin:0 0 4px; font-size:13px; color:#4a5568;\"><strong>Level:</strong> {{ $json.risk_level || 'N/A' }}</p>\n        <p style=\"margin:0; font-size:13px; color:#4a5568; line-height:1.6;\">{{ $json.risk_explanation || 'No risk analysis provided' }}</p>\n      </div>\n    </div>\n\n    <!-- Opportunity Assessment -->\n    <div style=\"padding:0 40px 20px;\">\n      <div style=\"background:#f0faf3; border-radius:8px; padding:20px 24px; border-left:4px solid #27ae60;\">\n        <h3 style=\"margin:0 0 8px; font-size:14px; color:#27ae60; font-weight:600;\">Opportunity Assessment</h3>\n        <p style=\"margin:0 0 4px; font-size:13px; color:#4a5568;\"><strong>Level:</strong> {{ $json.opportunity_level || 'N/A' }}</p>\n        <p style=\"margin:0; font-size:13px; color:#4a5568; line-height:1.6;\">{{ $json.opportunity_explanation || 'No opportunity analysis provided' }}</p>\n      </div>\n    </div>\n\n    <!-- Score Justification -->\n    <div style=\"padding:0 40px 20px;\">\n      <h2 style=\"margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5; font-weight:600; border-bottom:2px solid #1a2332; padding-bottom:8px;\">Score Justification</h2>\n      <p style=\"margin:0; font-size:14px; color:#2d3748; line-height:1.7;\">{{ $json.score_justification || 'No justification provided' }}</p>\n    </div>\n\n    <!-- Recommended Next Steps -->\n    <div style=\"padding:0 40px 20px;\">\n      <h2 style=\"margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; color:#8b95a5; font-weight:600; border-bottom:2px solid #1a2332; padding-bottom:8px;\">Recommended Next Steps</h2>\n      <p style=\"margin:0; font-size:14px; color:#2d3748; line-height:1.7;\">{{ $json.next_steps || 'Review when complete data available' }}</p>\n    </div>\n\n    <!-- AI Adoption Assessment -->\n    <div style=\"padding:0 40px 20px;\">\n      <div style=\"background:#eef2ff; border-radius:8px; padding:20px 24px; border-left:4px solid #4f46e5;\">\n        <h3 style=\"margin:0 0 8px; font-size:14px; color:#4f46e5; font-weight:600;\">AI Adoption Assessment</h3>\n        <p style=\"margin:0 0 4px; font-size:13px; color:#4a5568;\"><strong>Level:</strong> {{ $json.ai_adoption_level }}</p>\n        <p style=\"margin:0; font-size:13px; color:#4a5568; line-height:1.6;\">{{ $json.ai_adoption_explanation }}</p>\n      </div>\n    </div>\n\n    <!-- Timeline -->\n    <div style=\"padding:0 40px 28px;\">\n      <div style=\"background:#f8f9fb; border-radius:8px; padding:16px 24px;\">\n        <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n          <tr>\n            <td style=\"padding:4px 0; font-size:12px; color:#8b95a5;\">Entered Database</td>\n            <td style=\"padding:4px 0; font-size:12px; color:#4a5568; text-align:right;\">{{ $json.candidate_entered_database }}</td>\n          </tr>\n          <tr>\n            <td style=\"padding:4px 0; font-size:12px; color:#8b95a5;\">Processed by Workflow</td>\n            <td style=\"padding:4px 0; font-size:12px; color:#4a5568; text-align:right;\">{{ $json.processed_timestamp }}</td>\n          </tr>\n        </table>\n      </div>\n    </div>\n\n    <!-- Footer -->\n    <div style=\"background:#1a2332; padding:20px 40px; text-align:center;\">\n      <p style=\"margin:0 0 4px; font-size:11px; color:#8b9cb6; letter-spacing:0.5px;\">Candidate ID: {{ $json.candidateId }} | Job ID: {{ $json.jobId }}</p>\n      <p style=\"margin:0; font-size:10px; color:#5a6a7e;\">AutoPayPlus Talent Intelligence &mdash; Automated Evaluation Report</p>\n    </div>\n\n  </div>\n</body>\n</html>",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "81df2009-80fc-40db-9bbd-1ccbf98a83ff",
+      "name": "Send Employer Evaluation Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        4720,
+        1104
+      ],
+      "webhookId": "1fdae5e6-0c2a-486c-a3a8-97eaa96b2040",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "qzrP8JlhlagruCvQ",
+          "name": "AutoPay Plus - Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        2816,
+        528
+      ],
+      "id": "4629066f-118e-4e12-83e6-f040e534f84c",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "hzAkoJLn82DbBzjF",
+          "name": "OpenAi account 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        2192,
+        672
+      ],
+      "id": "e47353e8-3259-428a-b528-f413c6cccd1d",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "hzAkoJLn82DbBzjF",
+          "name": "OpenAi account 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-15min",
+      "name": "Schedule: Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -864,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Extract ATS Account ID').item.json.baseUrl }}/legalEntities/{{ $('Extract ATS Account ID').item.json.legalEntityId }}/ats/{{ $('Extract ATS Account ID').item.json.atsAccountId }}/jobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "active"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Ocp-Apim-Subscription-Key",
+              "value": "={{ $('Extract ATS Account ID').item.json.subscriptionKey }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Extract ATS Account ID').item.json.accessToken }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-active-jobs-http",
+      "name": "Get Active Jobs from Paycor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        912,
+        -64
+      ],
+      "retryOnFail": false,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "jobs-check",
+              "leftValue": "={{ $json.records && $json.records.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-jobs-exist",
+      "name": "Jobs Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Extract ATS Account ID').item.json.baseUrl }}/legalEntities/{{ $('Extract ATS Account ID').item.json.legalEntityId }}/ats/{{ $('Extract ATS Account ID').item.json.atsAccountId }}/jobs/{{ $json.id }}/candidates",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "appliedDateFrom",
+              "value": "={{ $now.minus({hours: 24}).toISO() }}"
+            },
+            {
+              "name": "appliedDateTo",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Ocp-Apim-Subscription-Key",
+              "value": "={{ $('Extract ATS Account ID').item.json.subscriptionKey }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Extract ATS Account ID').item.json.accessToken }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "get-recent-candidates-http",
+      "name": "Get Recent Candidates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        -64
+      ],
+      "retryOnFail": false,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "candidates-check",
+              "leftValue": "={{ $json.records && $json.records.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-candidates-exist",
+      "name": "New Candidates Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "records",
+        "options": {}
+      },
+      "id": "split-candidates-array",
+      "name": "Split Candidates",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3,
+      "position": [
+        -576,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Extract ATS Account ID').item.json.baseUrl }}/legalEntities/{{ $('Extract ATS Account ID').item.json.legalEntityId }}/ats/{{ $('Extract ATS Account ID').item.json.atsAccountId }}/jobs/{{ $json.jobId }}/candidates/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Ocp-Apim-Subscription-Key",
+              "value": "={{ $('Extract ATS Account ID').item.json.subscriptionKey }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Extract ATS Account ID').item.json.accessToken }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "get-candidate-details-http",
+      "name": "Get Candidate Full Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        544
+      ],
+      "retryOnFail": false,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform Paycor candidate data to workflow format\nconst items = $input.all();\nconst results = [];\n\n// Get operation metadata from Filter node\nfor (const item of items) {\n  const candidate = item.json;\n  const binaryData = item.binary;\n  const candidateName = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Unknown';\n\n  const allJobs = $('Split Jobs Array').all();\n  const currentJobId = candidate.jobId;\n  const jobData = allJobs.find(j => j.json.id === currentJobId)?.json || {};\n\n  const resumeText = candidate.resumeText || candidate.resume || candidate.resumeContent || candidate.documentText || '';\n\n  const fullJobDescription = [\n    jobData?.description || '',\n    jobData?.responsibilities || '',\n    jobData?.requirements || '',\n    jobData?.qualifications || ''\n  ].filter(Boolean).join('\\n\\n') || 'No detailed job description available from Paycor.';\n\n  // Preserve operation metadata from dedup\n  const operation = candidate._operation || 'INSERT';\n  const compositeKey = candidate._compositeKey || `${candidate.id || candidate.candidateId}_${currentJobId}`;\n\n  results.push({\n    json: {\n      body: {\n        eventType: 'candidate.created',\n        candidateId: candidate.id || candidate.candidateId,\n        candidateName: candidateName,\n        email: candidate.email || candidate.emailAddress || '',\n        phone: candidate.mobilePhone || candidate.phone || candidate.phoneNumber || candidate.altPhone || '',\n        jobId: currentJobId || 'UNKNOWN',\n        appliedDate: candidate.appliedDate || candidate.applicationDate || new Date().toISOString(),\n        candidateResume: resumeText,\n        jobTitle: jobData?.title || 'Unknown Position',\n        jobDescription: fullJobDescription,\n        jobDepartment: jobData?.atsDepartment?.title || jobData?.department || 'Unknown Department',\n        jobLocation: jobData?.atsLocation ? `${jobData.atsLocation.city || ''}, ${jobData.atsLocation.state || ''}` : (jobData?.location || 'Remote/Unknown'),\n        jobPayRange: jobData?.payRange ? `${jobData.payRange.minimum || 'N/A'} - ${jobData.payRange.maximum || 'N/A'} ${jobData.payRange.payPeriod || ''}` : 'Not specified',\n        jobRemoteStatus: jobData?.remoteStatus || 'Not specified',\n\n        // NEW: Contact info (primary source - replaces AI extraction)\n        paycor_full_name: `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Unknown',\n        paycor_email: candidate.email || '',\n        paycor_phone: candidate.mobilePhone || candidate.phone || '',\n\n        // NEW: Recruiting analytics\n        source: candidate.source || 'Unknown',\n        applied_date: candidate.createdDate || new Date().toISOString(),\n        pipeline_stage: candidate.stage ?? 0,\n        candidate_status: candidate.status ?? 3,\n\n        // NEW: Location data\n        candidate_city: candidate.city || '',\n        candidate_state: candidate.state || ''\n      },\n      metadata: {\n        source: 'Paycor API Polling',\n        originalFileName: candidate.resumeFileName || 'N/A',\n        apiPollTime: new Date().toISOString(),\n        totalCandidatesInBatch: items.length,\n        candidateIndex: results.length + 1\n      },\n      _operation: operation,\n      _compositeKey: compositeKey\n    },\n    binary: binaryData ? { data: binaryData.data } : undefined\n  });\n}\n\nconsole.log(`Transformed ${results.length} candidates with job descriptions`);\nreturn results;"
+      },
+      "id": "transform-paycor-format",
+      "name": "Transform to Workflow Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "subscription-key",
+              "name": "subscriptionKey",
+              "type": "string",
+              "value": "91381874e8e943709dc65e74b5b06481"
+            },
+            {
+              "id": "legal-entity-id",
+              "name": "legalEntityId",
+              "type": "string",
+              "value": "152328"
+            },
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "type": "string",
+              "value": "https://apis.paycor.com/v1"
+            },
+            {
+              "id": "client-id",
+              "name": "clientId",
+              "type": "string",
+              "value": "778881fa59b298c5afcd"
+            },
+            {
+              "id": "client-secret",
+              "name": "clientSecret",
+              "type": "string",
+              "value": "NGznN5BcsZ8k7BOEZb85LugTynW1G8QIPGCPTLPRoY"
+            },
+            {
+              "id": "refresh-token",
+              "name": "refreshToken",
+              "type": "string",
+              "value": "89323f8ea62e07ab8b5bf89bacf21316047336a6e831fa7550443345be1e053d"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "workflow-config",
+      "name": "Workflow Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -576,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract ATS Account ID from API response\nconst input = $input.first().json;\nconst response = input.atsApiResponse;\n\nconst config = {\n  subscriptionKey: input.subscriptionKey,\n  legalEntityId: input.legalEntityId,\n  baseUrl: input.baseUrl,\n  accessToken: input.accessToken,\n  clientId: input.clientId,\n  clientSecret: input.clientSecret,\n  refreshToken: input.refreshToken\n};\n\nlet atsAccountId = null;\n\nif (response.records && response.records.length > 0) {\n  atsAccountId = response.records[0].id;\n} else if (response.accounts && response.accounts.length > 0) {\n  atsAccountId = response.accounts[0].accountId || response.accounts[0].id;\n} else if (response.data && response.data.length > 0) {\n  atsAccountId = response.data[0].accountId || response.data[0].id;\n} else if (response.accountId) {\n  atsAccountId = response.accountId;\n} else if (response.id) {\n  atsAccountId = response.id;\n} else if (Array.isArray(response) && response.length > 0) {\n  atsAccountId = response[0].accountId || response[0].id;\n}\n\nif (!atsAccountId) {\n  console.log('ATS Response:', JSON.stringify(response));\n  throw new Error('Could not extract ATS Account ID. Check API response.');\n}\n\nreturn [{\n  json: {\n    ...config,\n    atsAccountId: String(atsAccountId),\n    atsAccountTitle: response.records?.[0]?.title || 'Unknown',\n    atsApiResponse: response\n  }\n}];"
+      },
+      "id": "extract-ats-id",
+      "name": "Extract ATS Account ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://apis.paycor.com/sts/v1/common/token?subscription-key={{ $json.subscriptionKey }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.tokenRequestBody }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "get-access-token",
+      "name": "Get Access Token (Secure)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -96,
+        -64
+      ],
+      "retryOnFail": false,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract access token from response\nconst response = $input.first().json;\nconst config = $('Workflow Config').first().json;\n\nif (response.access_token) {\n  return [{\n    json: {\n      ...config,\n      accessToken: response.access_token,\n      tokenExpiry: response.expires_in,\n      newRefreshToken: response.refresh_token || 'Same as before'\n    }\n  }];\n} else {\n  return [{\n    json: {\n      ...config,\n      accessToken: null,\n      error: response.error || 'Failed to get access token',\n      errorDescription: response.error_description || JSON.stringify(response)\n    }\n  }];\n}"
+      },
+      "id": "extract-token",
+      "name": "Extract Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build token request body from Workflow Config\nconst config = $('Workflow Config').first().json;\n\nconst tokenRequestBody = `grant_type=refresh_token&refresh_token=${encodeURIComponent(config.refreshToken)}&client_id=${encodeURIComponent(config.clientId)}&client_secret=${encodeURIComponent(config.clientSecret)}`;\n\nreturn [{\n  json: {\n    ...config,\n    tokenRequestBody: tokenRequestBody\n  }\n}];"
+      },
+      "id": "build-secure-token-request",
+      "name": "Build Secure Token Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -352,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get ATS Account ID using n8n's built-in HTTP helper\nconst config = $input.first().json;\n\nconst url = `${config.baseUrl}/legalEntities/${config.legalEntityId}/ats/accounts`;\n\nconsole.log('Calling ATS endpoint:', url);\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: url,\n    headers: {\n      'Accept': 'application/json',\n      'Ocp-Apim-Subscription-Key': config.subscriptionKey,\n      'Authorization': `Bearer ${config.accessToken}`\n    },\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true\n  });\n  \n  const statusCode = response.statusCode;\n  const responseBody = response.body;\n  \n  console.log('Response status:', statusCode);\n  console.log('Response body:', JSON.stringify(responseBody));\n  \n  return [{\n    json: {\n      ...config,\n      atsApiStatus: statusCode,\n      atsApiResponse: responseBody,\n      atsApiSuccess: statusCode >= 200 && statusCode < 300\n    }\n  }];\n} catch (error) {\n  console.log('HTTP request error:', error.message);\n  return [{\n    json: {\n      ...config,\n      atsApiStatus: 0,\n      atsApiResponse: { error: error.message },\n      atsApiSuccess: false\n    }\n  }];\n}"
+      },
+      "id": "get-ats-via-code",
+      "name": "Get ATS Account ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "records",
+        "options": {}
+      },
+      "id": "split-jobs-array",
+      "name": "Split Jobs Array",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3,
+      "position": [
+        1296,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "worksheet",
+        "operation": "readRows",
+        "workbook": {
+          "__rl": true,
+          "value": "01SXZDVWXSMT6LLJSWIBBYJTJMSTP7LUEX",
+          "mode": "list",
+          "cachedResultName": "Log Successful Processing(Sheet1) (1) - Copy",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1"
+        },
+        "worksheet": {
+          "__rl": true,
+          "value": "{96A0F21B-F93F-4B67-BE3F-47BE7184FE1E}",
+          "mode": "list",
+          "cachedResultName": "in",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1&activeCell=in!A1"
+        },
+        "options": {
+          "rawData": false
+        }
+      },
+      "id": "load-processed-ids",
+      "name": "Load All Processed IDs",
+      "type": "n8n-nodes-base.microsoftExcel",
+      "typeVersion": 2.2,
+      "position": [
+        -352,
+        208
+      ],
+      "credentials": {
+        "microsoftExcelOAuth2Api": {
+          "id": "FRl5idJpfP5Vo7TA",
+          "name": "Microsoft Excel account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ENHANCED DEDUPLICATION with completeness awareness and error handling\ntry {\n  // Access all merged inputs (processed IDs + candidates)\n  const allInputs = $input.all();\n  \n  // Handle empty input gracefully\n  if (!allInputs || allInputs.length === 0) {\n    console.log('WARNING: No inputs received');\n    return [];\n  }\n\n  // Separate processed rows from candidates based on data structure\n  const processedRows = [];\n  const candidates = [];\n\n  for (const item of allInputs) {\n    // Processed rows have compositeKey, candidates have id/jobId\n    if (item.json && item.json.compositeKey) {\n      processedRows.push(item);\n    } else if (item.json && item.json.id && item.json.jobId) {\n      candidates.push(item);\n    }\n  }\n\n  // Build lookup map with completeness status\n  const processedMap = new Map();\n  for (const row of processedRows) {\n    if (row.json.compositeKey) {\n      processedMap.set(row.json.compositeKey, {\n        status: row.json.completeness_status || 'COMPLETE',\n        rowData: row.json\n      });\n    }\n  }\n\n  // Log processing status\n  if (processedMap.size === 0) {\n    console.log('⚠️  WARNING: No processed IDs loaded from Excel (Excel node may have failed)');\n    console.log('   → Treating all candidates as NEW to prevent blocking workflow');\n  } else {\n    console.log(`✓ Loaded ${processedMap.size} processed candidates into memory`);\n  }\n  console.log(`Processing ${candidates.length} new candidates`);\n\n  const results = [];\n  let skipComplete = 0;\n  let skipIncomplete = 0;\n  let newCandidates = 0;\n  let updateCandidates = 0;\n\n  for (const candidate of candidates) {\n    const candidateId = candidate.json.id;\n    const jobId = candidate.json.jobId;\n    const compositeKey = `${candidateId}_${jobId}`;\n\n    const existing = processedMap.get(compositeKey);\n\n    if (!existing) {\n      // New candidate - process\n      newCandidates++;\n      results.push({\n        ...candidate,\n        json: {\n          ...candidate.json,\n          _operation: 'INSERT',\n          _compositeKey: compositeKey\n        }\n      });\n    } else if (existing.status === 'COMPLETE') {\n      // Already complete - skip\n      skipComplete++;\n      console.log(`Skipping complete candidate: ${compositeKey}`);\n    } else {\n      // Incomplete - allow reprocessing for potential update\n      updateCandidates++;\n      console.log(`Reprocessing incomplete candidate for update: ${compositeKey}`);\n      results.push({\n        ...candidate,\n        json: {\n          ...candidate.json,\n          _operation: 'UPDATE',\n          _compositeKey: compositeKey,\n          _previousData: existing.rowData\n        }\n      });\n    }\n  }\n\n  console.log(`Results: ${newCandidates} new, ${updateCandidates} updates, ${skipComplete} complete skipped, ${skipIncomplete} incomplete skipped`);\n\n  return results;\n  \n} catch (error) {\n  console.error('❌ ERROR in Filter New Candidates:', error.message);\n  console.log('   → Returning empty array to prevent workflow failure');\n  return [];\n}"
+      },
+      "id": "filter-new-candidates",
+      "name": "Filter New Candidates (Fast)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "loop-one-at-a-time",
+      "name": "Loop One Candidate",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1104,
+        544
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "merge-after-logging",
+      "name": "Merge After Logging",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3776,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2352,
+        752
+      ],
+      "id": "e22a3b6c-5cf3-4721-9e10-72185ae87b07",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "mVh9oGzTvuTD7mxB",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## DEDUPLICATE EXCEL SHEET\n**Double click** to edit me. [Guide](https://docs.n8n.io/workflows/components/sticky-notes/)",
+        "height": 256,
+        "width": 528
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -640,
+        128
+      ],
+      "typeVersion": 1,
+      "id": "44cfc379-b380-4849-aecd-0f5a59b3ba2d",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "resource": "worksheet",
+        "operation": "append",
+        "workbook": {
+          "__rl": true,
+          "value": "01SXZDVWXSMT6LLJSWIBBYJTJMSTP7LUEX",
+          "mode": "list",
+          "cachedResultName": "Log Successful Processing(Sheet1) (1) - Copy",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1"
+        },
+        "worksheet": {
+          "__rl": true,
+          "value": "{CCE64EC1-C1FF-4A68-95E3-132720984238}",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://synrgscaling-my.sharepoint.com/personal/jayconnor_synrgscaling_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7BB5FC64F2-56A6-4340-84CD-2C94DFF5D097%7D&file=Log%20Successful%20Processing(Sheet1)%20(1)%20-%20Copy.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1&activeCell=Sheet1!A1"
+        },
+        "options": {}
+      },
+      "id": "log-error-to-excel",
+      "name": "Log Error to Excel",
+      "type": "n8n-nodes-base.microsoftExcel",
+      "typeVersion": 2.2,
+      "position": [
+        3136,
+        912
+      ],
+      "credentials": {
+        "microsoftExcelOAuth2Api": {
+          "id": "Z5UHqE9BfIUtpwzk",
+          "name": "JayConnor@synrgscaling.com - Azure"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "merge-processed-data",
+      "name": "Merge Processed IDs + Candidates",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -336,
+        544
+      ]
+    },
+    {
+      "id": "merge-after-emails",
+      "name": "Merge After Emails",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        4960,
+        720
+      ],
+      "parameters": {
+        "mode": "append"
+      }
+    }
+  ],
+  "connections": {
+    "Standardize Resume Data": {
+      "main": [
+        [
+          {
+            "node": "Resume Quality Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Quality Check": {
+      "main": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Quality Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Recruiter Analysis": {
+      "main": [
+        [
+          {
+            "node": "AI Analysis Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis Success?": {
+      "main": [
+        [
+          {
+            "node": "Validate Data Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set AI Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Candidate Info": {
+      "main": [
+        [
+          {
+            "node": "Validate Data Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data Completeness": {
+      "main": [
+        [
+          {
+            "node": "Operation Router",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Incomplete?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge After Logging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Operation Router": {
+      "main": [
+        [
+          {
+            "node": "Update Existing Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append New Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Incomplete?": {
+      "main": [
+        [
+          {
+            "node": "Set Incomplete Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing Record": {
+      "main": [
+        [
+          {
+            "node": "Merge After Logging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append New Record": {
+      "main": [
+        [
+          {
+            "node": "Merge After Logging",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge After Logging": {
+      "main": [
+        [
+          {
+            "node": "Prepare Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Email Data": {
+      "main": [
+        [
+          {
+            "node": "Send Candidate Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Employer Evaluation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error Notification": {
+      "main": [
+        [
+          {
+            "node": "Loop One Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Extract Candidate Info",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule: Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Workflow Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Jobs from Paycor": {
+      "main": [
+        [
+          {
+            "node": "Jobs Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recent Candidates": {
+      "main": [
+        [
+          {
+            "node": "New Candidates Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Candidates Found?": {
+      "main": [
+        [
+          {
+            "node": "Split Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Config": {
+      "main": [
+        [
+          {
+            "node": "Build Secure Token Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load All Processed IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract ATS Account ID": {
+      "main": [
+        [
+          {
+            "node": "Get Active Jobs from Paycor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Access Token (Secure)": {
+      "main": [
+        [
+          {
+            "node": "Extract Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Secure Token Request": {
+      "main": [
+        [
+          {
+            "node": "Get Access Token (Secure)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Token": {
+      "main": [
+        [
+          {
+            "node": "Get ATS Account ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ATS Account ID": {
+      "main": [
+        [
+          {
+            "node": "Extract ATS Account ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Jobs Array": {
+      "main": [
+        [
+          {
+            "node": "Get Recent Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs Found?": {
+      "main": [
+        [
+          {
+            "node": "Split Jobs Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Candidates": {
+      "main": [
+        [
+          {
+            "node": "Merge Processed IDs + Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Candidates (Fast)": {
+      "main": [
+        [
+          {
+            "node": "Get Candidate Full Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Candidate Full Details": {
+      "main": [
+        [
+          {
+            "node": "Transform to Workflow Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform to Workflow Format": {
+      "main": [
+        [
+          {
+            "node": "Loop One Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop One Candidate": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Standardize Resume Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Quality Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set AI Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Incomplete Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error to Excel": {
+      "main": [
+        [
+          {
+            "node": "Send Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load All Processed IDs": {
+      "main": [
+        [
+          {
+            "node": "Merge Processed IDs + Candidates",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Processed IDs + Candidates": {
+      "main": [
+        [
+          {
+            "node": "Filter New Candidates (Fast)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Employer Evaluation Email": {
+      "main": [
+        [
+          {
+            "node": "Merge After Emails",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Send Candidate Email": {
+      "main": [
+        [
+          {
+            "node": "Merge After Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge After Emails": {
+      "main": [
+        [
+          {
+            "node": "Loop One Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "node:Google Drive Trigger": {
+      "lastTimeChecked": "2025-11-02T23:35:42Z"
+    },
+    "node:Schedule: Every 15 Minutes": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "23304a47-94f7-4205-b3f9-5a07b5a3cca2",
+  "activeVersionId": null,
+  "versionCounter": 573,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2025-11-03T00:01:14.327Z",
+      "createdAt": "2025-11-03T00:01:14.327Z",
+      "role": "workflow:owner",
+      "workflowId": "MMaJkr8abEjnCM2h",
+      "projectId": "TS8zQ4dOiZabqCCe",
+      "project": {
+        "updatedAt": "2026-02-11T23:29:46.000Z",
+        "createdAt": "2025-05-05T15:41:38.420Z",
+        "id": "TS8zQ4dOiZabqCCe",
+        "name": "Auto Pay Plus ",
+        "type": "team",
+        "icon": {
+          "type": "icon",
+          "value": "layer-group"
+        },
+        "description": "",
+        "creatorId": null
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": null
+}

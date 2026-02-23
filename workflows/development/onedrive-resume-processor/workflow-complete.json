@@ -1,0 +1,930 @@
+{
+  "name": "OneDrive Resume Processor",
+  "nodes": [
+    {
+      "id": "5755fdcdfe54c76e87df0baeffdd4789",
+      "name": "OneDrive Trigger",
+      "type": "n8n-nodes-base.microsoftOneDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        800,
+        500
+      ],
+      "parameters": {
+        "event": "fileCreated",
+        "watchFolder": true,
+        "folderId": {
+          "mode": "id",
+          "value": ""
+        },
+        "options": {}
+      },
+      "notes": "CONFIGURE: Set folderId.value to your OneDrive HR Resume folder path (e.g., root:/Documents/HR RESUME DIRECTORY)"
+    },
+    {
+      "id": "23b9098f9bdb996960912339e3306d78",
+      "name": "Download File",
+      "type": "n8n-nodes-base.microsoftOneDrive",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        500
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": "={{ $json.id }}",
+        "binaryPropertyName": "data"
+      }
+    },
+    {
+      "id": "standardize-resume-data-001",
+      "name": "Standardize Resume Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        500
+      ],
+      "parameters": {
+        "jsCode": "// Standardize resume data for AI analysis\n// Since this workflow processes manually uploaded resumes,\n// job details need to be configured or passed with the file\n\nconst input = $input.first().json;\nconst fileName = $('OneDrive Trigger').first().json.name || 'Unknown';\n\n// Extract text from PDF extraction\nconst resumeText = input.text || '';\n\nreturn [{\n  json: {\n    // Resume data\n    candidateResume: resumeText,\n    fileName: fileName,\n    candidateName: 'Extract from resume',\n    candidateEmail: 'Extract from resume',\n    \n    // Job details - CONFIGURE THESE for each position\n    // These can be updated manually or passed from a job lookup\n    jobTitle: 'Position Title - CONFIGURE',\n    jobDepartment: 'Department - CONFIGURE',\n    jobLocation: 'Location - CONFIGURE',\n    jobPayRange: 'Pay Range - CONFIGURE',\n    jobRemoteStatus: 'Remote/Hybrid/Onsite - CONFIGURE',\n    jobDescription: 'Full job description text - CONFIGURE',\n    \n    // File metadata\n    driveLink: $('OneDrive Trigger').first().json.webUrl || '',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "notes": "CONFIGURE: Update jobTitle, jobDepartment, jobLocation, jobPayRange, jobRemoteStatus, and jobDescription for your open position"
+    },
+    {
+      "id": "set-ai-error-001",
+      "name": "Set AI Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3200,
+        600
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-flag",
+              "name": "error",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "error-type",
+              "name": "errorType",
+              "value": "AI_ANALYSIS_FAILED",
+              "type": "string"
+            },
+            {
+              "id": "error-message",
+              "name": "errorMessage",
+              "value": "AI analysis did not return expected output structure",
+              "type": "string"
+            },
+            {
+              "id": "file-name",
+              "name": "fileName",
+              "value": "={{ $('Standardize Resume Data').item.json.fileName }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "set-validation-error-001",
+      "name": "Set Validation Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3700,
+        600
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-flag",
+              "name": "error",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "error-type",
+              "name": "errorType",
+              "value": "VALIDATION_FAILED",
+              "type": "string"
+            },
+            {
+              "id": "error-message",
+              "name": "errorMessage",
+              "value": "Final data validation failed - missing required fields",
+              "type": "string"
+            },
+            {
+              "id": "file-name",
+              "name": "fileName",
+              "value": "={{ $('Standardize Resume Data').item.json.fileName }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare-sheet-data-001",
+      "name": "Prepare Sheet Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3780,
+        208
+      ],
+      "parameters": {
+        "jsCode": "// Prepare data for Google Sheets logging\nconst candidateInfo = $('Extract Candidate Info').first().json;\nconst aiAnalysis = $('AI Recruiter Analysis').first().json;\nconst resumeData = $('Standardize Resume Data').first().json;\n\nreturn [{\n  json: {\n    ...candidateInfo,\n    aiAnalysis: aiAnalysis,\n    resumeData: resumeData,\n    readyForSheet: true\n  }\n}];"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {
+          "maxPages": 10
+        }
+      },
+      "id": "a44af49a4d668ac566514f235ac440fb",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        500
+      ],
+      "notes": "Extracts text directly from Paycor binary data (no Drive re-download)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "text-validation",
+              "leftValue": "={{ $json.text && $json.text.length > 50 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e7878ac0508f4c7a76a3b059ed3826ab",
+      "name": "Text Extracted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2068,
+        544
+      ],
+      "notes": "Validates extracted text has sufficient content (>50 chars)"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=**CANDIDATE RESUME:**\n\n{{ $('Standardize Resume Data').item.json.candidateResume }}\n\n**FILE:** {{ $('Standardize Resume Data').item.json.fileName }}\n**CANDIDATE:** {{ $('Standardize Resume Data').item.json.candidateName }}\n**EMAIL:** {{ $('Standardize Resume Data').item.json.candidateEmail }}\n\n---\n\n**JOB DETAILS FROM PAYCOR:**\n\n**Position:** {{ $('Standardize Resume Data').item.json.jobTitle }}\n**Department:** {{ $('Standardize Resume Data').item.json.jobDepartment }}\n**Location:** {{ $('Standardize Resume Data').item.json.jobLocation }}\n**Pay Range:** {{ $('Standardize Resume Data').item.json.jobPayRange }}\n**Remote Status:** {{ $('Standardize Resume Data').item.json.jobRemoteStatus }}\n\n**Job Description:**\n{{ $('Standardize Resume Data').item.json.jobDescription }}\n\n---\n\n**YOUR TASK:**\n\n1. First, use the 'Recruitment Metrics' tool to retrieve the current October 2025 hiring standards and evaluation framework\n2. Analyze the candidate's resume against the JOB DETAILS provided above using the recruitment metrics standards\n3. Provide a comprehensive, enterprise-grade evaluation\n\n**EVALUATION APPROACH:**\n- Ground your assessment in the 2025 hiring metrics (time to hire, quality of hire benchmarks, retention indicators)\n- Compare candidate qualifications directly to the job requirements above\n- Use specific evidence from the resume\n- Apply the scoring framework from the recruitment metrics guide\n- Be thorough but concise—executives will read this\n\n**IMPORTANT:** The job title for this candidate is \"{{ $('Standardize Resume Data').item.json.jobTitle }}\" - use this as the matched_job_title in your output.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a top 1% enterprise resume reviewer and talent acquisition expert with 20+ years of Fortune 500 experience.\n\n# YOUR ROLE\nEvaluate candidates against job descriptions using current October 2025 recruitment standards. Your assessments inform executive hiring decisions.\n\n# AVAILABLE TOOLS\n\n**Recruitment Metrics Tool**: Retrieves current 2025 hiring standards including:\n- Time to hire benchmarks (42 days average)\n- Cost per hire targets ($3K average)\n- Quality of hire standards (85% meet/exceed expectations at 6 months)\n- Offer acceptance rates (84%)\n- Retention expectations (80% at 90 days)\n- Scoring frameworks (1-10 scale with context)\n- Risk and opportunity assessment guidance\n\n# INPUT DATA\n\nYou receive:\n1. **Candidate Resume** - Full text of the candidate's resume\n2. **Job Details from Paycor** - Position title, department, location, pay range, remote status, and full job description\n\n# YOUR PROCESS\n\n1. **Load Standards**: Call the Recruitment Metrics tool FIRST to understand current benchmarks\n2. **Analyze Resume**: Read the candidate's full resume thoroughly\n3. **Review Job Requirements**: The job description is provided directly in the input - no need to fetch it\n4. **Match Skills**: Compare technical skills, soft skills, and domain expertise to requirements\n5. **Assess Experience**: Evaluate career trajectory, role scope, and achievements against job level\n6. **Check Retention Signals**: Look for job stability, clear motivations, realistic expectations\n7. **Score Holistically**: Use the 2025 scoring framework (9-10 exceptional, 8 strong, 6-7 good, 4-5 marginal, 1-3 not recommended)\n8. **Identify Risks**: Flag concerns like skill gaps, job hopping, over/under-qualification\n9. **Spot Opportunities**: Highlight exceptional strengths, unique value, growth potential\n10. **Recommend Next Steps**: Provide clear, actionable guidance\n\n# SCORING CONTEXT (from 2025 standards)\n\n**9-10 (Exceptional - Top 10-15%)**: Exceeds requirements, proven success in similar roles, strong trajectory, low retention risk, realistic expectations. Fast-track immediately.\n\n**8 (Strong - Top 20-25%)**: Meets all core requirements, relevant experience, stable progression, low risk. Interview promptly.\n\n**6-7 (Good - 30%)**: Meets most requirements with some trainable gaps, strong fundamentals. Validate gaps in interview.\n\n**4-5 (Marginal - 20%)**: Significant gaps but addressable. Requires hiring manager discussion about trade-offs.\n\n**1-3 (Not Recommended)**: Doesn't meet basic requirements, concerning patterns, or clear misalignment.\n\n# OUTPUT REQUIREMENTS\n\n✅ Cite specific resume examples\n✅ Reference the job requirements from the input\n✅ Use natural, executive-friendly language\n✅ Be thorough but concise\n✅ Balance positive and negative observations\n✅ Provide actionable next steps\n✅ Ground recommendations in 2025 market context\n✅ The matched_job_title MUST be the position title from the input\n\n# IMPORTANT\n- Call the Recruitment Metrics tool before evaluating\n- The job description is already provided in the input - DO NOT call a Job Description tool\n- Focus on job fit, not demographics\n- Write for busy executives who need clear signals\n- Remember: You're assessing October 2025 candidates against October 2025 standards"
+        }
+      },
+      "id": "b7539dcaa546ba239bf6551c1c0854ba",
+      "name": "AI Recruiter Analysis",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2676,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "={\n  \"type\": \"object\",\n  \"properties\": {\n    \"candidate_strengths\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"List of candidate's key strengths with specific evidence from resume\"\n    },\n    \"candidate_weaknesses\": {\n      \"type\": \"array\", \n      \"items\": { \"type\": \"string\" },\n      \"description\": \"List of areas where candidate falls short or has gaps\"\n    },\n    \"risk_assessment\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"level\": {\n          \"type\": \"string\",\n          \"enum\": [\"Low\", \"Medium\", \"High\"]\n        },\n        \"explanation\": {\n          \"type\": \"string\",\n          \"description\": \"Detailed risk analysis explaining potential concerns\"\n        }\n      },\n      \"required\": [\"level\", \"explanation\"]\n    },\n    \"opportunity_assessment\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"level\": {\n          \"type\": \"string\", \n          \"enum\": [\"Low\", \"Medium\", \"High\"]\n        },\n        \"explanation\": {\n          \"type\": \"string\",\n          \"description\": \"Upside potential analysis and growth opportunities\"\n        }\n      },\n      \"required\": [\"level\", \"explanation\"]\n    },\n    \"overall_score\": {\n      \"type\": \"integer\",\n      \"minimum\": 1,\n      \"maximum\": 10,\n      \"description\": \"Overall fit score from 1-10 where 8+ means definitely interview\"\n    },\n    \"score_justification\": {\n      \"type\": \"string\",\n      \"description\": \"Detailed explanation of the score with specific examples\"\n    },\n    \"next_steps_recommendation\": {\n      \"type\": \"string\",\n      \"description\": \"Recommended next actions for hiring team\"\n    },\n    \"matched_job_title\": {\n      \"type\": \"string\",\n      \"description\": \"The job title from the retrieved job description\"\n    }\n  },\n  \"required\": [\"candidate_strengths\", \"candidate_weaknesses\", \"risk_assessment\", \"opportunity_assessment\", \"overall_score\", \"score_justification\", \"next_steps_recommendation\", \"matched_job_title\"]\n}",
+        "autoFix": true
+      },
+      "id": "5162c687b65036e487e524651e316ac3",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2996,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 1,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ai-success",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.output && $json.output.overall_score && $json.output.candidate_strengths }}",
+              "rightValue": true
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "id": "9816522f90ffa45bd77496d965ac9fc0",
+      "name": "AI Analysis Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2996,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "text": "={{ $('Standardize Resume Data').item.json.candidateResume }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "full_name",
+              "description": "Candidate's full name (first and last name combined)",
+              "required": true
+            },
+            {
+              "name": "email_address",
+              "description": "Primary email address of the candidate",
+              "required": true
+            },
+            {
+              "name": "phone_number",
+              "description": "Phone number or mobile number"
+            },
+            {
+              "name": "current_title",
+              "description": "Current job title or most recent position held"
+            },
+            {
+              "name": "years_experience",
+              "description": "Total years of relevant professional work experience (return as a number or string like '5 years')"
+            },
+            {
+              "name": "key_skills",
+              "description": "List of top 5-7 technical or professional skills mentioned in the resume, comma-separated"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a0007eb706c4bd5c4b4fdcf08eafa98",
+      "name": "Extract Candidate Info",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        3204,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 1,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "data-validation",
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.output && $json.output.full_name && $json.output.email_address && $('AI Recruiter Analysis').item.json.output && $('AI Recruiter Analysis').item.json.output.overall_score }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2fd52b8c21182e0e4c7df3b07621cf84",
+      "name": "Final Data Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3492,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1HP5RnNrHbocxsP_fbz0nIjfFl-p4WtOAQxGDIu0l8XU",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "compositeKey": "={{ $('Transform to Workflow Format').item.json.body.candidateId }}_{{ $('Transform to Workflow Format').item.json.body.jobId }}",
+            "candidateId": "={{ $('Transform to Workflow Format').item.json.body.candidateId }}",
+            "jobId": "={{ $('Transform to Workflow Format').item.json.body.jobId }}",
+            "Date": "={{ $now.format('yyyy-MM-dd HH:mm:ss') }}",
+            "Candidate_Name": "={{ $json.output.full_name }}",
+            "Email": "={{ $json.output.email_address }}",
+            "Phone": "={{ $json.output.phone_number }}",
+            "Current_Title": "={{ $json.output.current_title }}",
+            "Years_Experience": "={{ $json.output.years_experience }}",
+            "Key_Skills": "={{ $json.output.key_skills }}",
+            "Job_ID": "={{ $('Transform to Workflow Format').item.json.body.jobId }}",
+            "Matched_Job_Title": "={{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}",
+            "Overall_Score": "={{ $('AI Recruiter Analysis').item.json.output.overall_score }}",
+            "Strengths": "={{ $('AI Recruiter Analysis').item.json.output.candidate_strengths.join('; ') }}",
+            "Weaknesses": "={{ $('AI Recruiter Analysis').item.json.output.candidate_weaknesses.join('; ') }}",
+            "Risk_Level": "={{ $('AI Recruiter Analysis').item.json.output.risk_assessment.level }}",
+            "Risk_Details": "={{ $('AI Recruiter Analysis').item.json.output.risk_assessment.explanation }}",
+            "Opportunity_Level": "={{ $('AI Recruiter Analysis').item.json.output.opportunity_assessment.level }}",
+            "Opportunity_Details": "={{ $('AI Recruiter Analysis').item.json.output.opportunity_assessment.explanation }}",
+            "Justification": "={{ $('AI Recruiter Analysis').item.json.output.score_justification }}",
+            "Next_Steps": "={{ $('AI Recruiter Analysis').item.json.output.next_steps_recommendation }}",
+            "Resume_Link": "={{ $('Standardize Resume Data').item.json.driveLink }}",
+            "Evaluated_Date": "={{ $now.format('yyyy-MM-dd') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "compositeKey",
+              "displayName": "compositeKey",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "candidateId",
+              "displayName": "candidateId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "jobId",
+              "displayName": "jobId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Candidate_Name",
+              "displayName": "Candidate_Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Current_Title",
+              "displayName": "Current_Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Years_Experience",
+              "displayName": "Years_Experience",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Key_Skills",
+              "displayName": "Key_Skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Job_ID",
+              "displayName": "Job_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Matched_Job_Title",
+              "displayName": "Matched_Job_Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Overall_Score",
+              "displayName": "Overall_Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Strengths",
+              "displayName": "Strengths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Weaknesses",
+              "displayName": "Weaknesses",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Risk_Level",
+              "displayName": "Risk_Level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Risk_Details",
+              "displayName": "Risk_Details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Opportunity_Level",
+              "displayName": "Opportunity_Level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Opportunity_Details",
+              "displayName": "Opportunity_Details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Justification",
+              "displayName": "Justification",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Next_Steps",
+              "displayName": "Next_Steps",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resume_Link",
+              "displayName": "Resume_Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Evaluated_Date",
+              "displayName": "Evaluated_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "6227d635becd59d0ad54a0b6db4128db",
+      "name": "Log Successful Processing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        4052,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "fzaSSwZ4tI357WUU",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toRecipients": "jay.connorcreations@gmail.com",
+        "subject": "=Application Update - {{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}",
+        "bodyContent": "=<html>\n<body style=\"font-family: Arial, sans-serif; color:#2c3e50; line-height:1.55;\">\n  <p style=\"margin:0 0 12px;\">Hi {{ ($json.output.full_name || '').split(' ')[0] || 'there' }},</p>\n\n  <p style=\"margin:0 0 12px;\">\n    Thank you for applying for the <strong>{{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}</strong> role. We've reviewed your background and would like to share an update on your application.\n  </p>\n\n  <div style=\"background:#f7f9fc; border:1px solid #e6ecf5; border-radius:6px; padding:12px; margin:12px 0;\">\n    <p style=\"margin:0 0 8px;\"><strong>Your Evaluation Summary</strong></p>\n    <ul style=\"margin:0 0 0 18px; padding:0;\">\n      <li><strong>Overall Assessment:</strong> {{ $('AI Recruiter Analysis').item.json.output.overall_score }}/10 — {{ $('AI Recruiter Analysis').item.json.output.overall_score >= 8 ? 'Strong fit' : ($('AI Recruiter Analysis').item.json.output.overall_score >= 6 ? 'Good fit' : 'In review') }}</li>\n      <li><strong>Highlights:</strong> {{ ( $('AI Recruiter Analysis').item.json.output.candidate_strengths || [] ).slice(0,3).join('; ') }}</li>\n      <li><strong>Focus Areas (if any):</strong> {{ ( $('AI Recruiter Analysis').item.json.output.candidate_weaknesses || [] ).slice(0,2).join('; ') || 'None at this time' }}</li>\n    </ul>\n  </div>\n\n  <p style=\"margin:12px 0 0;\"><strong>Next Steps</strong></p>\n  <p style=\"margin:6px 0 12px;\">{{ $('AI Recruiter Analysis').item.json.output.next_steps_recommendation }}</p>\n\n  <p style=\"margin:0 0 12px;\">If you have additional work samples or context to share, feel free to reply to this email.</p>\n\n  <p style=\"margin:0 0 16px;\">Thank you again for your interest — we appreciate the time and effort you put into your application.</p>\n\n  <p style=\"margin:0; color:#6b7a8c; font-size:12px;\">\n    Best regards,<br/>\n    Talent Acquisition Team<br/>\n    HR Department\n  </p>\n</body>\n</html>",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "ef54889ef077952f0f87f3e6aae29f19",
+      "name": "Send Candidate Email2",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        4036,
+        448
+      ],
+      "webhookId": "014338b0-7661-4457-a6a2-663a861269ee",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "qzrP8JlhlagruCvQ",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toRecipients": "jcreationsrai@gmail.com",
+        "subject": "=Application Update - {{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}",
+        "bodyContent": "=<html>\n<body style=\"font-family: Arial, sans-serif; color:#2c3e50; line-height:1.55;\">\n  <h2 style=\"margin:0 0 12px;\">Candidate Evaluation — {{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}</h2>\n\n  <p style=\"margin:0 0 14px;\">\n    <strong>Candidate:</strong> {{ $json.output.full_name }} · {{ $json.output.current_title }} · {{ $json.output.years_experience }}<br/>\n    <strong>Score:</strong> {{ $('AI Recruiter Analysis').item.json.output.overall_score }}/10 · <strong>Recommendation:</strong> {{ $('AI Recruiter Analysis').item.json.output.next_steps_recommendation }}\n  </p>\n\n  <div style=\"background:#f7f9fc; border:1px solid #e6ecf5; border-radius:6px; padding:12px; margin:12px 0;\">\n    <p style=\"margin:0 0 8px;\"><strong>Snapshot</strong></p>\n    <ul style=\"margin:0 0 0 18px; padding:0;\">\n      <li><strong>Role:</strong> {{ $('AI Recruiter Analysis').item.json.output.matched_job_title }}</li>\n      <li><strong>Key Skills:</strong> {{ $json.output.key_skills }}</li>\n      <li><strong>Resume Link:</strong> {{ $('Standardize Resume Data').item.json.driveLink }}</li>\n      <li><strong>File Name:</strong> {{ $('Standardize Resume Data').item.json.fileName }}</li>\n    </ul>\n  </div>\n\n  <p style=\"margin:14px 0 6px;\"><strong>Fit Assessment</strong></p>\n  <p style=\"margin:0 0 6px;\"><strong>Strengths</strong></p>\n  <ul style=\"margin:0 0 10px 18px; padding:0;\">\n    <li>{{ ( $('AI Recruiter Analysis').item.json.output.candidate_strengths || [] )[0] || '—' }}</li>\n    <li>{{ ( $('AI Recruiter Analysis').item.json.output.candidate_strengths || [] )[1] || '—' }}</li>\n    <li>{{ ( $('AI Recruiter Analysis').item.json.output.candidate_strengths || [] )[2] || '—' }}</li>\n  </ul>\n\n  <p style=\"margin:0 0 6px;\"><strong>Gaps / Risks</strong></p>\n  <ul style=\"margin:0 0 10px 18px; padding:0;\">\n    <li>{{ ( $('AI Recruiter Analysis').item.json.output.candidate_weaknesses || [] )[0] || '—' }}</li>\n    <li>{{ ( $('AI Recruiter Analysis').item.json.output.candidate_weaknesses || [] )[1] || '—' }}</li>\n  </ul>\n\n  <div style=\"background:#fff8e6; border:1px solid #fde1a1; border-radius:6px; padding:12px; margin:12px 0;\">\n    <p style=\"margin:0 0 8px;\"><strong>Risk & Opportunity</strong></p>\n    <p style=\"margin:0 0 6px;\"><strong>Risk Level:</strong> {{ $('AI Recruiter Analysis').item.json.output.risk_assessment.level }} — {{ $('AI Recruiter Analysis').item.json.output.risk_assessment.explanation }}</p>\n    <p style=\"margin:0;\"><strong>Opportunity:</strong> {{ $('AI Recruiter Analysis').item.json.output.opportunity_assessment.level }} — {{ $('AI Recruiter Analysis').item.json.output.opportunity_assessment.explanation }}</p>\n  </div>\n\n  <p style=\"margin:14px 0 6px;\"><strong>Score Justification</strong></p>\n  <p style=\"margin:0 0 12px;\">{{ $('AI Recruiter Analysis').item.json.output.score_justification }}</p>\n\n  <p style=\"margin:14px 0 6px;\"><strong>Recommended Next Steps</strong></p>\n  <ul style=\"margin:0 0 10px 18px; padding:0;\">\n    <li>{{ $('AI Recruiter Analysis').item.json.output.next_steps_recommendation }}</li>\n  </ul>\n\n  <p style=\"margin:16px 0 0; color:#6b7a8c; font-size:12px;\">Resume Link: {{ $('Standardize Resume Data').item.json.driveLink }}</p>\n</body>\n</html>",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "d262fcbed8421043b981adcadbcbc8af",
+      "name": "Send Employer Evaluation Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        3780,
+        448
+      ],
+      "webhookId": "f61dedd9-8ebd-4cfd-833a-24734e7788b8",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "qzrP8JlhlagruCvQ",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3220,
+        496
+      ],
+      "id": "216b4bad5d5312cefc87853b987606a8",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "options": {
+          "responseFormat": "json_object"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2644,
+        608
+      ],
+      "id": "9790b017e2231ff515cd79989251058b",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "6BIzzQu5jAD5jKlH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get a document in Google Docs",
+        "operation": "get",
+        "documentURL": "https://docs.google.com/document/d/12Zb7yTTbSe9itHR1qHlzOP8GA-l5QaSLtzyVsS4xLh4/edit?tab=t.0#heading=h.1i28b5zdptam",
+        "simple": false
+      },
+      "type": "n8n-nodes-base.googleDocsTool",
+      "typeVersion": 2,
+      "position": [
+        2740,
+        720
+      ],
+      "id": "abad76643fbad8789df033e8833c3a27",
+      "name": "Recruitment Metrics",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "iNIP35ChYNUUqOCh",
+          "name": "Google Docs - autopayplusworkflows@gmail.com"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "OneDrive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Text Extracted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Extracted?": {
+      "main": [
+        [
+          {
+            "node": "Standardize Resume Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Standardize Resume Data": {
+      "main": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Sheet Data": {
+      "main": [
+        [
+          {
+            "node": "Log Successful Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Recruiter Analysis": {
+      "main": [
+        [
+          {
+            "node": "AI Analysis Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis Success?": {
+      "main": [
+        [
+          {
+            "node": "Extract Candidate Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set AI Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Candidate Info": {
+      "main": [
+        [
+          {
+            "node": "Final Data Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Data Valid?": {
+      "main": [
+        [
+          {
+            "node": "Send Employer Evaluation Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Sheet Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Employer Evaluation Email": {
+      "main": [
+        [
+          {
+            "node": "Send Candidate Email2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Extract Candidate Info",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recruitment Metrics": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Recruiter Analysis",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
