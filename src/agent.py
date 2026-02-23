@@ -66,6 +66,11 @@ from .utils.context_cache import get_cache_manager
 from .utils.async_tool_worker import AsyncToolWorker, set_worker
 from .utils.short_term_memory import clear_session as clear_session_memory
 from .utils.task_tracker import TaskTracker
+from .utils.session_facts import (
+    store_fact as _store_fact,
+    clear_facts as _clear_facts,
+)
+from .utils import pg_logger as _pg_logger
 
 # Initialize logging
 logger = setup_logging(__name__)
@@ -847,6 +852,8 @@ async def entrypoint(ctx: JobContext):
         # Track user objective for heartbeat-driven continuation
         if text:
             _task_tracker.record_user_message(text)
+            # Log user turn to PostgreSQL for full session context
+            asyncio.create_task(_pg_logger.log_turn(session_id, "user", text))
 
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
@@ -951,6 +958,9 @@ async def entrypoint(ctx: JobContext):
             # tracker so Case 3 stall detection can arm if the LLM says something
             # like "let me try" or "working on it" without calling a tool.
             _task_tracker.record_agent_speech(text)
+            # Log assistant turn to PostgreSQL for full session context
+            if text:
+                asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text))
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
@@ -1393,6 +1403,9 @@ async def entrypoint(ctx: JobContext):
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
+        # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
+        if settings.postgres_url:
+            asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
 
         await session.start(
             agent=agent,
@@ -1485,12 +1498,47 @@ async def entrypoint(ctx: JobContext):
                 job_id = notification.get("job_id", "?")
                 content_type = notification.get("content_type", "content")
                 gamma_url = notification.get("gamma_url")
+                topic = notification.get("topic", "")
 
                 if message:
                     logger.info(f"Gamma monitor: speaking notification job={job_id} content_type={content_type} has_url={bool(gamma_url)}")
                     try:
                         await session_ref.say(message, allow_interruptions=True)
                         logger.info(f"Gamma monitor: notification delivered job={job_id}")
+
+                        # Store Gamma context in session facts for multi-turn coherence.
+                        # Without this, the LLM has no record of gammaUrl across correction
+                        # turns and re-generates the full document on every follow-up.
+                        generation_id = notification.get("generation_id", "")
+                        if gamma_url:
+                            _store_fact(session_id, f"gamma_{content_type}_url", gamma_url)
+                            _store_fact(session_id, f"gamma_{content_type}_topic", topic)
+                            if generation_id:
+                                _store_fact(
+                                    session_id,
+                                    f"gamma_{content_type}_generation_id",
+                                    generation_id,
+                                )
+
+                        # Inject context note into chat_ctx so the LLM sees the URL
+                        # on follow-up turns (e.g. "change the colors").
+                        if gamma_url:
+                            try:
+                                context_note = (
+                                    f"[AIO internal context — do not read aloud] "
+                                    f"The {content_type} on '{topic}' has been generated. "
+                                    f"URL: {gamma_url}. "
+                                    + (f"Generation ID: {generation_id}. " if generation_id else "")
+                                    + f"For any modifications or changes to this {content_type}, "
+                                    f"reference this URL and generation ID. "
+                                    f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
+                                )
+                                session_ref.chat_ctx.append(role="assistant", text=context_note)
+                                logger.info(
+                                    f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
+                                )
+                            except Exception as ctx_err:
+                                logger.warning(f"Gamma monitor: chat_ctx append failed job={job_id}: {ctx_err}")
                     except Exception as say_err:
                         logger.error(f"Gamma monitor: session.say() failed job={job_id}: {say_err}")
                         # Retry once after brief delay (session may be transitioning)
@@ -1517,6 +1565,39 @@ async def entrypoint(ctx: JobContext):
     # Runs every 4 seconds SILENTLY. Does not speak to the user unless a multi-step
     # tool task has stalled (no activity for 4+ seconds while objective is incomplete).
     # When stalled, injects a continuation instruction to resume the task.
+    async def _trim_chat_context(session_ref, max_messages: int = 20) -> None:
+        """Trim chat context to prevent unbounded memory growth.
+
+        Keeps system message + last max_messages non-system messages.
+        Called periodically (~60s) from heartbeat to bound session memory.
+        Only trims when agent is not responding to avoid race conditions.
+        """
+        try:
+            msgs = session_ref.chat_ctx.messages
+            if len(msgs) <= max_messages + 1:
+                return  # Nothing to trim
+
+            system_msgs = [m for m in msgs if getattr(m, 'role', '') == "system"]
+            non_system_msgs = [m for m in msgs if getattr(m, 'role', '') != "system"]
+
+            if len(non_system_msgs) <= max_messages:
+                return  # Non-system messages within budget
+
+            trimmed_non_system = non_system_msgs[-max_messages:]
+            removed = len(non_system_msgs) - len(trimmed_non_system)
+
+            # Rebuild messages list in-place
+            msgs.clear()
+            msgs.extend(system_msgs)
+            msgs.extend(trimmed_non_system)
+
+            logger.info(
+                f"[Memory] Chat context trimmed: removed {removed} old messages, "
+                f"kept {len(system_msgs)} system + {len(trimmed_non_system)} conversation messages"
+            )
+        except Exception as e:
+            logger.warning(f"[Memory] Chat context trim failed: {e}")
+
     async def _heartbeat_monitor(session_ref, task_tracker_ref):
         """Background heartbeat: monitors tool execution and injects continuations.
 
@@ -1531,12 +1612,20 @@ async def entrypoint(ctx: JobContext):
         - Uses session.generate_reply(instructions=...) to resume the LLM without
           injecting a raw say() call — this goes through the LLM for intelligent continuation
         - Falls back to session.say() if generate_reply is unavailable
+        - Also trims chat_ctx every TRIM_EVERY_N cycles to bound memory growth
         """
-        HEARTBEAT_INTERVAL = 4.0  # Assess every 4 seconds
-        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s)")
+        HEARTBEAT_INTERVAL = 4.0   # Assess every 4 seconds
+        TRIM_EVERY_N_CYCLES = 15   # Trim chat_ctx every 15*4=60 seconds
+        _hb_count = 0
+        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s, trim=60s)")
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
+                _hb_count += 1
+
+                # Periodic chat context trim — only when agent is idle to avoid races
+                if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
+                    await _trim_chat_context(session_ref, max_messages=20)
 
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
@@ -1655,6 +1744,9 @@ async def entrypoint(ctx: JobContext):
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+    cleared_facts = _clear_facts(session_id)
+    if cleared_facts:
+        logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
 
     logger.info("Agent session ended")
 

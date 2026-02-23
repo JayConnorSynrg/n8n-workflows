@@ -52,6 +52,9 @@ class Settings(BaseSettings):
 
     # Composio Integration (SDK-only execution via composioBatchExecute/composioExecute)
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")
+    # PostgreSQL — direct connection for conversation logging (optional)
+    # Set POSTGRES_URL = postgresql://user:pass@host/db in Railway env vars
+    postgres_url: str = Field(default="", alias="POSTGRES_URL")
     composio_base_url: str = Field(
         default="https://backend.composio.dev/api",
         alias="COMPOSIO_BASE_URL"
