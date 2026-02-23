@@ -48,9 +48,13 @@ class Settings(BaseSettings):
     # Agent Settings
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    max_tool_steps: int = Field(default=20, alias="MAX_TOOL_STEPS")
 
     # Composio Integration (SDK-only execution via composioBatchExecute/composioExecute)
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")
+    # PostgreSQL — direct connection for conversation logging (optional)
+    # Set POSTGRES_URL = postgresql://user:pass@host/db in Railway env vars
+    postgres_url: str = Field(default="", alias="POSTGRES_URL")
     composio_base_url: str = Field(
         default="https://backend.composio.dev/api",
         alias="COMPOSIO_BASE_URL"
