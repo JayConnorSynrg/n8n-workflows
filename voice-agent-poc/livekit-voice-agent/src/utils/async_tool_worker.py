@@ -119,6 +119,7 @@ class AsyncToolWorker:
         tool_name: str,
         tool_func: Callable[..., Coroutine[Any, Any, str]],
         kwargs: dict,
+        call_id: Optional[str] = None,
     ) -> str:
         """Dispatch a tool for background execution.
 
@@ -128,6 +129,7 @@ class AsyncToolWorker:
             tool_name: Human-readable name for logging/announcements
             tool_func: Async function to execute
             kwargs: Arguments for the tool function
+            call_id: Optional external call_id for correlating with publish events
 
         Returns:
             task_id: Unique identifier for tracking
@@ -140,6 +142,7 @@ class AsyncToolWorker:
             tool_func=tool_func,
             kwargs=kwargs,
         )
+        task._call_id = call_id or ""
 
         self._tasks[task_id] = task
         await self._queue.put(task)
@@ -215,10 +218,11 @@ class AsyncToolWorker:
         message = {
             "type": "tool_result",
             "task_id": task.task_id,
+            "call_id": getattr(task, "_call_id", ""),   # correlates with publish_tool_start events
             "tool_name": task.tool_name,
             "status": task.status.value,
-            "result": task.result,
-            "error": task.error,
+            "result": task.result or "",
+            "error": task.error or "",
             "duration_ms": int((task.completed_at - task.created_at) * 1000)
                 if task.completed_at else None,
         }
