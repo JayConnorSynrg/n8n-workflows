@@ -17,7 +17,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    sourcemap: false,
     // OPTIMIZED: Build optimizations for faster loading
     rollupOptions: {
       output: {
@@ -36,7 +36,7 @@ export default defineConfig({
     minify: 'terser',
     terserOptions: {
       compress: {
-        drop_console: false,  // Keep console for debugging
+        drop_console: true,
         drop_debugger: true,
       },
     },

@@ -9,8 +9,9 @@ export default defineConfig({
     ['html', { open: 'never' }],
     ['list']
   ],
+  snapshotDir: './e2e/screenshots',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3001',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     trace: 'retain-on-failure'
