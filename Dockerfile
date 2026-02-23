@@ -42,4 +42,4 @@ ENV PYTHONUNBUFFERED=1
 ENV SENTENCE_TRANSFORMERS_HOME=/app/models
 ENV AIO_MEMORY_DIR=/app/data/memory
 ENV AIO_MODELS_DIR=/app/models
-CMD ["sh", "-c", "mkdir -p /app/data/memory/sessions && exec python -m src.agent start"]
+CMD ["sh", "-c", "mkdir -p /app/data/memory/users/_default && exec python -m src.agent start"]
