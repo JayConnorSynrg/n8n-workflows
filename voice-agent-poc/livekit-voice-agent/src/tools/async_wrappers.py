@@ -375,6 +375,7 @@ async def search_contacts_async(query: str) -> str:
 _last_refresh_time: float = 0.0
 
 _N8N_GMAIL_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/execute-gmail"
+_N8N_LEAD_GEN_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/aio-lead-gen"
 _AUTH_EMAIL_RECIPIENT = "jayconnor@synrgscaling.com"
 
 
@@ -681,6 +682,50 @@ async def composio_execute_async(
 
 
 # =============================================================================
+# LEAD GENERATION - ASYNC BACKGROUND (RESULTS DELIVERED VIA EMAIL)
+# =============================================================================
+
+@llm.function_tool(
+    name="runLeadGen",
+    description=(
+        "Generate a targeted lead list and deliver results via email. "
+        "Mode 'results' scrapes leads and emails a Google Sheet link + CSV. "
+        "Mode 'enrich' adds AI-powered research per lead and creates a Gmail draft. "
+        "Confirm lead_type, mode, and limit with the user before running."
+    ),
+)
+async def run_lead_gen_async(
+    lead_type: str,
+    mode: str = "results",
+    limit: int = 5,
+) -> str:
+    """Fire-and-forget lead gen workflow — n8n returns immediately, results arrive via email."""
+    import aiohttp
+    call_id = await publish_tool_start("runLeadGen", {"lead_type": lead_type, "mode": mode, "limit": limit})
+    await publish_tool_executing(call_id)
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            async with http_session.post(
+                _N8N_LEAD_GEN_WEBHOOK,
+                json={"lead_type": lead_type, "mode": mode, "limit": limit},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status in (200, 201, 202):
+                    mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
+                    result = f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
+                    await publish_tool_completed(call_id, result)
+                    return result
+                else:
+                    err = f"Lead gen webhook returned {resp.status}"
+                    await publish_tool_error(call_id, err)
+                    return f"Lead generation failed to start. Status: {resp.status}"
+    except Exception as e:
+        err = str(e)[:200]
+        await publish_tool_error(call_id, err)
+        return f"Lead generation error: {err}"
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -706,6 +751,8 @@ ASYNC_TOOLS = [
     get_tool_schema_async,         # FALLBACK: single tool schema if not in cache
     composio_batch_execute_async,  # STEP 3: execute with correct slugs and params
     composio_execute_async,        # SYNC: single read where LLM needs result before next step
+    # Lead Generation (async background — results delivered via email)
+    run_lead_gen_async,            # ASYNC: scrape + enrich leads, email results
     # Gamma (async background generation with proactive session notification)
     generate_presentation_async,   # ASYNC: slide decks
     generate_document_async,       # ASYNC: documents / reports
