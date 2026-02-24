@@ -1585,6 +1585,8 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
 
     Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array).
     Attempt 2: SDK direct — auth_configs.list() → connected_accounts.initiate(user_id, auth_config_id).
+    Attempt 3: Direct httpx REST API — GET /api/v1/integrations → POST /api/v1/connectedAccounts.
+               This path bypasses the SDK entirely and hits the Composio backend directly.
 
     Returns (auth_url, display_name) on success, or (error_message, "") on failure.
     """
@@ -1695,10 +1697,101 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         logger.warning(
             f"Composio: direct SDK initiate returned no redirect URL for {service_lower}: {sdk_result}"
         )
-        return f"I couldn't set up the {display_name} connection right now.", ""
     except Exception as exc:
-        logger.error(f"Composio: initiate_service_connection all paths failed for {service_lower}: {exc}")
-        return f"Connection setup for {display_name} failed due to a system error", ""
+        logger.warning(
+            f"Composio: SDK initiate exception for {service_lower}: {exc} — trying REST API fallback"
+        )
+
+    # --- Attempt 3: Direct REST API via httpx (bypasses SDK and meta-tool entirely) ---
+    # This path hits the Composio backend directly, independent of SDK version quirks.
+    try:
+        import httpx  # already in requirements.txt
+
+        _rest_headers = {
+            "x-api-key": settings.composio_api_key,
+            "Content-Type": "application/json",
+        }
+        _base = "https://backend.composio.tech"
+
+        async def _rest_initiate() -> str | None:
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                # Step 1: resolve integration_id for this service
+                integration_id: str | None = None
+                for path in ("/api/v1/integrations", "/api/v2/integrations"):
+                    try:
+                        r = await http.get(
+                            f"{_base}{path}",
+                            params={"appName": service_lower, "page": 1, "pageSize": 10},
+                            headers=_rest_headers,
+                        )
+                        if r.status_code == 200:
+                            body = r.json()
+                            items = body.get("items") or body.get("integrations") or []
+                            for item in items:
+                                iid = item.get("id") or item.get("integrationId")
+                                if iid:
+                                    integration_id = iid
+                                    break
+                        if integration_id:
+                            logger.info(
+                                f"Composio REST: resolved integration_id={integration_id}"
+                                f" for {service_lower} via {path}"
+                            )
+                            break
+                        else:
+                            logger.debug(
+                                f"Composio REST: {path} status={r.status_code}"
+                                f" body_keys={list(r.json().keys()) if r.status_code == 200 else r.text[:120]}"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Composio REST: {path} exception: {_e}")
+
+                if not integration_id:
+                    logger.warning(f"Composio REST: no integration_id found for {service_lower}")
+                    return None
+
+                # Step 2: initiate connected account → redirect URL
+                for path in ("/api/v1/connectedAccounts", "/api/v2/connectedAccounts"):
+                    try:
+                        r = await http.post(
+                            f"{_base}{path}",
+                            json={"integrationId": integration_id, "userUuid": user_id},
+                            headers=_rest_headers,
+                        )
+                        if r.status_code in (200, 201):
+                            body = r.json()
+                            url = (
+                                body.get("redirectUrl")
+                                or body.get("redirect_url")
+                                or body.get("connectionUrl")
+                                or body.get("authUrl")
+                                or body.get("oauthUrl")
+                                or (body.get("connectedAccount") or {}).get("redirectUrl")
+                            )
+                            if url:
+                                return url
+                            logger.warning(
+                                f"Composio REST: {path} 200 but no URL — keys={list(body.keys())}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Composio REST: {path} returned {r.status_code}: {r.text[:200]}"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Composio REST: {path} POST exception: {_e}")
+                return None
+
+        redirect_url = await _rest_initiate()
+        if redirect_url:
+            logger.info(f"Composio: Connection initiated via REST API for {service_lower}")
+            _initiated_connections[service_lower] = time.time()
+            return redirect_url, display_name
+
+        logger.error(f"Composio: REST API initiation returned no URL for {service_lower}")
+    except Exception as rest_exc:
+        logger.error(f"Composio: REST API fallback exception for {service_lower}: {rest_exc}")
+
+    return f"Connection setup for {display_name} is temporarily unavailable — all initiation paths failed. Please try again in a moment.", ""
 
 
 async def batch_execute_composio_tools(tools: list) -> str:
