@@ -82,11 +82,13 @@ try:
     from .memory import memory_store as _mem_store
     from .memory import session_writer as _session_writer
     from .memory import capture as _mem_capture
+    from .memory import embedder as _embedder
     _MEM_AVAILABLE = True
 except Exception as _mem_err:
     _mem_store = None  # type: ignore[assignment]
     _session_writer = None  # type: ignore[assignment]
     _mem_capture = None  # type: ignore[assignment]
+    _embedder = None  # type: ignore[assignment]
     _MEM_AVAILABLE = False
 
 # =============================================================================
@@ -1943,6 +1945,8 @@ async def entrypoint(ctx: JobContext):
     if cleared_facts:
         logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
 
+    if _embedder is not None:
+        _embedder.unload_model()
     logger.info("Agent session ended")
 
 
