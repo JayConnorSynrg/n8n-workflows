@@ -78,17 +78,3 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     # Vectors are normalized (unit length), so dot product IS cosine similarity
     # Clamp to [-1, 1] to guard against float precision issues
     return max(-1.0, min(1.0, dot))
-
-
-def unload_model() -> None:
-    """Release the embedding model to free ~600MB RAM after session ends.
-
-    Sets _load_failed=False so next session can reload if needed.
-    """
-    global _model, _load_failed
-    if _model is not None:
-        import gc
-        _model = None
-        _load_failed = False  # Allow reload for future sessions
-        gc.collect()
-        logger.info("[Memory] Embedder model unloaded — ~600MB freed")

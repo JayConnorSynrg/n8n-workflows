@@ -9,7 +9,6 @@ Thread-safe: capture queue is append-only, flushed once at session end.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Optional
@@ -147,9 +146,7 @@ async def flush_to_store(memory_store_module) -> list[str]:
 
     stored: list[str] = []
     for fact_text, cat in _pending_facts:
-        result = await asyncio.to_thread(
-            lambda: memory_store_module.store(fact_text, category=cat, source="auto")
-        )
+        result = memory_store_module.store(fact_text, category=cat, source="auto")
         if result:
             stored.append(fact_text)
             logger.info("[Capture] Stored fact: [%s] %.60s...", cat, fact_text)

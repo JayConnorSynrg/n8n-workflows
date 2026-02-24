@@ -19,6 +19,17 @@ from ..utils.room_publisher import (
     publish_tool_completed,
     publish_tool_error,
 )
+try:
+    from ..utils.tool_logger import log_composio_call, log_perplexity_search
+    _TOOL_LOGGER_AVAILABLE = True
+except Exception:  # nosec B110 — tool_logger is optional; never block tool execution
+    _TOOL_LOGGER_AVAILABLE = False
+
+    def log_composio_call(*_a, **_kw):  # type: ignore[misc]
+        pass
+
+    def log_perplexity_search(*_a, **_kw):  # type: ignore[misc]
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +96,8 @@ _SERVICE_ALIASES: dict[str, str] = {
     "teams": "microsoft_teams",
     "onedrive": "one_drive",
     "drive": "one_drive",
-    "sheets": "googlesheets",
-    "docs": "googledocs",
-    "google_docs": "googledocs",
-    "google_sheets": "googlesheets",
+    "sheets": "google_sheets",
+    "docs": "google_docs",
     "search": "composio_search",
     "web": "composio_search",
 }
@@ -102,9 +111,7 @@ _COMPOSIO_VOICE_NAMES: dict[str, str] = {
     "one_drive": "OneDrive",
     "gmail": "Gmail",
     "google_sheets": "Google Sheets",
-    "googlesheets": "Google Sheets",
     "google_docs": "Google Docs",
-    "googledocs": "Google Docs",
     "github": "GitHub",
     "canva": "Canva",
     "supabase": "Supabase",
@@ -451,17 +458,12 @@ def _resolve_slug_fast(raw_slug: str) -> tuple[str | None, int]:
         return suffix_matches[0], _TIER_SUFFIX
 
     # Tier 3: Prefix expansion (TEAMS_ → MICROSOFT_TEAMS_, etc.)
-    # Longer/more-specific prefixes must come first to prevent partial matching.
     prefix_expansions = {
-        "GOOGLE_DRIVE_": "GOOGLEDRIVE_",    # GOOGLE_DRIVE_X → GOOGLEDRIVE_X
-        "GOOGLE_SHEETS_": "GOOGLESHEETS_",  # GOOGLE_SHEETS_X → GOOGLESHEETS_X
-        "GOOGLE_DOCS_": "GOOGLEDOCS_",      # GOOGLE_DOCS_X → GOOGLEDOCS_X
         "TEAMS_": "MICROSOFT_TEAMS_",
         "ONEDRIVE_": "ONE_DRIVE_",
         "SHEETS_": "GOOGLESHEETS_",
         "DOCS_": "GOOGLEDOCS_",
-        # NOTE: "DRIVE_" → "ONE_DRIVE_" removed — it incorrectly mapped
-        # GOOGLE_DRIVE_* slugs to OneDrive when they fell through to Tier 6.
+        "DRIVE_": "ONE_DRIVE_",
     }
     for short_prefix, full_prefix in prefix_expansions.items():
         if upper.startswith(short_prefix):
@@ -981,25 +983,6 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     slug_key = tool_slug.upper().strip()
 
-    # Gamma generation slugs must go through the dedicated async wrapper tools
-    # (generateDocument, generatePresentation, generateWebpage) — NOT composioExecute.
-    # Calling GAMMA_GENERATE_* via composioExecute creates duplicate documents because
-    # the LLM also calls the native gamma tools simultaneously.
-    _GAMMA_GENERATION_SLUGS = {
-        "GAMMA_GENERATE_GAMMA",
-        "GAMMA_GENERATE_WEBPAGE",
-        "GAMMA_GENERATE_DOCUMENT",
-        "GAMMA_GENERATE_PRESENTATION",
-    }
-    if slug_key in _GAMMA_GENERATION_SLUGS:
-        logger.warning(f"Composio: Blocking direct {slug_key} via composioExecute — use native gamma tools instead")
-        return (
-            "Gamma content generation must be done via the dedicated tools: "
-            "generateDocument, generatePresentation, or generateWebpage. "
-            "Do NOT call composioExecute with GAMMA_GENERATE_GAMMA — it will create duplicates. "
-            "Call the appropriate generateDocument, generatePresentation, or generateWebpage tool directly."
-        )
-
     # Circuit breaker: check if this slug has failed too many times
     if _failed_slugs.get(slug_key, 0) >= _CB_MAX_FAILURES:
         logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")
@@ -1133,6 +1116,25 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
             await publish_tool_completed(call_id, voice_result[:100])
+            # Fire-and-forget logging — zero latency impact
+            log_composio_call(
+                user_id=getattr(settings, 'composio_user_id', None),
+                slug=resolved_slug,
+                arguments=arguments,
+                result_data=result.get("data"),
+                voice_result=voice_result,
+                success=True,
+                error_message=None,
+                duration_ms=duration_ms,
+            )
+            if "PERPLEXITYAI" in resolved_slug.upper():
+                log_perplexity_search(
+                    user_id=getattr(settings, 'composio_user_id', None),
+                    arguments=arguments,
+                    result_data=result.get("data"),
+                    duration_ms=duration_ms,
+                    success=True,
+                )
             # Schema NOT included in return — clean voice result only.
             # LLM context stays uncluttered on success. Schema cleared in finally.
             return voice_result
@@ -1141,6 +1143,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             error_str = str(error)
             logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
             await publish_tool_error(call_id, error_str[:100])
+            # Fire-and-forget failure logging — zero latency impact
+            log_composio_call(
+                user_id=getattr(settings, 'composio_user_id', None),
+                slug=resolved_slug,
+                arguments=arguments,
+                result_data=None,
+                voice_result="",
+                success=False,
+                error_message=error_str,
+                duration_ms=duration_ms,
+            )
+            if "PERPLEXITYAI" in resolved_slug.upper():
+                log_perplexity_search(
+                    user_id=getattr(settings, 'composio_user_id', None),
+                    arguments=arguments,
+                    result_data=None,
+                    duration_ms=duration_ms,
+                    success=False,
+                    error_message=error_str,
+                )
 
             # Distinguish parameter errors (recoverable) from auth/unknown errors
             error_lower = error_str.lower()

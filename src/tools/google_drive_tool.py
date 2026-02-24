@@ -17,6 +17,7 @@ tools are used automatically (GOOGLEDRIVE_FIND_FILE, GOOGLEDRIVE_DOWNLOAD_FILE).
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any, Dict, Optional, Literal
 
@@ -46,7 +47,7 @@ def _get_composio_client():
     if _composio_client is None:
         try:
             from composio import Composio
-            _composio_client = Composio(api_key=settings.composio_api_key)
+            _composio_client = Composio(api_key=os.getenv("COMPOSIO_API_KEY"))
         except Exception as e:
             logger.warning(f"Could not initialise Composio client: {e}")
     return _composio_client
@@ -58,7 +59,7 @@ async def _composio_execute(slug: str, arguments: dict) -> dict:
         client = _get_composio_client()
         if client is None:
             raise RuntimeError("Composio client unavailable")
-        user_id = settings.composio_user_id or "default"
+        user_id = os.getenv("COMPOSIO_USER_ID", "default")
         return client.tools.execute(
             slug,
             arguments,

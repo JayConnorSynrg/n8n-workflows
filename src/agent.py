@@ -22,10 +22,22 @@ from livekit.agents import (
 )
 from livekit.plugins import silero, deepgram, cartesia, openai
 
+import re
+
 # OPTIMIZED: Turn detector loaded lazily to reduce cold start (saves ~300-500ms)
 # Moved from module-level import to on-demand loading in get_turn_detector()
 HAS_TURN_DETECTOR = None  # Will be set on first check
 _turn_detector_model = None
+
+# Session greeting registry — prevents re-greeting on reconnect within same process
+_greeted_rooms: dict = {}
+
+# Wake word gate state
+_wake_gate_suppress: bool = False
+_AIO_WAKE_PATTERN = re.compile(
+    r'\b(AIO|A\.I\.O\.|aye[- ]?oh?|ayo|eyoh|eye[- ]?oh|a[- ]\.?i[- ]\.?o)\b',
+    re.IGNORECASE
+)
 
 
 def get_turn_detector():
@@ -57,10 +69,9 @@ from .tools.agent_context_tool import (
     get_session_summary_tool,
     warm_session_cache,
     invalidate_session_cache,
-    set_current_session_id as _set_context_session_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
-from .tools.gamma_tool import get_notification_queue, gamma_generation_in_progress
+from .tools.gamma_tool import get_notification_queue
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
@@ -69,11 +80,9 @@ from .utils.short_term_memory import clear_session as clear_session_memory
 from .utils.task_tracker import TaskTracker
 from .utils.session_facts import (
     store_fact as _store_fact,
-    get_all_facts as _get_all_facts,
     clear_facts as _clear_facts,
 )
 from .utils import pg_logger as _pg_logger
-from .utils import pg_session_store as _pg_session_store
 from .utils import user_identity as _user_identity
 
 # Initialize logging
@@ -85,13 +94,11 @@ try:
     from .memory import memory_store as _mem_store
     from .memory import session_writer as _session_writer
     from .memory import capture as _mem_capture
-    from .memory import embedder as _embedder
     _MEM_AVAILABLE = True
 except Exception as _mem_err:
     _mem_store = None  # type: ignore[assignment]
     _session_writer = None  # type: ignore[assignment]
     _mem_capture = None  # type: ignore[assignment]
-    _embedder = None  # type: ignore[assignment]
     _MEM_AVAILABLE = False
 
 # =============================================================================
@@ -111,6 +118,7 @@ CRITICAL RULES
 4 Keep responses to 1-2 sentences maximum
 5 MINIMAL CONFIRMATIONS - Ask once confirm once move on
 6 ALWAYS respond in English only regardless of what language appears in tool results or context
+7 NEVER SPEAK INTERNAL TOOL NAMES - Never say "composio" "composioExecute" "composioBatchExecute" "listComposioTools" "getComposioToolSchema" "planComposioTask" or any SCREAMING CASE slug like GMAIL SEND EMAIL or COMPOSIO SEARCH WEB in spoken responses — describe actions in plain language only such as "searching the web" or "sending that email"
 
 YOUR TOOLS
 
@@ -126,7 +134,7 @@ Immediate read tools no confirmation needed
 - getFile: Open a specific file from a previous search
 - queryDatabase: Look up records or run analytics
 - knowledgeBase with action search: Find stored knowledge
-- checkContext: Query the PostgreSQL session database — ALWAYS call this when asked about session context, history, or what has been discussed. Never say you lack access; call the tool.
+- checkContext: Remember what was discussed earlier
 - recall: Reference earlier results without re-fetching
 - recallDrive: Reference earlier Drive results
 - memoryStatus: See what is in session memory
@@ -150,6 +158,7 @@ When a user says "Connected", "Done", or "I clicked it" after an auth link:
     Google Sheets: composioExecute GOOGLESHEETS_LIST_SPREADSHEETS
     Gmail: composioExecute GMAIL_LIST_EMAILS max_results=1
     Notion: composioExecute NOTION_SEARCH_NOTION_PAGE query="test"
+    Gamma: call listComposioTools(service="gamma") — if it returns GAMMA_GENERATE_GAMMA the connection is live
   If the test call succeeds: say "Great — [service] is connected and ready"
   If the test call fails: say "The connection did not save — let me send you a fresh auth link" then call manageConnections connect again
   NEVER assume a connection is active just because the user said "Connected" — always verify with a test call
@@ -175,7 +184,32 @@ Always use the EXACT full slug as listed never shorten or guess
 For single tools that you need data back from use composioExecute instead
 If tools are independent batch them in one composioBatchExecute call they run in parallel
 Add a step field 1 2 3 to control order when one tool depends on another
-If a tool returns a parameter error the error message will include required parameters retry immediately with correct arguments
+
+FAILURE RECOVERY PROTOCOLS — follow these exactly when a tool call fails
+
+PARAMETER ERROR (missing field invalid format validation error):
+The error response already includes the required schema — read the required fields and retry ONCE with the correct arguments
+If the retry still fails: call getComposioToolSchema(tool_slug="EXACT_SLUG") to get the full parameter schema then retry with correct arguments
+Never ask the user for parameters that the schema defines — resolve them from the schema yourself
+
+AUTH ERROR (forbidden 403 unauthorized token expired access denied):
+Step 1: Extract the service name from the slug prefix (MICROSOFT_TEAMS_* → microsoft_teams, GMAIL_* → gmail, GOOGLESHEETS_* → google_sheets, GMAIL_* → gmail, NOTION_* → notion, GITHUB_* → github, SLACK_* → slack)
+Step 2: Call manageConnections(action="connect", service="<service_name>") — this sends the auth link to the user via email automatically
+Step 3: Tell the user: "Your [service] connection has expired — I sent a reconnection link to your email. Click it and let me know when done"
+Step 4: When user confirms, call manageConnections(action="refresh") then verify with a lightweight test call
+
+SLUG NOT FOUND (tool does not exist unknown slug):
+Step 1: Call listComposioTools(service="<service_name>") to get exact available slugs for that service
+Step 2: Pick the closest matching slug from the results and retry
+Never guess or modify a slug — use only what listComposioTools returns
+
+SERVICE NOT CONNECTED (service not in catalog):
+Call manageConnections(action="status") to see what is connected
+If the service is missing call manageConnections(action="connect", service="<service_name>") to initiate connection
+EXCEPTION — Gamma (generates presentations, documents, webpages): Gamma requires a manual API key connection.
+  Do NOT call manageConnections(action="connect", service="gamma") — it will fail with an auth error.
+  Instead tell the user: "Gamma needs a one-time manual setup. Go to app.composio.dev, find Gamma under Apps, and connect it with your Gamma API key. Once done, say 'refresh my tools'."
+  After user says "done" or "refreshed": call manageConnections(action="refresh") then listComposioTools(service="gamma") to verify, then proceed with generatePresentation/generateDocument/generateWebpage.
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first
@@ -329,7 +363,8 @@ ONLY use GAMMA_GENERATE_GAMMA when the user explicitly says:
   "create" | "make" | "build" | "generate" | "write me a" | "put together a" | "new presentation" | "new document"
   If there is any ambiguity whether they want to find vs. create — ask ONE clarifying question before generating
 
-RULE 9 - Gamma content creation: use GAMMA_GENERATE_GAMMA via composioExecute
+RULE 9 - Gamma content creation: use the dedicated native tools — generatePresentation, generateDocument, generateWebpage
+⚠️ CRITICAL: NEVER call composioExecute or composioBatchExecute with GAMMA_GENERATE_GAMMA or any GAMMA_* creation slug — those are blocked and will always fail. The only correct entry points for generation are the three native tools listed below.
 Gamma creates four distinct content types. You MUST identify the correct format before calling GAMMA_GENERATE_GAMMA.
 
 STEP 0 — IDENTIFY CONTENT TYPE (do this BEFORE calling any Gamma tool)
@@ -357,18 +392,21 @@ If user intent is ambiguous (e.g. just "create something about X"):
   NEVER default to "presentation" when another type is more likely from context
 
 GAMMA CREATION CHAIN — always MODE B sequential (step 1 → step 2 silent, step 2 email speaks):
-Step 1: composioExecute GAMMA_GENERATE_GAMMA
-  Required: inputText=<content> textMode="generate"
-  Required: format=<"presentation"|"document"|"webpage"|"social"> — determined by STEP 0 above
-  Required: sharingOptions={"externalAccess":"view"}
-  Optional: numCards=<count per type defaults above> cardOptions={"dimensions":"<value per type>"} textOptions={"tone":"professional","audience":"<target>"}
-  The response object contains a "url" field AND a "gammaUrl" field — check BOTH
-  If status="completed": gammaUrl (or url) is immediately available — capture it and IMMEDIATELY proceed to step 2
-  If status="timeout": capture generationId from response and proceed to step 1b
-  NEVER speak between step 1 and step 2 — proceed silently
-Step 1b (only if status="timeout"): composioExecute GAMMA_GET_GAMMA_FILE_URLS generation_id=<generationId from step 1>
-  Wait a few seconds then retry — poll until status="completed"
-  Capture: gammaUrl from completed response
+Step 1: Call the correct NATIVE TOOL (NOT composioExecute) based on format determined in STEP 0:
+  format="presentation" or "social" → generatePresentation(topic=<content>, slide_count=<numCards>, tone="professional")
+  format="document" → generateDocument(topic=<content>, tone="professional")
+  format="webpage" → generateWebpage(topic=<content>, tone="professional")
+  Required: topic must contain the full content description — this is passed as inputText internally
+  Required: sharingOptions externalAccess "view" is set automatically — link will be publicly accessible
+  The tool returns IMMEDIATELY with an ETA message (~45 seconds) — generation runs in background.
+  Background polling (GAMMA_GET_GAMMA_FILE_URLS) is automatic — do NOT call it manually.
+  NEVER speak between step 1 and step 2 — wait silently for the completion notification.
+  On completion, I will proactively say "Your <type> is ready — would you like me to email you the link?"
+  If the user says yes — proceed to step 2 with the gammaUrl from session facts.
+
+Step 1b (handled automatically — for reference only): background poller calls GAMMA_GET_GAMMA_FILE_URLS every 5s
+  When status="completed": gammaUrl is extracted and I speak the completion notification
+  Capture: gammaUrl from completed response — stored in session facts as gamma_<type>_url
 
 Step 2: composioExecute GMAIL_SEND_EMAIL to=jayconnor@synrgscaling.com subject=<content title> body="Your <type> is ready — open it here:\n\n<gammaUrl>"
   IMPORTANT: to field must be jayconnor@synrgscaling.com — never use a different default email
@@ -795,6 +833,14 @@ async def entrypoint(ctx: JobContext):
             logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
     # ── End per-user memory routing ──────────────────────────────────────────
 
+    # Reset Composio slug index per-session so newly connected services are visible
+    try:
+        from .tools import composio_router as _cr
+        _cr._slug_index_built = False
+        logger.info("[Composio] Slug index reset — will rebuild on first tool call this session")
+    except Exception:  # nosec B110
+        pass
+
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
         vad = ctx.proc.userdata["vad"]
@@ -879,6 +925,10 @@ async def entrypoint(ctx: JobContext):
         logger.info("Using VAD-only turn detection (faster startup)")
 
     session = AgentSession(**session_kwargs)
+
+    def _detect_aio_wake_word(text: str) -> bool:
+        """Detect AIO wake word variants in transcript text."""
+        return bool(_AIO_WAKE_PATTERN.search(text))
 
     # =========================================================================
     # VAD DEBUG: Monitor if VAD is receiving audio frames
@@ -975,10 +1025,6 @@ async def entrypoint(ctx: JobContext):
         min_continuation_gap_seconds=8.0,     # 8s cooldown between Case 2/3 injections
     )
 
-    # Session transcript buffer for LLM memory synthesis (OpenClaw write-back)
-    # Populated by on_user_input_transcribed + on_conversation_item_added
-    _session_transcript: list[dict] = []
-
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
@@ -1029,8 +1075,6 @@ async def entrypoint(ctx: JobContext):
             _task_tracker.record_user_message(text)
             # Log user turn to PostgreSQL for full session context
             asyncio.create_task(_pg_logger.log_turn(session_id, "user", text))
-            # Buffer for OpenClaw LLM synthesis at session end
-            _session_transcript.append({"role": "user", "content": text})
 
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
@@ -1042,6 +1086,24 @@ async def entrypoint(ctx: JobContext):
             log_type="transcript.user"
         ))
 
+        # Wake word gate: suppress agent response if no wake word detected
+        # and no active task objective is currently being executed
+        global _wake_gate_suppress
+        _transcript_text = text or ''
+        _has_wake_word = _detect_aio_wake_word(_transcript_text)
+        _has_active_task = (
+            _task_tracker is not None
+            and getattr(_task_tracker, '_current_objective', None) is not None
+            and not getattr(_task_tracker, '_objective_completed', True)
+        )
+        if _has_wake_word:
+            _wake_gate_suppress = False
+            logger.debug("[WakeGate] Wake word detected — response allowed")
+        elif not _has_active_task:
+            _wake_gate_suppress = True
+            logger.debug("[WakeGate] No wake word — suppressing next response")
+        # If _has_active_task and no wake word: allow continuation of current task (don't suppress)
+
     @session.on("agent_state_changed")
     def on_agent_state_changed(ev):
         """Agent state: initializing, idle, listening, thinking, speaking."""
@@ -1050,6 +1112,16 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
+            # Wake word gate: if suppress flag is set, interrupt before generating response
+            global _wake_gate_suppress
+            if _wake_gate_suppress:
+                _wake_gate_suppress = False  # Always reset
+                logger.info("[WakeGate] Suppressing agent response — no wake word for this turn")
+                try:
+                    session.interrupt()
+                except Exception as _wg_err:
+                    logger.debug("[WakeGate] interrupt() call failed: %s", _wg_err)
+                return  # Skip task tracker update
             _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}',
@@ -1138,8 +1210,6 @@ async def entrypoint(ctx: JobContext):
             # Log assistant turn to PostgreSQL for full session context
             if text:
                 asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text))
-                # Buffer for OpenClaw LLM synthesis at session end
-                _session_transcript.append({"role": "assistant", "content": text})
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
@@ -1148,6 +1218,30 @@ async def entrypoint(ctx: JobContext):
         # Notify task tracker that tool work completed — heartbeat uses this
         # to determine whether a multi-step task was in progress
         _task_tracker.record_tool_call_completed()
+
+        # Load tool call result into session facts so the LLM is aware of what
+        # already ran. Prevents re-calling gamma tools (or any tool) on heartbeat
+        # continuation turns where the LLM would otherwise have no call history.
+        try:
+            tool_name = (
+                getattr(ev, 'name', None)
+                or getattr(ev, 'function_name', None)
+                or getattr(ev, 'tool_name', None)
+                or ''
+            )
+            tool_output = str(getattr(ev, 'output', '') or getattr(ev, 'result', '') or '')
+            if tool_name:
+                _store_fact(session_id, 'last_tool_called', tool_name)
+                if tool_output:
+                    _store_fact(session_id, 'last_tool_output', tool_output[:300])
+                # Gamma-specific: flag that generation was started so the LLM
+                # can reference it in follow-up turns without re-triggering
+                if tool_name in ('generatePresentation', 'generateDocument', 'generateWebpage'):
+                    _store_fact(session_id, 'gamma_generation_started', tool_name)
+                    _store_fact(session_id, 'gamma_generation_output', tool_output[:300])
+                    logger.info(f"[GammaTracker] Stored {tool_name} call in session facts")
+        except Exception as e:
+            logger.debug(f"on_function_tools_executed: session fact storage skipped: {e}")
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev):
@@ -1581,14 +1675,10 @@ async def entrypoint(ctx: JobContext):
         # Pre-warm context cache in background while session starts
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
-        _set_context_session_id(session_id)  # checkContext uses this to query correct session
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
-        # Initialize pg_logger pool — awaited so the pool is guaranteed ready before
-        # we query it for prior session context injection below.
-        # init_pool is idempotent: no-op if pool already exists from a prior session.
+        # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
-            await _pg_logger.init_pool(settings.postgres_url)
-            _pg_session_store.set_current_user_id(_user_id)
+            asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
 
         await session.start(
             agent=agent,
@@ -1647,42 +1737,24 @@ async def entrypoint(ctx: JobContext):
         except Exception as _nud_err:
             logger.debug(f"[Heartbeat] New user detection failed (non-critical): {_nud_err}")
 
-    # ── PostgreSQL secondary memory — inject prior session facts into chat_ctx ──
-    # Pool is guaranteed ready (awaited above). Load the most recent value per key
-    # across all prior sessions for this user and inject as a silent context note.
-    # The LLM can reference these facts without re-asking the user.
-    if settings.postgres_url:
-        try:
-            _pg_prior_facts = await _pg_session_store.load_user_context(_user_id)
-            if _pg_prior_facts:
-                _pg_context_block = _pg_session_store.build_context_injection(_pg_prior_facts)
-                if _pg_context_block:
-                    _ctx = (
-                        getattr(session, "chat_ctx", None)
-                        or getattr(session, "_chat_ctx", None)
-                    )
-                    if _ctx is not None:
-                        _ctx.append(role="assistant", text=_pg_context_block)
-                        logger.info(
-                            f"[PgStore] Injected {len(_pg_prior_facts)} prior session facts into chat_ctx"
-                        )
-        except Exception as _pge:
-            logger.warning(f"[PgStore] Prior context injection failed (non-critical): {_pge}")
-
     # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
-    try:
-        await session.say(
-            "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
-            allow_interruptions=False
-        )
-        logger.info("AIO greeting sent successfully")
-    except Exception as e:
-        logger.error(f"CRITICAL: session.say() failed: {e}")
+    if not _greeted_rooms.get(ctx.room.name):
         try:
-            await _publish_error(str(e)[:200], code="agent_error", severity="high")
-        except Exception:  # nosec B110 - error publishing must not block error handling
-            pass
+            await session.say(
+                "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
+                allow_interruptions=False
+            )
+            _greeted_rooms[ctx.room.name] = True
+            logger.info("AIO greeting sent successfully")
+        except Exception as e:
+            logger.error(f"CRITICAL: session.say() failed: {e}")
+            try:
+                await _publish_error(str(e)[:200], code="agent_error", severity="high")
+            except Exception:  # nosec B110 - error publishing must not block error handling
+                pass
+    else:
+        logger.info("[Session] Reconnect detected — skipping greeting for room: %s", ctx.room.name)
 
     # Start Gamma notification monitor — watches the module-level queue and proactively
     # speaks completion messages when background presentation generation finishes.
@@ -1742,7 +1814,7 @@ async def entrypoint(ctx: JobContext):
                                 _ctx = (getattr(session_ref, "chat_ctx", None)
                                         or getattr(session_ref, "_chat_ctx", None))
                                 if _ctx is not None:
-                                    _ctx.append(role="assistant", text=context_note)
+                                    _ctx.add_message(role="assistant", content=context_note)
                                     logger.info(
                                         f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
                                     )
@@ -1762,10 +1834,10 @@ async def entrypoint(ctx: JobContext):
                         except Exception as retry_err:
                             logger.error(f"Gamma monitor: retry also failed job={job_id}: {retry_err}")
                 else:
-                    # Silent notification (instant completion path) — no voice output,
-                    # but still inject URL into session_facts and chat_ctx for coherence.
+                    # Silent notification (e.g. instant completion path) — no voice output,
+                    # but still perform session_facts + chat_ctx injection so the LLM has the URL
                     if gamma_url:
-                        logger.info(f"Gamma monitor: silent injection job={job_id} url={gamma_url[:60]}")
+                        logger.info(f"Gamma monitor: silent notification — injecting context job={job_id} url={gamma_url[:60]}")
                         generation_id = notification.get("generation_id", "")
                         _store_fact(session_id, f"gamma_{content_type}_url", gamma_url)
                         _store_fact(session_id, f"gamma_{content_type}_topic", topic)
@@ -1784,12 +1856,14 @@ async def entrypoint(ctx: JobContext):
                             _ctx = (getattr(session_ref, "chat_ctx", None)
                                     or getattr(session_ref, "_chat_ctx", None))
                             if _ctx is not None:
-                                _ctx.append(role="assistant", text=context_note)
+                                _ctx.add_message(role="assistant", content=context_note)
                                 logger.info(f"Gamma monitor: silent context injected job={job_id}")
+                            else:
+                                logger.debug(f"Gamma monitor: chat_ctx unavailable for silent injection job={job_id}")
                         except Exception as ctx_err:
-                            logger.warning(f"Gamma monitor: silent chat_ctx injection failed job={job_id}: {ctx_err}")
+                            logger.warning(f"Gamma monitor: silent chat_ctx inject failed job={job_id}: {ctx_err}")
                     else:
-                        logger.warning(f"Gamma monitor: empty message in notification job={job_id}")
+                        logger.warning(f"Gamma monitor: empty message and no gamma_url in notification job={job_id}")
 
             except asyncio.CancelledError:
                 logger.info("Gamma notification monitor cancelled")
@@ -1840,7 +1914,10 @@ async def entrypoint(ctx: JobContext):
             if before <= max_messages + 1:
                 return  # Nothing to trim
 
-            chat_ctx.truncate(max_items=max_messages)
+            # truncate() uses .messages internally (SDK version mismatch) — slice directly
+            keep = chat_ctx.items[-max_messages:]
+            del chat_ctx.items[:]
+            chat_ctx.items.extend(keep)
             removed = before - len(chat_ctx.items)
 
             logger.info(
@@ -1879,16 +1956,15 @@ async def entrypoint(ctx: JobContext):
                 if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
                     await _trim_chat_context(session_ref, max_messages=20)
 
+                # Suppress continuation while gamma is generating in the background.
+                # Without this guard the heartbeat re-triggers the LLM every 6s,
+                # which calls generatePresentation/generateDocument again in a loop.
+                from .tools.gamma_tool import is_gamma_pending
+                if is_gamma_pending():
+                    continue  # Gamma poller is running — stay silent until it completes
+
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
-
-                # Gate: suppress continuation while Gamma is polling in background.
-                # generateDocument/generatePresentation return immediately with an interim
-                # phrase ("I'm on it..."), arming Case 3. Without this gate the heartbeat
-                # fires at 6s and triggers another generateDocument → duplicate cascade.
-                if gamma_generation_in_progress():
-                    logger.debug("[Heartbeat] Gamma in progress — suppressing continuation to prevent cascade")
-                    continue
 
                 prompt = task_tracker_ref.get_continuation_prompt()
                 logger.info(f"[Heartbeat] Stalled task detected — injecting continuation")
@@ -1968,6 +2044,9 @@ async def entrypoint(ctx: JobContext):
     while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1.0)
 
+    # Clean up session greeting registry entry for this room
+    _greeted_rooms.pop(ctx.room.name, None)
+
     # Clean up session memory when session ends
     session_id = ctx.room.name or "livekit-agent"
 
@@ -2000,55 +2079,12 @@ async def entrypoint(ctx: JobContext):
         finally:
             _mem_capture.reset_session()
 
-    # OpenClaw LLM synthesis write-back — update USER.md, SOUL.md, MEMORY.md
-    # Separate timeout from fact flush; failures never block session cleanup
-    if _MEM_AVAILABLE and _session_writer is not None and len(_session_transcript) >= 4:
-        try:
-            await asyncio.wait_for(
-                _session_writer.synthesize_and_update(
-                    _user_mem_dir,
-                    _session_transcript,
-                    settings.fireworks_api_key,
-                    settings.fireworks_model,
-                ),
-                timeout=25.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("[Memory] Synthesis timed out — memory files not updated this session")
-        except Exception as _me:
-            logger.error("[Memory] Synthesis failed: %s", _me)
-
-    # Save session summary to PostgreSQL conversation_log
-    if _session_transcript:
-        _turn_count = len(_session_transcript)
-        _user_turns = sum(1 for t in _session_transcript if t.get("role") == "user")
-        _summary = (
-            f"Session ended. Room: {session_id}. "
-            f"{_turn_count} total turns ({_user_turns} from user). "
-            f"Logged at session close."
-        )
-        asyncio.create_task(_pg_logger.save_session_summary(session_id, _summary))
-        logger.info("[PgLogger] Session summary queued for %s (%d turns)", session_id, _turn_count)
-
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
-
-    # Persist session facts to PostgreSQL before clearing volatile store.
-    # Enables cross-session context injection for returning users.
-    if settings.postgres_url:
-        try:
-            _facts_to_save = _get_all_facts(session_id)
-            if _facts_to_save:
-                await _pg_session_store.save_session_facts(session_id, _user_id, _facts_to_save)
-        except Exception as _pgsave_err:
-            logger.warning(f"[PgStore] Fact save failed (non-critical): {_pgsave_err}")
-
     cleared_facts = _clear_facts(session_id)
     if cleared_facts:
         logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
 
-    if _embedder is not None:
-        _embedder.unload_model()
     logger.info("Agent session ended")
 
 

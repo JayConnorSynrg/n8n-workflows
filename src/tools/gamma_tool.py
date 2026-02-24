@@ -15,7 +15,6 @@ Pattern:
 """
 import asyncio
 import logging
-import threading
 import uuid
 from typing import Optional
 
@@ -26,34 +25,29 @@ logger = logging.getLogger(__name__)
 # Module-level notification queue — agent.py monitors this and calls session.say()
 _notification_queue: asyncio.Queue = asyncio.Queue()
 
+# Module-level set of in-progress gamma job IDs.
+# Heartbeat monitor checks is_gamma_pending() to suppress continuation injection
+# while background polling is running (prevents the LLM re-calling the tool in a loop).
+_gamma_pending_jobs: set = set()
+
 
 def get_notification_queue() -> asyncio.Queue:
     return _notification_queue
 
 
-# ── Gamma in-progress counter (for heartbeat cascade suppression) ─────────────
-# Incremented when a background poll task starts; decremented when it finishes.
-# Heartbeat reads this to suppress Case 2/3 continuations during long Gamma waits.
-_gamma_in_progress_count: int = 0
-_gamma_count_lock = threading.Lock()
+def set_gamma_pending(job_id: str) -> None:
+    """Mark a gamma job as in-progress. Call when background poller starts."""
+    _gamma_pending_jobs.add(job_id)
 
 
-def gamma_generation_in_progress() -> bool:
-    """Returns True if at least one Gamma generation is currently polling in background."""
-    with _gamma_count_lock:
-        return _gamma_in_progress_count > 0
+def clear_gamma_pending(job_id: str) -> None:
+    """Mark a gamma job as complete. Call when poller resolves."""
+    _gamma_pending_jobs.discard(job_id)
 
 
-def _increment_gamma_count() -> None:
-    global _gamma_in_progress_count
-    with _gamma_count_lock:
-        _gamma_in_progress_count += 1
-
-
-def _decrement_gamma_count() -> None:
-    global _gamma_in_progress_count
-    with _gamma_count_lock:
-        _gamma_in_progress_count = max(0, _gamma_in_progress_count - 1)
+def is_gamma_pending() -> bool:
+    """True if any gamma generation is currently running in the background."""
+    return len(_gamma_pending_jobs) > 0
 
 
 GAMMA_ETA_SECONDS = 45  # ~45s typical generation time
@@ -75,68 +69,65 @@ async def _poll_gamma_completion(
     from ..config import get_settings
     from . import composio_router as _router
 
-    _increment_gamma_count()
-    try:
-        for attempt in range(GAMMA_MAX_POLLS):
-            await asyncio.sleep(GAMMA_POLL_INTERVAL)
-            try:
-                settings = get_settings()
-                client = _router._get_client(settings)
-                user_id = settings.composio_user_id.strip()
+    for attempt in range(GAMMA_MAX_POLLS):
+        await asyncio.sleep(GAMMA_POLL_INTERVAL)
+        try:
+            settings = get_settings()
+            client = _router._get_client(settings)
+            user_id = settings.composio_user_id.strip()
 
-                raw = await asyncio.to_thread(
-                    lambda: client.tools.execute(
-                        "GAMMA_GET_GAMMA_FILE_URLS",
-                        {"generation_id": generation_id},
-                        user_id=user_id,
-                        dangerously_skip_version_check=True,
-                    )
+            raw = await asyncio.to_thread(
+                lambda: client.tools.execute(
+                    "GAMMA_GET_GAMMA_FILE_URLS",
+                    {"generation_id": generation_id},
+                    user_id=user_id,
+                    dangerously_skip_version_check=True,
                 )
+            )
 
-                logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} raw={str(raw)[:200]}")
+            logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} raw={str(raw)[:200]}")
 
-                if not raw.get("successful"):
-                    logger.warning(f"Gamma poll [{job_id}] not successful yet: {raw.get('error', 'no error field')}")
-                    continue
+            if not raw.get("successful"):
+                logger.warning(f"Gamma poll [{job_id}] not successful yet: {raw.get('error', 'no error field')}")
+                continue
 
-                data = raw.get("data", {})
-                status = data.get("status", "pending")
-                logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
+            data = raw.get("data", {})
+            status = data.get("status", "pending")
+            logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
 
-                if status == "completed":
-                    gamma_url = data.get("gammaUrl", "")
-                    message = (
-                        f"Your {content_type} on {topic} is ready. "
-                        f"You can find it at gamma dot app. "
-                        f"Would you like me to email you the link?"
-                    )
-                    await _notification_queue.put({
-                        "message": message,
-                        "gamma_url": gamma_url,
-                        "generation_id": generation_id,
-                        "topic": topic,
-                        "job_id": job_id,
-                        "content_type": content_type,
-                    })
-                    return
+            if status == "completed":
+                gamma_url = data.get("gammaUrl", "")
+                clear_gamma_pending(job_id)  # Release heartbeat suppression
+                message = (
+                    f"Your {content_type} on {topic} is ready. "
+                    f"You can find it at gamma dot app. "
+                    f"Would you like me to email you the link?"
+                )
+                await _notification_queue.put({
+                    "message": message,
+                    "gamma_url": gamma_url,
+                    "generation_id": generation_id,
+                    "topic": topic,
+                    "job_id": job_id,
+                    "content_type": content_type,
+                })
+                return
 
-            except Exception as e:
-                logger.error(f"Gamma poll error [{job_id}] attempt={attempt + 1}: {e}")
+        except Exception as e:
+            logger.error(f"Gamma poll error [{job_id}] attempt={attempt + 1}: {e}")
 
-        # Timeout after max polls
-        await _notification_queue.put({
-            "message": (
-                f"Your {content_type} on {topic} is taking longer than expected. "
-                f"Please check your Gamma workspace directly at gamma dot app."
-            ),
-            "gamma_url": None,
-            "topic": topic,
-            "job_id": job_id,
-            "content_type": content_type,
-        })
-    finally:
-        _decrement_gamma_count()
-        logger.debug(f"Gamma poll [{job_id}] finished — in_progress counter decremented")
+    # Timeout after max polls — release pending flag regardless
+    clear_gamma_pending(job_id)
+    await _notification_queue.put({
+        "message": (
+            f"Your {content_type} on {topic} is taking longer than expected. "
+            f"Please check your Gamma workspace directly at gamma dot app."
+        ),
+        "gamma_url": None,
+        "topic": topic,
+        "job_id": job_id,
+        "content_type": content_type,
+    })
 
 
 async def _start_gamma_generation(
@@ -177,8 +168,8 @@ async def _start_gamma_generation(
                     },
                     "imageOptions": {
                         "source": "aiGenerated",
-                        "style": "minimal, black and white, line art",
-                        "model": "flux-1-pro",
+                        "model": "flux-1-quick",
+                        "style": "minimal, clean, professional",
                     },
                     "sharingOptions": {
                         "externalAccess": "view",
@@ -202,29 +193,30 @@ async def _start_gamma_generation(
         status = data.get("status", "unknown")
 
         if status == "completed" and data.get("gammaUrl"):
-            # Instant completion: URL is available immediately.
-            # Return the actual URL in the tool response so the LLM can use it.
-            # Also push a silent notification so _gamma_notification_monitor injects
-            # the URL into chat_ctx for multi-turn coherence (prevent re-generation).
-            gamma_url = data["gammaUrl"]
+            # Rare: instant completion — push silent notification so _gamma_notification_monitor
+            # injects gammaUrl into chat_ctx without speaking (prevents re-generation on follow-up turns)
+            gamma_url = data.get("gammaUrl")
             await _notification_queue.put({
-                "message": "",  # Silent — LLM already has URL via tool return value
+                "message": "",  # Silent — no voice output, just context injection
                 "gamma_url": gamma_url,
                 "generation_id": generation_id or "",
                 "topic": topic,
                 "job_id": job_id,
                 "content_type": content_type,
             })
-            logger.info(f"Gamma instant completion [{job_id}] url={gamma_url}")
             return (
-                f"Your {content_type} on {topic} is complete. "
-                f"Gamma link: {gamma_url} — "
-                f"Would you like me to email this link to you?"
+                f"Your {content_type} on {topic} is already ready. "
+                f"Gamma link: {gamma_url} "
+                f"Would you like me to email you the link?"
             )
 
         if not generation_id:
             logger.error(f"Gamma returned no generationId [{job_id}]: {data}")
             return f"I could not start the {content_type}. Please try again."
+
+        # Mark job as pending before spawning poller — heartbeat will suppress
+        # continuation injection until clear_gamma_pending() is called on completion
+        set_gamma_pending(job_id)
 
         # Spawn background poller — asyncio.create_task keeps it alive independently
         asyncio.create_task(
@@ -334,5 +326,35 @@ async def generate_webpage_async(
         slide_count=10,
         tone=tone or "professional",
         content_type="webpage",
+        job_id=job_id,
+    )
+
+
+# =============================================================================
+# PUBLIC TOOL: generateSocialPost
+# =============================================================================
+
+@llm.function_tool(
+    name="generateSocialPost",
+    description=(
+        "Generate a Gamma AI social media post on any topic. "
+        "Creates Instagram, LinkedIn, or TikTok-ready visual content. "
+        "Runs in the background — agent notifies user when ready. "
+        "Use when user asks to create a social post, Instagram post, LinkedIn post, or social media content."
+    ),
+)
+async def generate_social_async(
+    topic: str,
+    tone: Optional[str] = "professional",
+) -> str:
+    """Start async Gamma social post generation (format=social)."""
+    job_id = str(uuid.uuid4())[:8]
+    logger.info(f"Starting Gamma social post [{job_id}] topic={topic!r}")
+    return await _start_gamma_generation(
+        topic=topic,
+        format="social",
+        slide_count=4,
+        tone=tone or "professional",
+        content_type="social post",
         job_id=job_id,
     )
