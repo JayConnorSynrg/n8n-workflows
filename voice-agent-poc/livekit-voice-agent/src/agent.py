@@ -22,10 +22,22 @@ from livekit.agents import (
 )
 from livekit.plugins import silero, deepgram, cartesia, openai
 
+import re
+
 # OPTIMIZED: Turn detector loaded lazily to reduce cold start (saves ~300-500ms)
 # Moved from module-level import to on-demand loading in get_turn_detector()
 HAS_TURN_DETECTOR = None  # Will be set on first check
 _turn_detector_model = None
+
+# Session greeting registry — prevents re-greeting on reconnect within same process
+_greeted_rooms: dict = {}
+
+# Wake word gate state
+_wake_gate_suppress: bool = False
+_AIO_WAKE_PATTERN = re.compile(
+    r'\b(AIO|A\.I\.O\.|aye[- ]?oh?|ayo|eyoh|eye[- ]?oh|a[- ]\.?i[- ]\.?o)\b',
+    re.IGNORECASE
+)
 
 
 def get_turn_detector():
@@ -888,6 +900,10 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(**session_kwargs)
 
+    def _detect_aio_wake_word(text: str) -> bool:
+        """Detect AIO wake word variants in transcript text."""
+        return bool(_AIO_WAKE_PATTERN.search(text))
+
     # =========================================================================
     # VAD DEBUG: Monitor if VAD is receiving audio frames
     # =========================================================================
@@ -1044,6 +1060,24 @@ async def entrypoint(ctx: JobContext):
             log_type="transcript.user"
         ))
 
+        # Wake word gate: suppress agent response if no wake word detected
+        # and no active task objective is currently being executed
+        global _wake_gate_suppress
+        _transcript_text = text or ''
+        _has_wake_word = _detect_aio_wake_word(_transcript_text)
+        _has_active_task = (
+            _task_tracker is not None
+            and getattr(_task_tracker, '_current_objective', None) is not None
+            and not getattr(_task_tracker, '_objective_completed', True)
+        )
+        if _has_wake_word:
+            _wake_gate_suppress = False
+            logger.debug("[WakeGate] Wake word detected — response allowed")
+        elif not _has_active_task:
+            _wake_gate_suppress = True
+            logger.debug("[WakeGate] No wake word — suppressing next response")
+        # If _has_active_task and no wake word: allow continuation of current task (don't suppress)
+
     @session.on("agent_state_changed")
     def on_agent_state_changed(ev):
         """Agent state: initializing, idle, listening, thinking, speaking."""
@@ -1052,6 +1086,16 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
+            # Wake word gate: if suppress flag is set, interrupt before generating response
+            global _wake_gate_suppress
+            if _wake_gate_suppress:
+                _wake_gate_suppress = False  # Always reset
+                logger.info("[WakeGate] Suppressing agent response — no wake word for this turn")
+                try:
+                    session.interrupt()
+                except Exception as _wg_err:
+                    logger.debug("[WakeGate] interrupt() call failed: %s", _wg_err)
+                return  # Skip task tracker update
             _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}',
@@ -1669,18 +1713,22 @@ async def entrypoint(ctx: JobContext):
 
     # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
-    try:
-        await session.say(
-            "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
-            allow_interruptions=False
-        )
-        logger.info("AIO greeting sent successfully")
-    except Exception as e:
-        logger.error(f"CRITICAL: session.say() failed: {e}")
+    if not _greeted_rooms.get(ctx.room.name):
         try:
-            await _publish_error(str(e)[:200], code="agent_error", severity="high")
-        except Exception:  # nosec B110 - error publishing must not block error handling
-            pass
+            await session.say(
+                "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
+                allow_interruptions=False
+            )
+            _greeted_rooms[ctx.room.name] = True
+            logger.info("AIO greeting sent successfully")
+        except Exception as e:
+            logger.error(f"CRITICAL: session.say() failed: {e}")
+            try:
+                await _publish_error(str(e)[:200], code="agent_error", severity="high")
+            except Exception:  # nosec B110 - error publishing must not block error handling
+                pass
+    else:
+        logger.info("[Session] Reconnect detected — skipping greeting for room: %s", ctx.room.name)
 
     # Start Gamma notification monitor — watches the module-level queue and proactively
     # speaks completion messages when background presentation generation finishes.
@@ -1740,7 +1788,7 @@ async def entrypoint(ctx: JobContext):
                                 _ctx = (getattr(session_ref, "chat_ctx", None)
                                         or getattr(session_ref, "_chat_ctx", None))
                                 if _ctx is not None:
-                                    _ctx.append(role="assistant", text=context_note)
+                                    _ctx.add_message(role="assistant", content=context_note)
                                     logger.info(
                                         f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
                                     )
@@ -1782,7 +1830,7 @@ async def entrypoint(ctx: JobContext):
                             _ctx = (getattr(session_ref, "chat_ctx", None)
                                     or getattr(session_ref, "_chat_ctx", None))
                             if _ctx is not None:
-                                _ctx.append(role="assistant", text=context_note)
+                                _ctx.add_message(role="assistant", content=context_note)
                                 logger.info(f"Gamma monitor: silent context injected job={job_id}")
                             else:
                                 logger.debug(f"Gamma monitor: chat_ctx unavailable for silent injection job={job_id}")
@@ -1966,6 +2014,9 @@ async def entrypoint(ctx: JobContext):
     # The room closes when all participants leave or it times out
     while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1.0)
+
+    # Clean up session greeting registry entry for this room
+    _greeted_rooms.pop(ctx.room.name, None)
 
     # Clean up session memory when session ends
     session_id = ctx.room.name or "livekit-agent"
