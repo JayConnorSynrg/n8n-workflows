@@ -1433,11 +1433,10 @@ async def get_connected_services_status() -> str:
 async def initiate_service_connection(service: str) -> tuple[str, str]:
     """Initiate a new Composio connection for a service.
 
-    Calls COMPOSIO_INITIATE_CONNECTION via SDK directly (bypassing _extract_voice_result
-    so the redirect URL is not lost). Returns (auth_url, display_name) on success,
-    or (error_message, "") on failure.
+    Uses client.tools.execute("COMPOSIO_MANAGE_CONNECTIONS", ...) — the same
+    proven path as all other Composio tool calls in this module.
 
-    Response shape: data.response_data.redirect_url (confirmed via live test)
+    Returns (auth_url, display_name) on success, or (error_message, "") on failure.
     """
     service_lower = service.lower().strip().replace(" ", "_")
     service_lower = _SERVICE_ALIASES.get(service_lower, service_lower)
@@ -1453,8 +1452,11 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
 
     def _execute():
         return client.tools.execute(
-            "COMPOSIO_INITIATE_CONNECTION",
-            {"toolkit": service_lower, "parameters": {}},
+            "COMPOSIO_MANAGE_CONNECTIONS",
+            {
+                "action": "initiate",
+                "toolkit": service_lower,
+            },
             user_id=user_id,
             dangerously_skip_version_check=True,
         )
@@ -1464,7 +1466,6 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         if result.get("successful"):
             data = result.get("data", {})
             response_data = data.get("response_data", {})
-            # SDK returns redirect_url (snake_case confirmed via live test)
             redirect_url = (
                 response_data.get("redirect_url")
                 or response_data.get("redirectUrl")
@@ -1472,17 +1473,15 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
                 or response_data.get("authUrl")
             )
             if redirect_url:
-                logger.info(f"Composio: Connection initiated for {service_lower}, status={response_data.get('status')}")
-                # Track when this auth link was sent for expiry detection
+                logger.info(f"Composio: Connection initiated for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
-            # Already connected — redirect_url absent when no OAuth needed
             status = response_data.get("status", "")
             if status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
         error = result.get("error") or "Could not get connection URL"
         logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
-        return f"I couldn't set up the {display_name} connection right now. Please try again or check that {display_name} is available in your Composio account.", ""
+        return f"I couldn't set up the {display_name} connection right now.", ""
     except Exception as exc:
         logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
         return f"Connection setup for {display_name} failed due to a system error", ""

@@ -23,6 +23,7 @@ from livekit.agents import llm
 
 from ..config import get_settings
 from ..utils.context_cache import get_cache_manager
+from ..utils.session_facts import get_fact as _get_fact
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -167,7 +168,8 @@ async def query_context_tool(
 
     if cached_result is not None:
         logger.debug(f"Cache HIT for {query_type} (key={cache_key[:50]}...)")
-        return _format_context_results(query_type, cached_result)
+        base_result = _format_context_results(query_type, cached_result)
+        return _append_gamma_facts(base_result, effective_session_id)
 
     logger.debug(f"Cache MISS for {query_type}, fetching from webhook...")
 
@@ -210,7 +212,8 @@ async def query_context_tool(
         elif query_type == "global_context":
             cache_manager.set_global_context(result, ttl=ttl)
 
-        return _format_context_results(query_type, result)
+        base_result = _format_context_results(query_type, result)
+        return _append_gamma_facts(base_result, effective_session_id)
 
     except aiohttp.ClientError as e:
         logger.error(f"Network error querying context: {e}")
@@ -218,6 +221,32 @@ async def query_context_tool(
     except Exception as e:
         logger.error(f"Unexpected error in query_context: {e}")
         return f"Unexpected error: {str(e)}"
+
+
+def _append_gamma_facts(base: str, session_id: str) -> str:
+    """Append the most-recent Gamma generation details from session_facts to a context string.
+
+    These keys survive chat_ctx trimming because they live in the in-process
+    session_facts store, not in the LLM chat history.  The LLM needs them to
+    answer questions like 'what was the URL of the presentation you just made?'
+    without re-triggering generation.
+    """
+    gamma_url = _get_fact(session_id, "gammaUrl")
+    gamma_gen_id = _get_fact(session_id, "gammaGenerationId")
+    gamma_topic = _get_fact(session_id, "gammaLastTopic")
+    if not gamma_url and not gamma_gen_id:
+        return base
+    parts = []
+    if gamma_url:
+        parts.append(f"URL={gamma_url}")
+    if gamma_gen_id:
+        parts.append(f"generationId={gamma_gen_id}")
+    if gamma_topic:
+        parts.append(f"topic={gamma_topic}")
+    gamma_line = f"Last Gamma presentation: {', '.join(parts)}"
+    if base:
+        return f"{base}\n{gamma_line}"
+    return gamma_line
 
 
 def _format_context_results(query_type: str, result: dict) -> str:
