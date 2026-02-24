@@ -8,7 +8,6 @@ Architecture:
 - Every tool publishes lifecycle events (tool.call → tool.executing → tool.completed)
   to the LiveKit data channel for real-time client-side observability
 """
-import asyncio
 import time
 from typing import Optional
 
@@ -71,7 +70,7 @@ async def send_email_async(
             summary=f"Known email recipient: {to}",
             metadata={"preference_key": f"known_email_recipient:{to}"},
         )
-    except Exception:
+    except Exception:  # nosec B110
         pass  # Never block email delivery for preference capture failure
     return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
 
@@ -182,26 +181,16 @@ async def database_query_async(query: str) -> str:
 
 @llm.function_tool(
     name="checkContext",
-    description=(
-        "Query the PostgreSQL session database for conversation history, tool calls, and "
-        "what was discussed this session. Always call this when the user asks about session "
-        "context, history, or what has been discussed. "
-        "query_type options: session_context (default), tool_history, global_context, "
-        "search_history, custom_query. search_query: keyword for search_history/custom_query."
-    ),
+    description="Check conversation context or session history to recall what was discussed earlier.",
 )
 async def query_context_async(
-    query_type: str = "session_context",
-    search_query: Optional[str] = None,
+    context_type: str,
+    query: Optional[str] = None,
 ) -> str:
-    """Query session context from PostgreSQL via n8n webhook."""
-    call_id = await publish_tool_start("checkContext", {"query_type": query_type})
+    """Query session context - runs synchronously for immediate results."""
+    call_id = await publish_tool_start("checkContext", {"context_type": context_type})
     await publish_tool_executing(call_id)
-    # Use keyword args — session_id is resolved internally from _current_session_id
-    result = await agent_context_tool.query_context_tool(
-        query_type=query_type,
-        search_query=search_query,
-    )
+    result = await agent_context_tool.query_context_tool(context_type, query)
     await publish_tool_completed(call_id, result[:100] if result else "")
     return result
 
@@ -246,7 +235,7 @@ async def recall_data_async(
     # Level 2: Cross-session SQLite memory (only when a query is provided)
     if query and _MEMORY_AVAILABLE and _memory_store is not None:
         try:
-            results = await asyncio.to_thread(_memory_store.search, query, top_k=3)
+            results = _memory_store.search(query, top_k=3)
             if results:
                 lines = ["From long-term memory:"]
                 for i, r in enumerate(results, 1):
@@ -297,38 +286,6 @@ def _format_recall(result: dict) -> str:
 async def memory_summary_async() -> str:
     """Memory summary."""
     return get_memory_summary()
-
-
-# =============================================================================
-# RECALL PRIOR SESSION — PostgreSQL secondary memory query
-# =============================================================================
-
-@llm.function_tool(
-    name="recallSession",
-    description=(
-        "Search prior session history stored in PostgreSQL for specific topics, "
-        "URLs, decisions, or information discussed in previous sessions. "
-        "Use when the user asks about something from a past session or references "
-        "something they previously mentioned. Returns matching conversation excerpts."
-    ),
-)
-async def recall_session_async(query: str) -> str:
-    """Search prior session conversation history via PostgreSQL secondary memory."""
-    call_id = await publish_tool_start("recallSession", {"query": query[:40]})
-    await publish_tool_executing(call_id)
-
-    try:
-        from ..utils import pg_session_store as _pg_session_store
-        user_id = _pg_session_store.get_current_user_id()
-
-        results = await _pg_session_store.search_prior_sessions(user_id, query, limit=6)
-        formatted = _pg_session_store.format_search_results(results)
-
-        await publish_tool_completed(call_id, f"{len(results)} results")
-        return formatted
-    except Exception as exc:
-        await publish_tool_error(call_id, str(exc)[:100])
-        return f"Could not search prior session history right now: {exc}"
 
 
 @llm.function_tool(
@@ -418,6 +375,7 @@ async def search_contacts_async(query: str) -> str:
 _last_refresh_time: float = 0.0
 
 _N8N_GMAIL_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/execute-gmail"
+_N8N_LEAD_GEN_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/aio-lead-gen"
 _AUTH_EMAIL_RECIPIENT = "jayconnor@synrgscaling.com"
 
 
@@ -724,6 +682,50 @@ async def composio_execute_async(
 
 
 # =============================================================================
+# LEAD GENERATION - ASYNC BACKGROUND (RESULTS DELIVERED VIA EMAIL)
+# =============================================================================
+
+@llm.function_tool(
+    name="runLeadGen",
+    description=(
+        "Generate a targeted lead list and deliver results via email. "
+        "Mode 'results' scrapes leads and emails a Google Sheet link + CSV. "
+        "Mode 'enrich' adds AI-powered research per lead and creates a Gmail draft. "
+        "Confirm lead_type, mode, and limit with the user before running."
+    ),
+)
+async def run_lead_gen_async(
+    lead_type: str,
+    mode: str = "results",
+    limit: int = 5,
+) -> str:
+    """Fire-and-forget lead gen workflow — n8n returns immediately, results arrive via email."""
+    import aiohttp
+    call_id = await publish_tool_start("runLeadGen", {"lead_type": lead_type, "mode": mode, "limit": limit})
+    await publish_tool_executing(call_id)
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            async with http_session.post(
+                _N8N_LEAD_GEN_WEBHOOK,
+                json={"lead_type": lead_type, "mode": mode, "limit": limit},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status in (200, 201, 202):
+                    mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
+                    result = f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
+                    await publish_tool_completed(call_id, result)
+                    return result
+                else:
+                    err = f"Lead gen webhook returned {resp.status}"
+                    await publish_tool_error(call_id, err)
+                    return f"Lead generation failed to start. Status: {resp.status}"
+    except Exception as e:
+        err = str(e)[:200]
+        await publish_tool_error(call_id, err)
+        return f"Lead generation error: {err}"
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -735,7 +737,6 @@ ASYNC_TOOLS = [
     recall_data_async,
     recall_drive_data_async,
     memory_summary_async,
-    recall_session_async,
     vector_store_async,
     database_query_async,
     query_context_async,
@@ -750,6 +751,8 @@ ASYNC_TOOLS = [
     get_tool_schema_async,         # FALLBACK: single tool schema if not in cache
     composio_batch_execute_async,  # STEP 3: execute with correct slugs and params
     composio_execute_async,        # SYNC: single read where LLM needs result before next step
+    # Lead Generation (async background — results delivered via email)
+    run_lead_gen_async,            # ASYNC: scrape + enrich leads, email results
     # Gamma (async background generation with proactive session notification)
     generate_presentation_async,   # ASYNC: slide decks
     generate_document_async,       # ASYNC: documents / reports
