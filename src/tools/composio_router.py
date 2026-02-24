@@ -1400,7 +1400,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 try:
                     def _try_refresh():
                         acct_resp = client.connected_accounts.list(user_ids=[user_id])
-                        for acct in (acct_resp.items if hasattr(acct_resp, "items") else []):
+                        for acct in _extract_items_from_response(acct_resp):
                             tk = getattr(getattr(acct, "toolkit", None), "slug", "") or ""
                             if tk.lower() == service_key.lower() and getattr(acct, "id", None):
                                 client.connected_accounts.refresh(acct.id)
@@ -1515,8 +1515,7 @@ async def get_connected_services_status() -> str:
                 return client.connected_accounts.list(user_ids=[user_id])
 
             response = await asyncio.to_thread(_fetch)
-            items = response.items if hasattr(response, "items") else []
-            for account in items:
+            for account in _extract_items_from_response(response):
                 toolkit_obj = getattr(account, "toolkit", None)
                 slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
                 status = getattr(account, "status", None)
