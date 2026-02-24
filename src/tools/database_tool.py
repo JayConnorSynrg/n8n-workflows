@@ -49,7 +49,7 @@ async def query_database_tool(
     Returns:
         Search results formatted as text with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/vector-search-tool"
+    webhook_url = f"{settings.n8n_webhook_base_url}/voice-query-vector-db"
 
     # Build payload matching n8n workflow expected format
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
