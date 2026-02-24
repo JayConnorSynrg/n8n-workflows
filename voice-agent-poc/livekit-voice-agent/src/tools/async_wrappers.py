@@ -747,7 +747,10 @@ async def composio_execute_async(
         return "Could not parse the arguments try again with valid JSON"
 
     call_id = f"composioExecute_{tool_slug[:20]}_{int(time.time()*1000)%100000}"
-    await publish_tool_start(call_id, {"slug": tool_slug})
+
+    # publish_tool_start is NOT called here — execute_composio_tool() in composio_router.py
+    # publishes its own tool.call event early (before slug resolution). Calling it here too
+    # would send 2 tool.call events to the UI for a single tool execution.
 
     # Synchronous execution — blocks until result, LLM can reason about it
     try:

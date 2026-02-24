@@ -96,7 +96,9 @@ async def _poll_gamma_completion(
             logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
 
             if status == "completed":
-                gamma_url = data.get("gammaUrl", "")
+                # GAMMA_GET_GAMMA_FILE_URLS response: data.fileUrls.gamma_url (NOT data.gammaUrl)
+                file_urls = data.get("fileUrls") or {}
+                gamma_url = file_urls.get("gamma_url", "") or data.get("gammaUrl", "")
                 clear_gamma_pending(job_id)  # Release heartbeat suppression
                 message = (
                     f"Your {content_type} on {topic} is ready. "
@@ -181,8 +183,15 @@ async def _start_gamma_generation(
         )
 
         if not result.get("successful"):
-            error = result.get("error", "unknown error")
+            error = str(result.get("error", "unknown error"))
             logger.error(f"Gamma generate failed [{job_id}]: {error}")
+            error_lower = error.lower()
+            if any(k in error_lower for k in ("credit", "billing", "upgrade", "quota", "insufficient")):
+                return (
+                    f"Gamma credits are exhausted. "
+                    f"Tell the user their Gamma account is out of credits and they need to visit gamma.app/settings/billing to refill. "
+                    f"Do not retry Gamma generation."
+                )
             return (
                 f"I had trouble starting the {content_type}. "
                 f"Please make sure Gamma is connected and try again."
@@ -192,10 +201,12 @@ async def _start_gamma_generation(
         generation_id = data.get("generationId")
         status = data.get("status", "unknown")
 
-        if status == "completed" and data.get("gammaUrl"):
+        if status == "completed" and (data.get("fileUrls") or data.get("gammaUrl")):
             # Rare: instant completion — push silent notification so _gamma_notification_monitor
             # injects gammaUrl into chat_ctx without speaking (prevents re-generation on follow-up turns)
-            gamma_url = data.get("gammaUrl")
+            # GAMMA_GET_GAMMA_FILE_URLS response: data.fileUrls.gamma_url (NOT data.gammaUrl)
+            file_urls = data.get("fileUrls") or {}
+            gamma_url = file_urls.get("gamma_url", "") or data.get("gammaUrl", "")
             await _notification_queue.put({
                 "message": "",  # Silent — no voice output, just context injection
                 "gamma_url": gamma_url,
