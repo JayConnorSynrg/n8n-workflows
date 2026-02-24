@@ -167,9 +167,7 @@ async def _start_gamma_generation(
                         "language": "en",
                     },
                     "imageOptions": {
-                        "source": "aiGenerated",
-                        "style": "minimal, black and white, line art",
-                        "model": "flux-1-pro",
+                        "source": "pictographic",
                     },
                     "sharingOptions": {
                         "externalAccess": "view",
@@ -326,5 +324,35 @@ async def generate_webpage_async(
         slide_count=10,
         tone=tone or "professional",
         content_type="webpage",
+        job_id=job_id,
+    )
+
+
+# =============================================================================
+# PUBLIC TOOL: generateSocialPost
+# =============================================================================
+
+@llm.function_tool(
+    name="generateSocialPost",
+    description=(
+        "Generate a Gamma AI social media post on any topic. "
+        "Creates Instagram, LinkedIn, or TikTok-ready visual content. "
+        "Runs in the background — agent notifies user when ready. "
+        "Use when user asks to create a social post, Instagram post, LinkedIn post, or social media content."
+    ),
+)
+async def generate_social_async(
+    topic: str,
+    tone: Optional[str] = "professional",
+) -> str:
+    """Start async Gamma social post generation (format=social)."""
+    job_id = str(uuid.uuid4())[:8]
+    logger.info(f"Starting Gamma social post [{job_id}] topic={topic!r}")
+    return await _start_gamma_generation(
+        topic=topic,
+        format="social",
+        slide_count=4,
+        tone=tone or "professional",
+        content_type="social post",
         job_id=job_id,
     )
