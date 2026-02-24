@@ -13,7 +13,6 @@ Short-Term Memory:
 All query results are automatically stored in short-term memory for 5 minutes,
 enabling cross-tool data reuse (e.g., email query results, save to vector store).
 """
-import json
 import logging
 import uuid
 from typing import Optional
@@ -50,29 +49,15 @@ async def query_database_tool(
     Returns:
         Search results formatted as text with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/voice-query-vector-db"
+    webhook_url = f"{settings.n8n_webhook_base_url}/vector-search-tool"
 
     # Build payload matching n8n workflow expected format
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
 
-    # Build structured query from user input
-    structured_query = {"semantic_query": query}
-    if filters:
-        try:
-            structured_query["filters"] = json.loads(filters)
-        except json.JSONDecodeError:
-            pass
-
     payload = {
+        "query": query,
+        "topK": max_results,
         "intent_id": intent_id,
-        "session_id": "livekit-agent",
-        # For initial deployment, use no-op callback
-        "callback_url": f"{settings.n8n_webhook_base_url}/callback-noop",
-        "parameters": {
-            "user_query": query,
-            "structured_query": structured_query,
-            "max_results": max_results,
-        }
     }
 
     try:
@@ -87,47 +72,54 @@ async def query_database_tool(
                 result = await response.json()
 
                 if response.status == 200:
-                    status = result.get("status", "")
-                    if status == "COMPLETED":
-                        # Prefer voice_response if available
-                        voice_response = result.get("voice_response")
+                    # Support both response shapes:
+                    # AIO shape:    { status, voice_response, result: { documents } }
+                    # Legacy shape: { results, query, totalResults }
+                    voice_response = result.get("voice_response")
 
-                        # Get results for memory storage
-                        results = result.get("result", {}).get("documents", [])
+                    # AIO shape: result.documents
+                    _result_obj = result.get("result", {})
+                    documents = _result_obj.get("documents", [])
+                    # z02K1a54akYXMkyj shape: result.top_results (Pinecone metadata)
+                    if not documents:
+                        raw_results = _result_obj.get("top_results", []) or result.get("results", [])
+                        documents = [
+                            {
+                                "title": (r.get("metadata") or {}).get("name") or r.get("source", f"Result {i+1}"),
+                                "snippet": (r.get("metadata") or {}).get("text_excerpt") or r.get("text", ""),
+                                "score": r.get("score", 0),
+                            }
+                            for i, r in enumerate(raw_results)
+                        ]
 
-                        # Store to short-term memory for cross-tool use
-                        if results:
-                            summary = f"Found {len(results)} results for: {query[:50]}"
-                            store_tool_result(
-                                tool_name="query_database",
-                                operation="search",
-                                data=results,
-                                summary=summary,
-                                suggested_uses=["email_report", "reference", "analysis"],
-                            )
-                            logger.info(f"Database query results stored to STM: {len(results)} items")
+                    # Store to short-term memory for cross-tool use
+                    if documents:
+                        summary = f"Found {len(documents)} results for: {query[:50]}"
+                        store_tool_result(
+                            tool_name="query_database",
+                            operation="search",
+                            data=documents,
+                            summary=summary,
+                            suggested_uses=["email_report", "reference", "analysis"],
+                        )
+                        logger.info(f"Database query results stored to STM: {len(documents)} items")
 
-                        if voice_response:
-                            return voice_response + "\n\n[Memory: Results saved for follow-up use]"
+                    if voice_response:
+                        return voice_response + "\n\n[Memory: Results saved for follow-up use]"
 
-                        # Fall back to formatting results
-                        if not results:
-                            return "No results found for your query."
+                    if not documents:
+                        return result.get("message", "No results found for your query.")
 
-                        # Format results for voice
-                        formatted = []
-                        for i, r in enumerate(results[:max_results], 1):
-                            title = r.get("title", f"Result {i}")
-                            snippet = r.get("snippet", r.get("content", ""))[:200]
-                            formatted.append(f"{i}. {title}: {snippet}")
+                    # Format results for voice
+                    formatted = []
+                    for i, r in enumerate(documents[:max_results], 1):
+                        title = r.get("title", f"Result {i}")
+                        snippet = r.get("snippet", r.get("text", r.get("content", "")))[:200]
+                        formatted.append(f"{i}. {title}: {snippet}")
 
-                        return "\n".join(formatted) + "\n\n[Memory: Results saved for follow-up use]"
-                    elif status == "CANCELLED":
-                        return result.get("voice_response", "Search was cancelled")
-                    else:
-                        return "Search completed but no results returned."
+                    return "\n".join(formatted) + "\n\n[Memory: Results saved for follow-up use]"
                 else:
-                    error_msg = result.get("error", result.get("voice_response", "Unknown error"))
+                    error_msg = result.get("error", result.get("message", "Unknown error"))
                     return f"Search failed: {error_msg}"
 
     except aiohttp.ClientError as e:
