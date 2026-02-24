@@ -1231,7 +1231,6 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
         elif "idle" in state_str:
-            global _last_agent_listening_time
             _last_agent_listening_time = time.time()
             _task_tracker.record_agent_idle()
             total = tracker.end("total_latency")
