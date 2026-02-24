@@ -1141,7 +1141,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         else:
             error = result.get("error", "unknown error")
             error_str = str(error)
-            logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
+            # Extract status_code and log_id (Composio standardized these in Jan 2026 — always present on errors)
+            result_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            status_code = result_data.get("status_code")
+            log_id = result.get("log_id")
+            logger.warning(
+                f"[TOOL_CALL] Composio FAIL: {resolved_slug} "
+                f"status_code={status_code} log_id={log_id} error={error_str!r} ({duration_ms}ms)"
+            )
             await publish_tool_error(call_id, error_str[:100])
             # Fire-and-forget failure logging — zero latency impact
             log_composio_call(
@@ -1164,22 +1171,46 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     error_message=error_str,
                 )
 
-            # Distinguish parameter errors (recoverable) from auth/unknown errors
+            # Classify error using status_code (reliable, Jan 2026+) then string fallback.
+            # CRITICAL DISTINCTION: 401 = token expired (circuit break + re-auth)
+            #                       403 = permission denied (inform user, do NOT circuit break)
             error_lower = error_str.lower()
-            is_param_error = any(s in error_lower for s in [
-                "missing", "invalid request data", "required field",
-                "invalid value", "validation", "expected",
-                "must be provided", "are required", "is required",
-                "parameter", "argument",
-            ])
-            is_auth_error = any(s in error_lower for s in [
-                "unauthorized", "401", "token expired", "invalid token",
-                "access token", "forbidden", "403", "access denied",
-                "reauthenticate", "re-authenticate", "authentication failed",
-                "oauth", "credentials expired", "not authorized", "permission denied",
-            ])
+            is_param_error = (
+                status_code in (400, 422)
+                or (status_code not in (401, 403) and any(s in error_lower for s in [
+                    "missing", "invalid request data", "required field",
+                    "invalid value", "validation", "expected",
+                    "must be provided", "are required", "is required",
+                    "parameter", "argument",
+                ]))
+            )
+            # 401 = token/credential issue → trip circuit breaker, require re-auth
+            is_auth_error = (
+                status_code == 401
+                or (status_code is None and any(s in error_lower for s in [
+                    "unauthorized", "401", "token expired", "invalid token",
+                    "access token", "credentials expired", "reauthenticate",
+                    "re-authenticate", "authentication failed", "oauth",
+                ]))
+            )
+            # 403 = permission denied → OAuth is fine, resource/scope issue, do NOT circuit break
+            is_permission_error = (
+                status_code == 403
+                or (status_code is None and not is_auth_error and any(s in error_lower for s in [
+                    "forbidden", "403", "access denied", "not authorized", "permission denied",
+                ]))
+            )
+            # 429 = rate limited → transient, do NOT circuit break
+            is_rate_limited = (
+                status_code == 429
+                or "429" in error_str
+                or "rate limit" in error_lower
+                or "too many requests" in error_lower
+            )
+            # 5xx = server/infra error → transient, do NOT circuit break
+            is_server_error = status_code is not None and 500 <= status_code < 600
 
-            if is_param_error:
+            if is_param_error and not is_auth_error and not is_permission_error:
                 # Parameter validation error — include schema in response so LLM can self-correct.
                 # Schema comes from _active_call_schemas (no extra API call).
                 # This IS the one case where schema enters LLM context — intentionally, to fix params.
@@ -1197,20 +1228,53 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     )
 
             elif is_auth_error:
-                # OAuth token expired — the connection exists but the token underneath
-                # has expired. Mark the entire service as auth-failed so other tools don't retry.
+                # OAuth token expired (401) — circuit break entire service until re-authenticated.
                 service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
                 _service_auth_failed[service_key] = True
                 _failed_slugs[slug_key] = _CB_MAX_FAILURES  # trip circuit breaker
                 service_display = service_key.replace("_", " ").title()
                 logger.warning(
-                    f"[TOOL_CALL] Composio AUTH EXPIRED: {resolved_slug} service={service_key} error={error_str!r}"
+                    f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
+                    f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
                 return (
                     f"The {service_display} connection needs to be re-authorized. "
                     f"Tell the user their {service_display} access has expired and they need to reconnect it. "
                     f"You can say 'reconnect {service_display}' to send them a new authorization link via email. "
                     f"Do not retry {service_display} tools until reconnected."
+                )
+
+            elif is_permission_error:
+                # Permission denied (403) — OAuth token is valid, user lacks access to this resource.
+                # Do NOT circuit break — other tools on this service still work.
+                service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
+                service_display = service_key.replace("_", " ").title()
+                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                logger.warning(
+                    f"[TOOL_CALL] Composio PERMISSION (403): {resolved_slug} "
+                    f"service={service_key} log_id={log_id} error={error_str!r}"
+                )
+                return (
+                    f"I don't have permission to access that {tool_display} resource. "
+                    f"Your {service_display} connection is still active — this is a permissions issue on that specific resource. "
+                    f"Try a different resource or check your {service_display} account permissions."
+                )
+
+            elif is_rate_limited:
+                # Rate limited (429) — transient, do NOT circuit break
+                logger.warning(f"[TOOL_CALL] Composio RATE LIMITED: {resolved_slug} log_id={log_id}")
+                return (
+                    f"The {tool_display} service is temporarily rate-limited. "
+                    f"Wait a moment and try again."
+                )
+
+            elif is_server_error:
+                # Server/infra error (5xx) — transient, increment but don't max out circuit breaker
+                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                logger.warning(f"[TOOL_CALL] Composio SERVER ERROR {status_code}: {resolved_slug} log_id={log_id}")
+                return (
+                    f"The {tool_display} service returned a temporary error. "
+                    f"You may retry once."
                 )
 
             else:
