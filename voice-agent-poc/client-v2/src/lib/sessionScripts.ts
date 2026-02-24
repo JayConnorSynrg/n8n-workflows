@@ -41,6 +41,7 @@ const emailSendScript: SessionScript = {
       event: {
         type: 'transcript.user',
         text: "Send a meeting summary to the executive team about today's Q4 planning session.",
+        is_final: true,
         timestamp: Date.now(),
       },
       label: 'User request received',
@@ -166,6 +167,7 @@ const multiToolScript: SessionScript = {
       event: {
         type: 'transcript.user',
         text: 'Find the board presentation from last week and email a link to Sarah at sarah@synrg.com',
+        is_final: true,
         timestamp: Date.now(),
       },
       label: 'User request received',
@@ -360,6 +362,7 @@ const errorRecoveryScript: SessionScript = {
       event: {
         type: 'transcript.user',
         text: 'Search my drive for the vendor contracts from Q3',
+        is_final: true,
         timestamp: Date.now(),
       },
       label: 'User request received',
@@ -469,6 +472,7 @@ const concurrentScript: SessionScript = {
       event: {
         type: 'transcript.user',
         text: "Give me a status update — check my emails, list recent drive files, and pull the latest context from our session.",
+        is_final: true,
         timestamp: Date.now(),
       },
       label: 'User request received',
