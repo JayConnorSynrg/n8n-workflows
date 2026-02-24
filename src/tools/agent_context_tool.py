@@ -44,17 +44,6 @@ CACHE_TTLS = {
     "custom_query": 60.0,       # 1 minute
 }
 
-# Module-level session_id — set once at session start by agent.py
-# Allows checkContext to query the correct session without the LLM knowing the ID
-_current_session_id: str = ""
-
-
-def set_current_session_id(session_id: str) -> None:
-    """Called by agent.py immediately after session_id is determined."""
-    global _current_session_id
-    _current_session_id = session_id
-    logger.info("[ContextTool] Session ID set: %s", session_id)
-
 
 def _make_cache_key(
     query_type: str,
@@ -111,33 +100,6 @@ async def _fetch_from_webhook(
             return await response.json()
 
 
-
-def _format_conversation_history(rows: list) -> str:
-    """Format conversation_log rows as a concise voice-friendly session summary."""
-    if not rows:
-        return "No conversation history found for this session yet."
-    user_turns = [r for r in rows if r.get("role") == "user"]
-    assistant_turns = [r for r in rows if r.get("role") == "assistant"]
-    total = len(rows)
-    # Last 6 meaningful exchange turns
-    recent = [r for r in rows if r.get("role") in ("user", "assistant")][-6:]
-    parts = []
-    for row in recent:
-        role = row.get("role", "")
-        text = str(row.get("content", ""))[:120].strip()
-        if role == "user":
-            parts.append(f"You: {text}")
-        elif role == "assistant":
-            parts.append(f"Me: {text}")
-    header = (
-        f"This session has {total} logged turns "
-        f"({len(user_turns)} from you, {len(assistant_turns)} from me)."
-    )
-    if parts:
-        return header + " Recent exchange: " + " | ".join(parts)
-    return header
-
-
 @llm.function_tool(
     name="query_context",
     description="""Query the agent's context database for session history, tool calls, or system data.
@@ -170,7 +132,7 @@ async def query_context_tool(
     Returns:
         Query results formatted for voice or error message
     """
-    effective_session_id = session_id or _current_session_id or "livekit-agent"
+    effective_session_id = session_id or "livekit-agent"
 
     # Validate custom_query has search_query
     if query_type == "custom_query" and not search_query:
@@ -191,24 +153,6 @@ async def query_context_tool(
 
     logger.debug(f"Cache MISS for {query_type}, fetching from webhook...")
 
-    # For session_context: read directly from PostgreSQL — no n8n webhook hop
-    if query_type == "session_context":
-        try:
-            from ..utils import pg_logger as _pg
-            rows = await _pg.read_session_history(effective_session_id, limit)
-            if rows:
-                formatted = _format_conversation_history(rows)
-                result_dict = {"data": rows, "message": formatted}
-                ttl = CACHE_TTLS["session_context"]
-                cache_manager.query_cache.set(cache_key, result_dict, ttl)
-                cache_manager.set_session_context(effective_session_id, result_dict, ttl)
-                logger.info("[ContextTool] session_context served from direct DB (%d turns)", len(rows))
-                return formatted
-            # No rows yet in DB — fall through to n8n webhook
-        except Exception as _db_err:
-            logger.debug("[ContextTool] Direct DB read failed, trying webhook: %s", _db_err)
-
-
     # Cache miss - fetch from webhook
     try:
         result = await _fetch_from_webhook(
@@ -222,6 +166,8 @@ async def query_context_tool(
         # Guard against empty/None responses from webhook
         if result is None:
             logger.warning(f"Webhook returned None for {query_type}")
+            if query_type == "session_context":
+                return "No conversation history recorded for this session yet."
             return "Could not reach the context service right now"
 
         # Check for errors
@@ -325,7 +271,7 @@ async def get_session_summary_tool(
     Returns:
         Session summary or error message
     """
-    effective_session_id = session_id or _current_session_id or "livekit-agent"
+    effective_session_id = session_id or "livekit-agent"
 
     # Check specialized session cache first
     cache_manager = get_cache_manager()
