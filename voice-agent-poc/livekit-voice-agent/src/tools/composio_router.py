@@ -19,6 +19,17 @@ from ..utils.room_publisher import (
     publish_tool_completed,
     publish_tool_error,
 )
+try:
+    from ..utils.tool_logger import log_composio_call, log_perplexity_search
+    _TOOL_LOGGER_AVAILABLE = True
+except Exception:  # nosec B110 — tool_logger is optional; never block tool execution
+    _TOOL_LOGGER_AVAILABLE = False
+
+    def log_composio_call(*_a, **_kw):  # type: ignore[misc]
+        pass
+
+    def log_perplexity_search(*_a, **_kw):  # type: ignore[misc]
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -1105,6 +1116,25 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
             await publish_tool_completed(call_id, voice_result[:100])
+            # Fire-and-forget logging — zero latency impact
+            log_composio_call(
+                user_id=getattr(settings, 'composio_user_id', None),
+                slug=resolved_slug,
+                arguments=arguments,
+                result_data=result.get("data"),
+                voice_result=voice_result,
+                success=True,
+                error_message=None,
+                duration_ms=duration_ms,
+            )
+            if "PERPLEXITYAI" in resolved_slug.upper():
+                log_perplexity_search(
+                    user_id=getattr(settings, 'composio_user_id', None),
+                    arguments=arguments,
+                    result_data=result.get("data"),
+                    duration_ms=duration_ms,
+                    success=True,
+                )
             # Schema NOT included in return — clean voice result only.
             # LLM context stays uncluttered on success. Schema cleared in finally.
             return voice_result
@@ -1113,6 +1143,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             error_str = str(error)
             logger.warning(f"[TOOL_CALL] Composio FAIL: {resolved_slug} error={error_str!r} ({duration_ms}ms)")
             await publish_tool_error(call_id, error_str[:100])
+            # Fire-and-forget failure logging — zero latency impact
+            log_composio_call(
+                user_id=getattr(settings, 'composio_user_id', None),
+                slug=resolved_slug,
+                arguments=arguments,
+                result_data=None,
+                voice_result="",
+                success=False,
+                error_message=error_str,
+                duration_ms=duration_ms,
+            )
+            if "PERPLEXITYAI" in resolved_slug.upper():
+                log_perplexity_search(
+                    user_id=getattr(settings, 'composio_user_id', None),
+                    arguments=arguments,
+                    result_data=None,
+                    duration_ms=duration_ms,
+                    success=False,
+                    error_message=error_str,
+                )
 
             # Distinguish parameter errors (recoverable) from auth/unknown errors
             error_lower = error_str.lower()
