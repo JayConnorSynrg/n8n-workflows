@@ -976,6 +976,25 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     slug_key = tool_slug.upper().strip()
 
+    # Gamma generation slugs must go through the dedicated async wrapper tools
+    # (generateDocument, generatePresentation, generateWebpage) — NOT composioExecute.
+    # Calling GAMMA_GENERATE_* via composioExecute creates duplicate documents because
+    # the LLM also calls the native gamma tools simultaneously.
+    _GAMMA_GENERATION_SLUGS = {
+        "GAMMA_GENERATE_GAMMA",
+        "GAMMA_GENERATE_WEBPAGE",
+        "GAMMA_GENERATE_DOCUMENT",
+        "GAMMA_GENERATE_PRESENTATION",
+    }
+    if slug_key in _GAMMA_GENERATION_SLUGS:
+        logger.warning(f"Composio: Blocking direct {slug_key} via composioExecute — use native gamma tools instead")
+        return (
+            "Gamma content generation must be done via the dedicated tools: "
+            "generateDocument, generatePresentation, or generateWebpage. "
+            "Do NOT call composioExecute with GAMMA_GENERATE_GAMMA — it will create duplicates. "
+            "Call the appropriate generateDocument, generatePresentation, or generateWebpage tool directly."
+        )
+
     # Circuit breaker: check if this slug has failed too many times
     if _failed_slugs.get(slug_key, 0) >= _CB_MAX_FAILURES:
         logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")

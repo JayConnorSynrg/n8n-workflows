@@ -171,11 +171,24 @@ async def _start_gamma_generation(
         status = data.get("status", "unknown")
 
         if status == "completed" and data.get("gammaUrl"):
-            # Rare: instant completion
+            # Instant completion: URL is available immediately.
+            # Return the actual URL in the tool response so the LLM can use it.
+            # Also push a silent notification so _gamma_notification_monitor injects
+            # the URL into chat_ctx for multi-turn coherence (prevent re-generation).
+            gamma_url = data["gammaUrl"]
+            await _notification_queue.put({
+                "message": "",  # Silent — LLM already has URL via tool return value
+                "gamma_url": gamma_url,
+                "generation_id": generation_id or "",
+                "topic": topic,
+                "job_id": job_id,
+                "content_type": content_type,
+            })
+            logger.info(f"Gamma instant completion [{job_id}] url={gamma_url}")
             return (
-                f"Your {content_type} on {topic} is already ready. "
-                f"You can view it at gamma dot app. "
-                f"Would you like me to email you the link?"
+                f"Your {content_type} on {topic} is complete. "
+                f"Gamma link: {gamma_url} — "
+                f"Would you like me to email this link to you?"
             )
 
         if not generation_id:
