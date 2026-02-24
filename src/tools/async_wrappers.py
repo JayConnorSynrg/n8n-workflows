@@ -8,6 +8,7 @@ Architecture:
 - Every tool publishes lifecycle events (tool.call → tool.executing → tool.completed)
   to the LiveKit data channel for real-time client-side observability
 """
+import asyncio
 import time
 from typing import Optional
 
@@ -245,7 +246,7 @@ async def recall_data_async(
     # Level 2: Cross-session SQLite memory (only when a query is provided)
     if query and _MEMORY_AVAILABLE and _memory_store is not None:
         try:
-            results = _memory_store.search(query, top_k=3)
+            results = await asyncio.to_thread(_memory_store.search, query, top_k=3)
             if results:
                 lines = ["From long-term memory:"]
                 for i, r in enumerate(results, 1):

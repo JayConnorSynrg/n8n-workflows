@@ -15,6 +15,7 @@ Pattern:
 """
 import asyncio
 import logging
+import threading
 import uuid
 from typing import Optional
 
@@ -28,6 +29,31 @@ _notification_queue: asyncio.Queue = asyncio.Queue()
 
 def get_notification_queue() -> asyncio.Queue:
     return _notification_queue
+
+
+# ── Gamma in-progress counter (for heartbeat cascade suppression) ─────────────
+# Incremented when a background poll task starts; decremented when it finishes.
+# Heartbeat reads this to suppress Case 2/3 continuations during long Gamma waits.
+_gamma_in_progress_count: int = 0
+_gamma_count_lock = threading.Lock()
+
+
+def gamma_generation_in_progress() -> bool:
+    """Returns True if at least one Gamma generation is currently polling in background."""
+    with _gamma_count_lock:
+        return _gamma_in_progress_count > 0
+
+
+def _increment_gamma_count() -> None:
+    global _gamma_in_progress_count
+    with _gamma_count_lock:
+        _gamma_in_progress_count += 1
+
+
+def _decrement_gamma_count() -> None:
+    global _gamma_in_progress_count
+    with _gamma_count_lock:
+        _gamma_in_progress_count = max(0, _gamma_in_progress_count - 1)
 
 
 GAMMA_ETA_SECONDS = 45  # ~45s typical generation time
@@ -49,63 +75,68 @@ async def _poll_gamma_completion(
     from ..config import get_settings
     from . import composio_router as _router
 
-    for attempt in range(GAMMA_MAX_POLLS):
-        await asyncio.sleep(GAMMA_POLL_INTERVAL)
-        try:
-            settings = get_settings()
-            client = _router._get_client(settings)
-            user_id = settings.composio_user_id.strip()
+    _increment_gamma_count()
+    try:
+        for attempt in range(GAMMA_MAX_POLLS):
+            await asyncio.sleep(GAMMA_POLL_INTERVAL)
+            try:
+                settings = get_settings()
+                client = _router._get_client(settings)
+                user_id = settings.composio_user_id.strip()
 
-            raw = await asyncio.to_thread(
-                lambda: client.tools.execute(
-                    "GAMMA_GET_GAMMA_FILE_URLS",
-                    {"generation_id": generation_id},
-                    user_id=user_id,
-                    dangerously_skip_version_check=True,
+                raw = await asyncio.to_thread(
+                    lambda: client.tools.execute(
+                        "GAMMA_GET_GAMMA_FILE_URLS",
+                        {"generation_id": generation_id},
+                        user_id=user_id,
+                        dangerously_skip_version_check=True,
+                    )
                 )
-            )
 
-            logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} raw={str(raw)[:200]}")
+                logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} raw={str(raw)[:200]}")
 
-            if not raw.get("successful"):
-                logger.warning(f"Gamma poll [{job_id}] not successful yet: {raw.get('error', 'no error field')}")
-                continue
+                if not raw.get("successful"):
+                    logger.warning(f"Gamma poll [{job_id}] not successful yet: {raw.get('error', 'no error field')}")
+                    continue
 
-            data = raw.get("data", {})
-            status = data.get("status", "pending")
-            logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
+                data = raw.get("data", {})
+                status = data.get("status", "pending")
+                logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
 
-            if status == "completed":
-                gamma_url = data.get("gammaUrl", "")
-                message = (
-                    f"Your {content_type} on {topic} is ready. "
-                    f"You can find it at gamma dot app. "
-                    f"Would you like me to email you the link?"
-                )
-                await _notification_queue.put({
-                    "message": message,
-                    "gamma_url": gamma_url,
-                    "generation_id": generation_id,
-                    "topic": topic,
-                    "job_id": job_id,
-                    "content_type": content_type,
-                })
-                return
+                if status == "completed":
+                    gamma_url = data.get("gammaUrl", "")
+                    message = (
+                        f"Your {content_type} on {topic} is ready. "
+                        f"You can find it at gamma dot app. "
+                        f"Would you like me to email you the link?"
+                    )
+                    await _notification_queue.put({
+                        "message": message,
+                        "gamma_url": gamma_url,
+                        "generation_id": generation_id,
+                        "topic": topic,
+                        "job_id": job_id,
+                        "content_type": content_type,
+                    })
+                    return
 
-        except Exception as e:
-            logger.error(f"Gamma poll error [{job_id}] attempt={attempt + 1}: {e}")
+            except Exception as e:
+                logger.error(f"Gamma poll error [{job_id}] attempt={attempt + 1}: {e}")
 
-    # Timeout after max polls
-    await _notification_queue.put({
-        "message": (
-            f"Your {content_type} on {topic} is taking longer than expected. "
-            f"Please check your Gamma workspace directly at gamma dot app."
-        ),
-        "gamma_url": None,
-        "topic": topic,
-        "job_id": job_id,
-        "content_type": content_type,
-    })
+        # Timeout after max polls
+        await _notification_queue.put({
+            "message": (
+                f"Your {content_type} on {topic} is taking longer than expected. "
+                f"Please check your Gamma workspace directly at gamma dot app."
+            ),
+            "gamma_url": None,
+            "topic": topic,
+            "job_id": job_id,
+            "content_type": content_type,
+        })
+    finally:
+        _decrement_gamma_count()
+        logger.debug(f"Gamma poll [{job_id}] finished — in_progress counter decremented")
 
 
 async def _start_gamma_generation(

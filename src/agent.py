@@ -60,7 +60,7 @@ from .tools.agent_context_tool import (
     set_current_session_id as _set_context_session_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
-from .tools.gamma_tool import get_notification_queue
+from .tools.gamma_tool import get_notification_queue, gamma_generation_in_progress
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
 from .utils.context_cache import get_cache_manager
@@ -1865,6 +1865,14 @@ async def entrypoint(ctx: JobContext):
 
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
+
+                # Gate: suppress continuation while Gamma is polling in background.
+                # generateDocument/generatePresentation return immediately with an interim
+                # phrase ("I'm on it..."), arming Case 3. Without this gate the heartbeat
+                # fires at 6s and triggers another generateDocument → duplicate cascade.
+                if gamma_generation_in_progress():
+                    logger.debug("[Heartbeat] Gamma in progress — suppressing continuation to prevent cascade")
+                    continue
 
                 prompt = task_tracker_ref.get_continuation_prompt()
                 logger.info(f"[Heartbeat] Stalled task detected — injecting continuation")
