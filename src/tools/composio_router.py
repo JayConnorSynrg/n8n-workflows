@@ -89,6 +89,9 @@ _active_call_schemas: dict[str, dict] = {}  # call_id → {"slug", "required", "
 # Sorted longest-first to avoid partial matches. Empty until first build.
 _SERVICE_PREFIXES: list[tuple[str, str]] = []
 
+# Retry delays (seconds) for transient 429/5xx errors — 2 attempts before giving up
+_RETRY_DELAYS = (1.0, 2.0)
+
 # Tier constants for resolution confidence
 _TIER_EXACT = 1
 _TIER_SUFFIX = 2
@@ -315,9 +318,11 @@ def _build_slug_index(client, user_id: str = "") -> None:
                     or getattr(t, "args_schema", None)
                     or getattr(t, "parameters", None)
                 )
-                if isinstance(schema, dict):
+                if isinstance(schema, dict) and not schema.get("$ref"):
                     req = schema.get("required", [])
                     props = schema.get("properties", {})
+                    # Drop properties that are pure $ref pointers (server-side refs, not resolvable locally)
+                    props = {k: v for k, v in props.items() if not (isinstance(v, dict) and "$ref" in v and len(v) == 1)}
                     if req or props:
                         prop_desc = {
                             k: (v.get("description", v.get("type", "")) if isinstance(v, dict) else str(v))[:80]
@@ -1149,14 +1154,32 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         await publish_tool_executing(call_id)
         start_ms = int(time.time() * 1000)
 
-        result = await asyncio.to_thread(
-            lambda: client.tools.execute(
-                resolved_slug,
-                arguments,
-                user_id=user_id,
-                dangerously_skip_version_check=True,
+        result = None
+        for _attempt in range(len(_RETRY_DELAYS) + 1):
+            result = await asyncio.to_thread(
+                lambda: client.tools.execute(
+                    resolved_slug,
+                    arguments,
+                    user_id=user_id,
+                    dangerously_skip_version_check=True,
+                )
             )
-        )
+            if result.get("successful"):
+                break
+            # Check if this is a retryable transient error (429 or 5xx)
+            _rd = result.get("data") if isinstance(result.get("data"), dict) else {}
+            _sc = _rd.get("status_code")
+            _es = str(result.get("error", "")).lower()
+            _retryable = (
+                _sc == 429 or "rate limit" in _es or "too many requests" in _es
+                or (_sc is not None and 500 <= _sc < 600)
+            )
+            if _retryable and _attempt < len(_RETRY_DELAYS):
+                _delay = _RETRY_DELAYS[_attempt]
+                logger.info(f"Composio: transient error (status={_sc}) for {resolved_slug} — retry {_attempt + 1} in {_delay}s")
+                await asyncio.sleep(_delay)
+                continue
+            break  # Non-retryable error or retries exhausted
 
         duration_ms = int(time.time() * 1000) - start_ms
 
@@ -1187,6 +1210,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     duration_ms=duration_ms,
                     success=True,
                 )
+            # MICRO 7: Parse active_connection field from COMPOSIO_SEARCH_TOOLS results.
+            # Proactively sync connection status so the agent doesn't attempt disconnected services.
+            if "COMPOSIO_SEARCH" in resolved_slug:
+                try:
+                    _search_items = []
+                    if isinstance(data, dict):
+                        _search_items = data.get("tools", data.get("results", data.get("items", [])))
+                    elif isinstance(data, list):
+                        _search_items = data
+                    for _item in (_search_items if isinstance(_search_items, list) else []):
+                        if not isinstance(_item, dict):
+                            continue
+                        _item_toolkit = (_item.get("toolkit") or _item.get("app") or "").lower().strip()
+                        _active_conn = _item.get("active_connection")
+                        if _item_toolkit and _active_conn is True and _item_toolkit in _service_auth_failed:
+                            _service_auth_failed.pop(_item_toolkit, None)
+                            logger.info(f"Composio: SEARCH shows {_item_toolkit} now connected — cleared auth failure")
+                except Exception as _parse_err:
+                    logger.debug(f"Composio: active_connection parse failed: {_parse_err}")
+
             # Schema NOT included in return — clean voice result only.
             # LLM context stays uncluttered on success. Schema cleared in finally.
             return voice_result
@@ -1280,11 +1323,45 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     )
 
             elif is_auth_error:
-                # OAuth token expired (401) — circuit break entire service until re-authenticated.
+                # OAuth token expired (401) — attempt token refresh before circuit-breaking.
                 service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
+                service_display = service_key.replace("_", " ").title()
+                _refresh_ok = False
+                try:
+                    def _try_refresh():
+                        acct_resp = client.connected_accounts.list(user_ids=[user_id])
+                        for acct in (acct_resp.items if hasattr(acct_resp, "items") else []):
+                            tk = getattr(getattr(acct, "toolkit", None), "slug", "") or ""
+                            if tk.lower() == service_key.lower() and getattr(acct, "id", None):
+                                client.connected_accounts.refresh(acct.id)
+                                return True
+                        return False
+                    _refresh_ok = await asyncio.to_thread(_try_refresh)
+                    if _refresh_ok:
+                        logger.info(f"Composio: Token refresh attempted for {service_key} — retrying tool once")
+                except Exception as _re:
+                    logger.debug(f"Composio: Token refresh attempt failed for {service_key}: {_re}")
+
+                if _refresh_ok:
+                    # Retry once with a freshly refreshed token
+                    try:
+                        _retry = await asyncio.to_thread(
+                            lambda: client.tools.execute(
+                                resolved_slug, arguments,
+                                user_id=user_id,
+                                dangerously_skip_version_check=True,
+                            )
+                        )
+                        if _retry.get("successful"):
+                            _vr = _extract_voice_result(_retry.get("data", {}), resolved_slug, tool_display)
+                            await publish_tool_completed(call_id, _vr[:100])
+                            return _vr
+                    except Exception:  # nosec B110 — intentional fallthrough to circuit-break on retry failure
+                        pass
+
+                # Refresh failed or retry still failed — circuit-break the service
                 _service_auth_failed[service_key] = True
                 _failed_slugs[slug_key] = _CB_MAX_FAILURES  # trip circuit breaker
-                service_display = service_key.replace("_", " ").title()
                 logger.warning(
                     f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
@@ -1377,7 +1454,7 @@ async def get_connected_services_status() -> str:
                     service_key = slug.lower().strip()
                     live_statuses[service_key] = status
                     # Side-effect: keep auth failure state in sync with live data
-                    if status in ("EXPIRED", "FAILED"):
+                    if status in ("EXPIRED", "FAILED", "INACTIVE"):
                         _service_auth_failed[service_key] = True
                     elif status == "ACTIVE":
                         _service_auth_failed.pop(service_key, None)
@@ -1418,6 +1495,10 @@ async def get_connected_services_status() -> str:
                 initiated_list.append(f"{display} (auth link expiring soon — complete it now or request a new one)")
         elif status in ("EXPIRED", "FAILED"):
             failed_list.append(f"{display} (needs re-authentication)")
+        elif status == "INACTIVE":
+            failed_list.append(f"{display} (inactive — not authorized)")
+        elif status in ("INITIALIZING", "PENDING"):
+            initiated_list.append(f"{display} (connection being set up)")
 
     parts = []
     if active_list:
