@@ -214,7 +214,12 @@ async def vector_store_async(
 
 @llm.function_tool(
     name="queryDatabase",
-    description="Query the database for records analytics or lookups. Returns results immediately.",
+    description=(
+        "Semantic vector search over the Auto Pay Plus candidate database. "
+        "Use this to find candidates, applicants, hiring records, job postings, or any Auto Pay Plus HR/recruitment data. "
+        "Connects to Pinecone vector database via n8n webhook (voice-query-vector-db). "
+        "Returns ranked results by relevance. Execute immediately - no confirmation needed."
+    ),
 )
 async def database_query_async(query: str) -> str:
     """Query database - runs synchronously for immediate results."""

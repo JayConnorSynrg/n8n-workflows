@@ -142,8 +142,8 @@ Immediate read tools no confirmation needed
 - searchDrive: Find documents in Google Drive
 - listFiles: Show recent Drive files
 - getFile: Open a specific file from a previous search
-- queryDatabase: Look up records or run analytics
-- knowledgeBase with action search: Find stored knowledge
+- queryDatabase: Search the Auto Pay Plus candidate database - use this to find candidates applicants job postings hiring records or any recruitment data - execute immediately with natural language queries
+- knowledgeBase with action search: Search the candidate knowledge base - use when you need to find and possibly store in the same action
 - checkContext: Remember what was discussed earlier
 - recall: Reference earlier results without re-fetching
 - recallDrive: Reference earlier Drive results
