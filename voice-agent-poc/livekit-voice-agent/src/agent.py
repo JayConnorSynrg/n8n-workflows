@@ -1842,6 +1842,12 @@ async def entrypoint(ctx: JobContext):
                                     f"gamma_{content_type}_generation_id",
                                     generation_id,
                                 )
+                            # Canonical keys — always overwrite so agent_context_tool
+                            # can read the most-recent Gamma result without knowing content_type
+                            _store_fact(session_id, "gammaUrl", gamma_url)
+                            _store_fact(session_id, "gammaLastTopic", topic)
+                            if generation_id:
+                                _store_fact(session_id, "gammaGenerationId", generation_id)
 
                         # Inject context note into chat_ctx so the LLM sees the URL
                         # on follow-up turns (e.g. "change the colors").
@@ -1889,6 +1895,12 @@ async def entrypoint(ctx: JobContext):
                         _store_fact(session_id, f"gamma_{content_type}_topic", topic)
                         if generation_id:
                             _store_fact(session_id, f"gamma_{content_type}_generation_id", generation_id)
+                        # Canonical keys — always overwrite so agent_context_tool
+                        # can read the most-recent Gamma result without knowing content_type
+                        _store_fact(session_id, "gammaUrl", gamma_url)
+                        _store_fact(session_id, "gammaLastTopic", topic)
+                        if generation_id:
+                            _store_fact(session_id, "gammaGenerationId", generation_id)
                         try:
                             context_note = (
                                 f"[AIO internal context — do not read aloud] "

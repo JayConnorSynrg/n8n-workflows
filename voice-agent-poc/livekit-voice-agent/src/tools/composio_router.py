@@ -1433,11 +1433,11 @@ async def get_connected_services_status() -> str:
 async def initiate_service_connection(service: str) -> tuple[str, str]:
     """Initiate a new Composio connection for a service.
 
-    Calls COMPOSIO_INITIATE_CONNECTION via SDK directly (bypassing _extract_voice_result
-    so the redirect URL is not lost). Returns (auth_url, display_name) on success,
-    or (error_message, "") on failure.
+    Uses the Composio 1.0 SDK two-step approach:
+      1. client.auth_configs.list(toolkit_slug=...) to get auth_config_id
+      2. client.connected_accounts.initiate(user_id, auth_config_id) to get redirect_url
 
-    Response shape: data.response_data.redirect_url (confirmed via live test)
+    Returns (auth_url, display_name) on success, or (error_message, "") on failure.
     """
     service_lower = service.lower().strip().replace(" ", "_")
     service_lower = _SERVICE_ALIASES.get(service_lower, service_lower)
@@ -1452,37 +1452,30 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     user_id = settings.composio_user_id.strip()
 
     def _execute():
-        return client.tools.execute(
-            "COMPOSIO_INITIATE_CONNECTION",
-            {"toolkit": service_lower, "parameters": {}},
+        # Step 1: get auth_config_id for the toolkit (Composio 1.0 SDK)
+        auth_configs = client.auth_configs.list(toolkit_slug=service_lower)
+        if not auth_configs.items:
+            return None, "no_auth_config"
+        auth_config_id = auth_configs.items[0].id
+        # Step 2: initiate — returns ConnectionRequest with .redirect_url directly
+        connection_request = client.connected_accounts.initiate(
             user_id=user_id,
-            dangerously_skip_version_check=True,
+            auth_config_id=auth_config_id,
         )
+        return connection_request, None
 
     try:
-        result = await asyncio.to_thread(_execute)
-        if result.get("successful"):
-            data = result.get("data", {})
-            response_data = data.get("response_data", {})
-            # SDK returns redirect_url (snake_case confirmed via live test)
-            redirect_url = (
-                response_data.get("redirect_url")
-                or response_data.get("redirectUrl")
-                or response_data.get("connectionUrl")
-                or response_data.get("authUrl")
-            )
-            if redirect_url:
-                logger.info(f"Composio: Connection initiated for {service_lower}, status={response_data.get('status')}")
-                # Track when this auth link was sent for expiry detection
-                _initiated_connections[service_lower] = time.time()
-                return redirect_url, display_name
-            # Already connected — redirect_url absent when no OAuth needed
-            status = response_data.get("status", "")
-            if status in ("ACTIVE", "CONNECTED"):
-                return f"{display_name} is already connected and active", ""
-        error = result.get("error") or "Could not get connection URL"
-        logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
-        return f"I couldn't set up the {display_name} connection right now. Please try again or check that {display_name} is available in your Composio account.", ""
+        connection_request, err = await asyncio.to_thread(_execute)
+        if err == "no_auth_config":
+            return f"No authentication configuration found for {display_name} in your Composio account.", ""
+        redirect_url = connection_request.redirect_url if connection_request else None
+        if redirect_url:
+            logger.info(f"Composio: Connection initiated for {service_lower}")
+            # Track when this auth link was sent for expiry detection
+            _initiated_connections[service_lower] = time.time()
+            return redirect_url, display_name
+        # No redirect_url means already connected (no OAuth step needed)
+        return f"{display_name} is already connected and active", ""
     except Exception as exc:
         logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
         return f"Connection setup for {display_name} failed due to a system error", ""
