@@ -167,7 +167,9 @@ async def _start_gamma_generation(
                         "language": "en",
                     },
                     "imageOptions": {
-                        "source": "pictographic",
+                        "source": "aiGenerated",
+                        "model": "flux-1-quick",
+                        "style": "minimal, clean, professional",
                     },
                     "sharingOptions": {
                         "externalAccess": "view",
