@@ -19,7 +19,17 @@ from ..utils.room_publisher import (
     publish_tool_completed,
     publish_tool_error,
 )
-from ..utils.tool_logger import log_composio_call, log_perplexity_search
+try:
+    from ..utils.tool_logger import log_composio_call, log_perplexity_search
+    _TOOL_LOGGER_AVAILABLE = True
+except Exception:  # nosec B110 — tool_logger is optional; never block tool execution
+    _TOOL_LOGGER_AVAILABLE = False
+
+    def log_composio_call(*_a, **_kw):  # type: ignore[misc]
+        pass
+
+    def log_perplexity_search(*_a, **_kw):  # type: ignore[misc]
+        pass
 
 logger = logging.getLogger(__name__)
 

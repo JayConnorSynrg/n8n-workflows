@@ -1888,7 +1888,10 @@ async def entrypoint(ctx: JobContext):
             if before <= max_messages + 1:
                 return  # Nothing to trim
 
-            chat_ctx.truncate(max_items=max_messages)
+            # truncate() uses .messages internally (SDK version mismatch) — slice directly
+            keep = chat_ctx.items[-max_messages:]
+            del chat_ctx.items[:]
+            chat_ctx.items.extend(keep)
             removed = before - len(chat_ctx.items)
 
             logger.info(
