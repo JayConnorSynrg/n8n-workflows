@@ -859,6 +859,8 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
+    global _wake_gate_suppress
+    _wake_gate_suppress = False
 
     logger.info(f"Agent starting for room: {ctx.room.name}")
     tracker = LatencyTracker()

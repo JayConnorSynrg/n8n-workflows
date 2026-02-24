@@ -182,7 +182,7 @@ class ContextCacheManager:
         # Session context cache - longer TTL, frequently accessed
         self.session_cache = LRUCache[Dict[str, Any]](
             max_size=500,
-            default_ttl=300.0,  # 5 minutes
+            default_ttl=1800.0,  # 30 minutes
             name="session_context"
         )
 
