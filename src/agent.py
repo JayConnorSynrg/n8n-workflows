@@ -57,6 +57,7 @@ from .tools.agent_context_tool import (
     get_session_summary_tool,
     warm_session_cache,
     invalidate_session_cache,
+    set_current_session_id as _set_context_session_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
 from .tools.gamma_tool import get_notification_queue
@@ -123,7 +124,7 @@ Immediate read tools no confirmation needed
 - getFile: Open a specific file from a previous search
 - queryDatabase: Look up records or run analytics
 - knowledgeBase with action search: Find stored knowledge
-- checkContext: Remember what was discussed earlier
+- checkContext: Query the PostgreSQL session database — ALWAYS call this when asked about session context, history, or what has been discussed. Never say you lack access; call the tool.
 - recall: Reference earlier results without re-fetching
 - recallDrive: Reference earlier Drive results
 - memoryStatus: See what is in session memory
@@ -1578,6 +1579,7 @@ async def entrypoint(ctx: JobContext):
         # Pre-warm context cache in background while session starts
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
+        _set_context_session_id(session_id)  # checkContext uses this to query correct session
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
         # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
