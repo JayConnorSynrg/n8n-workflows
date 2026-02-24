@@ -1583,8 +1583,8 @@ async def get_connected_services_status() -> str:
 async def initiate_service_connection(service: str) -> tuple[str, str]:
     """Initiate a new Composio connection for a service.
 
-    Uses client.tools.execute("COMPOSIO_MANAGE_CONNECTIONS", ...) — the same
-    proven path as all other Composio tool calls in this module.
+    Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array).
+    Attempt 2: SDK direct — auth_configs.list() → connected_accounts.initiate(user_id, auth_config_id).
 
     Returns (auth_url, display_name) on success, or (error_message, "") on failure.
     """
@@ -1600,10 +1600,9 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
 
-    def _execute():
+    def _execute_meta_tool():
         # CRITICAL: COMPOSIO_MANAGE_CONNECTIONS requires "toolkits" (plural array).
         # Sending "toolkit" (singular string) causes: "Validation error: Required at 'toolkits'"
-        # This was confirmed working via MCP with toolkits=["googledrive"] (array).
         return client.tools.execute(
             "COMPOSIO_MANAGE_CONNECTIONS",
             {
@@ -1614,29 +1613,91 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
             dangerously_skip_version_check=True,
         )
 
-    try:
-        result = await asyncio.to_thread(_execute)
-        if result.get("successful"):
-            data = result.get("data", {})
-            response_data = data.get("response_data", {})
-            redirect_url = (
-                response_data.get("redirect_url")
-                or response_data.get("redirectUrl")
-                or response_data.get("connectionUrl")
-                or response_data.get("authUrl")
+    def _execute_sdk_direct():
+        """Direct SDK fallback: connected_accounts.initiate() via auth_config_id lookup.
+
+        Correct high-level signature: initiate(user_id, auth_config_id, ...)
+        Does NOT accept a 'toolkit' kwarg — must resolve auth_config_id first
+        via client.auth_configs.list(toolkit=service_lower).
+        """
+        configs_response = client.auth_configs.list(toolkit=service_lower)
+        configs = _extract_items_from_response(configs_response)
+        if not configs:
+            raise ValueError(
+                f"No auth config found for {service_lower} — SDK fallback cannot proceed. "
+                "The service may not be available for this entity."
             )
+        auth_config_id = (
+            getattr(configs[0], "id", None)
+            or getattr(configs[0], "auth_config_id", None)
+        )
+        if not auth_config_id:
+            raise ValueError(f"Auth config for {service_lower} has no id field: {configs[0]}")
+        logger.info(
+            f"Composio: SDK fallback using auth_config_id={auth_config_id} for {service_lower}"
+        )
+        return client.connected_accounts.initiate(user_id, auth_config_id)
+
+    def _extract_redirect_url_from_dict(data: dict) -> str | None:
+        """Probe multiple key shapes — SDK redirect URL field name varies across versions."""
+        response_data = data.get("response_data", {}) if isinstance(data, dict) else {}
+        return (
+            response_data.get("redirect_url")
+            or response_data.get("redirectUrl")
+            or response_data.get("connectionUrl")
+            or response_data.get("authUrl")
+            or data.get("redirect_url")
+            or data.get("redirectUrl")
+            or data.get("connectionUrl")
+            or data.get("authUrl")
+        )
+
+    # --- Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool ---
+    try:
+        result = await asyncio.to_thread(_execute_meta_tool)
+        if result.get("successful"):
+            redirect_url = _extract_redirect_url_from_dict(result.get("data", {}))
             if redirect_url:
-                logger.info(f"Composio: Connection initiated for {service_lower}")
+                logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
-            status = response_data.get("status", "")
+            status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
-        error = result.get("error") or "Could not get connection URL"
-        logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
+        meta_error = result.get("error") or "No redirect URL returned"
+        # Diagnostic: log full data so we can see the actual response shape
+        logger.warning(
+            f"Composio: meta-tool initiate failed for {service_lower}: {meta_error} — "
+            f"data={result.get('data', {})} successful={result.get('successful')} — "
+            f"falling back to direct SDK"
+        )
+    except Exception as meta_exc:
+        logger.warning(
+            f"Composio: meta-tool initiate exception for {service_lower}: {meta_exc} — falling back to direct SDK"
+        )
+
+    # --- Attempt 2: Direct SDK connected_accounts.initiate() ---
+    try:
+        sdk_result = await asyncio.to_thread(_execute_sdk_direct)
+        # SDK returns an object; probe attributes for the redirect URL
+        redirect_url = None
+        for attr in ("redirect_url", "redirectUrl", "connectionUrl", "authUrl", "connection_url"):
+            val = getattr(sdk_result, attr, None)
+            if val:
+                redirect_url = val
+                break
+        if not redirect_url and isinstance(sdk_result, dict):
+            redirect_url = _extract_redirect_url_from_dict(sdk_result)
+        if redirect_url:
+            logger.info(f"Composio: Connection initiated via direct SDK for {service_lower}")
+            _initiated_connections[service_lower] = time.time()
+            return redirect_url, display_name
+        logger.warning(
+            f"Composio: direct SDK initiate returned no redirect URL for {service_lower}: {sdk_result}"
+        )
         return f"I couldn't set up the {display_name} connection right now.", ""
     except Exception as exc:
-        logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
+        logger.error(f"Composio: initiate_service_connection all paths failed for {service_lower}: {exc}")
         return f"Connection setup for {display_name} failed due to a system error", ""
 
 
