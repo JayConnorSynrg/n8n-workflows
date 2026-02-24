@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         default="https://backend.composio.dev/api",
         alias="COMPOSIO_BASE_URL"
     )
-    composio_user_id: str = Field(default="", alias="COMPOSIO_USER_ID")
+    composio_user_id: str = Field(default="default", alias="COMPOSIO_USER_ID")
 
     # Memory layer configuration
     memory_enabled: bool = Field(default=True, alias="AIO_MEMORY_ENABLED")
