@@ -80,14 +80,17 @@ async def query_database_tool(
                     # AIO shape: result.documents
                     _result_obj = result.get("result", {})
                     documents = _result_obj.get("documents", [])
-                    # z02K1a54akYXMkyj shape: result.top_results (Pinecone metadata)
+                    # z02K1a54akYXMkyj shape: result.top_results
+                    # Workflow returns candidateName as top-level key (post-formatter fix)
+                    # Falls back to metadata.candidateName for raw Pinecone shape
                     if not documents:
                         raw_results = _result_obj.get("top_results", []) or result.get("results", [])
                         documents = [
                             {
-                                "title": (r.get("metadata") or {}).get("name") or r.get("source", f"Result {i+1}"),
-                                "snippet": (r.get("metadata") or {}).get("text_excerpt") or r.get("text", ""),
+                                "title": r.get("candidateName") or (r.get("metadata") or {}).get("candidateName") or (r.get("metadata") or {}).get("name") or f"Result {i+1}",
+                                "snippet": (r.get("content") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
                                 "score": r.get("score", 0),
+                                "candidate_id": r.get("candidateId") or (r.get("metadata") or {}).get("candidateId") or r.get("id", ""),
                             }
                             for i, r in enumerate(raw_results)
                         ]
