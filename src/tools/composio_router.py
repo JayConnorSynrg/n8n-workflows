@@ -92,6 +92,21 @@ _SERVICE_PREFIXES: list[tuple[str, str]] = []
 # Retry delays (seconds) for transient 429/5xx errors — 2 attempts before giving up
 _RETRY_DELAYS = (1.0, 2.0)
 
+# Session-scoped TaskTracker reference — set once by agent.py after creating the tracker.
+# Allows composio_router to call record_tool_call_started() without circular imports.
+# None until set; safe to check before use.
+_task_tracker_ref = None
+
+
+def set_task_tracker(tracker) -> None:
+    """Register the session TaskTracker so composio_router can signal tool activity.
+
+    Called once in agent.py entrypoint() after creating the TaskTracker instance.
+    Prevents heartbeat CASE 2 from firing during slow slug resolution.
+    """
+    global _task_tracker_ref
+    _task_tracker_ref = tracker
+
 # Tier constants for resolution confidence
 _TIER_EXACT = 1
 _TIER_SUFFIX = 2
@@ -903,7 +918,13 @@ async def ensure_slug_index() -> None:
         return
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
-    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Composio: ensure_slug_index timed out (60s)")
 
 
 async def refresh_slug_index() -> str:
@@ -931,7 +952,14 @@ async def refresh_slug_index() -> str:
 
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
-    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Composio: refresh_slug_index timed out (60s)")
+        return "Tool index refresh timed out — please try again"
 
     logger.info("Composio: Slug index refreshed (mid-session rebuild)")
     return get_tool_catalog()
@@ -1101,10 +1129,31 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     except ImportError:
         return "That connected service is not available on this instance"
 
+    # Fix 3: Tell heartbeat a tool is in-flight before slug resolution begins.
+    # Prevents CASE 2 (no tool activity detected) from firing during slow index builds.
+    if _task_tracker_ref is not None:
+        try:
+            _task_tracker_ref.record_tool_call_started()
+        except Exception:  # nosec B110 — tracker signal is best-effort; never block tool execution
+            pass
+
+    # Fix 1: Publish tool start immediately so the UI shows activity during slug resolution.
+    # Use raw slug for now — display name is updated after resolution if needed.
+    ui_name_early = _display_name(tool_slug)
+    call_id = await publish_tool_start(ui_name_early, {"slug": tool_slug})
+
     # Build slug index on first call (discovers connected accounts + loads tool slugs)
     if not _slug_index_built:
         user_id = settings.composio_user_id.strip()
-        await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio: Slug index build timed out (60s) for {slug_key}")
+            await publish_tool_error(call_id, "Slug index build timed out")
+            return "Tool index is still loading — please try again in a moment"
 
     # Two-stage slug resolution:
     # Stage 1: Fast local resolution with confidence tier
@@ -1115,7 +1164,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     if tier >= _TIER_WORDS and fast_match is not None:
         # Tier 4-6: fuzzy match — verify/override via SDK search
         logger.info(f"Composio: Tier {tier} match for {tool_slug} → {fast_match}, verifying via SDK search")
-        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        try:
+            sdk_match = await asyncio.wait_for(
+                asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug)),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio: SDK search timed out (15s) for {tool_slug}, using tier {tier} match")
+            sdk_match = None
         if sdk_match:
             resolved_slug = sdk_match
             logger.info(f"Composio: SDK search overrode tier {tier}: {tool_slug} → {sdk_match}")
@@ -1124,7 +1180,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     elif fast_match is None:
         # No local match at all — SDK search as last resort
         logger.info(f"Composio: No local match for {tool_slug}, trying SDK search")
-        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        try:
+            sdk_match = await asyncio.wait_for(
+                asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug)),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio: SDK search timed out (15s) for {tool_slug}, no match found")
+            sdk_match = None
         if sdk_match:
             resolved_slug = sdk_match
             logger.info(f"Composio: SDK search found: {tool_slug} → {sdk_match}")
@@ -1146,8 +1209,45 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
 
     tool_display = _friendly_name(resolved_slug)
-    ui_name = _display_name(resolved_slug)
-    call_id = await publish_tool_start(ui_name, {k: str(v)[:60] for k, v in list(arguments.items())[:3]})
+    # Fix 1: call_id already created by the early publish_tool_start above.
+    # Signal executing state now that slug is resolved and we have the real args.
+    await publish_tool_executing(call_id)
+
+    # ── GAMMA DEDUP GUARD ──────────────────────────────────────────────────────
+    # Second layer of defense against duplicate Gamma generations.
+    # Fires after slug resolution (catches all GAMMA_GENERATE_* variants) but
+    # before schema load or any API call — zero network cost on dedup hit.
+    # First layer is system prompt rules; this guard catches LLM retries that
+    # slip through when composioExecute is called after generatePresentation fails.
+    if resolved_slug.startswith("GAMMA_GENERATE"):
+        try:
+            from .agent_context_tool import _current_session_id as _csid
+            from ..utils.session_facts import get_fact as _get_sf
+            _sid = _csid  # module-level str or None
+            if _sid:
+                _existing_url = _get_sf(_sid, "gammaUrl")
+                if _existing_url:
+                    _existing_topic = _get_sf(_sid, "gammaLastTopic") or "unknown topic"
+                    _input_text = str(arguments.get("inputText", "")).lower()
+                    _is_explicit_new = any(
+                        w in _input_text
+                        for w in ("new", "different", "another", "fresh", "redo", "recreate")
+                    )
+                    if not _is_explicit_new:
+                        logger.info(
+                            f"Composio: GAMMA dedup guard fired — "
+                            f"returning existing URL for topic '{_existing_topic}' "
+                            f"(slug={resolved_slug}, session={_sid})"
+                        )
+                        await publish_tool_error(call_id, "Dedup: existing Gamma URL returned")
+                        _active_call_schemas.pop(call_id, None)
+                        return (
+                            f"Gamma presentation already created this session. "
+                            f"URL: {_existing_url} — "
+                            f"Do not generate again. Use this URL directly."
+                        )
+        except Exception:  # nosec B110 — dedup is best-effort; never block generation
+            pass  # Never block generation on dedup failure
 
     # ── SCHEMA LOAD ────────────────────────────────────────────────────────────
     # Load cached schema into per-call active state.
@@ -1168,11 +1268,18 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     for tool in results:
                         if tool.slug == resolved_slug:
                             return tool
-                except Exception:
+                except Exception:  # nosec B110 — schema lookup is best-effort; returns None on failure
                     return None
                 return None
 
-            raw_tool = await asyncio.to_thread(_fetch_raw_for_schema)
+            try:
+                raw_tool = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_raw_for_schema),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Composio: Live schema fetch timed out (15s) for {resolved_slug}")
+                raw_tool = None
             if raw_tool is not None:
                 try:
                     input_schema = raw_tool.input_parameters
@@ -1221,19 +1328,29 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         user_id = settings.composio_user_id.strip()
         logger.info(f"Composio SDK execute: slug={resolved_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
 
-        await publish_tool_executing(call_id)
         start_ms = int(time.time() * 1000)
 
         result = None
         for _attempt in range(len(_RETRY_DELAYS) + 1):
-            result = await asyncio.to_thread(
-                lambda: client.tools.execute(
-                    resolved_slug,
-                    arguments,
-                    user_id=user_id,
-                    dangerously_skip_version_check=True,
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        lambda: client.tools.execute(
+                            resolved_slug,
+                            arguments,
+                            user_id=user_id,
+                            dangerously_skip_version_check=True,
+                        )
+                    ),
+                    timeout=30.0,
                 )
-            )
+            except asyncio.TimeoutError:
+                logger.warning(f"Composio: SDK execute timed out (30s) for {resolved_slug} attempt {_attempt + 1}")
+                if _attempt < len(_RETRY_DELAYS):
+                    await asyncio.sleep(_RETRY_DELAYS[_attempt])
+                    continue
+                await publish_tool_error(call_id, "Tool execution timed out")
+                return f"The {tool_display} request timed out — the service did not respond in time. You may try again."
             if result.get("successful"):
                 break
             # Check if this is a retryable transient error (429 or 5xx)
@@ -1453,6 +1570,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     f"[TOOL_CALL] Composio PERMISSION (403): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
+                # Detect billing/credit exhaustion 403 (distinct from true permission denial)
+                _err403_lower = str(error_str or "").lower()
+                if any(k in _err403_lower for k in ("credit", "billing", "quota", "insufficient", "upgrade")):
+                    return (
+                        f"Your {service_display} account is out of credits or has hit a usage limit. "
+                        f"Do not retry — tell the user to check their {service_display} billing settings. "
+                        f"Error: {error_str}"
+                    )
                 return (
                     f"I don't have permission to access that {tool_display} resource. "
                     f"Your {service_display} connection is still active — this is a permissions issue on that specific resource. "
@@ -1600,40 +1725,83 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
 
-    def _execute():
+    def _execute_meta_tool():
+        # COMPOSIO_MANAGE_CONNECTIONS requires "toolkits" (plural, array) — NOT "toolkit" (singular).
+        # Railway logs confirmed: "Validation error: Required at 'toolkits'" when sending toolkit (singular).
         return client.tools.execute(
             "COMPOSIO_MANAGE_CONNECTIONS",
             {
                 "action": "initiate",
-                "toolkit": service_lower,
+                "toolkits": [service_lower],
             },
             user_id=user_id,
             dangerously_skip_version_check=True,
         )
 
+    def _execute_sdk_direct():
+        """Direct SDK fallback: connected_accounts.initiate() bypasses meta-tool schema validation."""
+        return client.connected_accounts.initiate(
+            toolkit=service_lower,
+            user_id=user_id,
+        )
+
+    def _extract_redirect_url_from_dict(data: dict) -> str | None:
+        """Probe multiple key shapes — SDK redirect URL field name varies across versions."""
+        response_data = data.get("response_data", {}) if isinstance(data, dict) else {}
+        return (
+            response_data.get("redirect_url")
+            or response_data.get("redirectUrl")
+            or response_data.get("connectionUrl")
+            or response_data.get("authUrl")
+            or data.get("redirect_url")
+            or data.get("redirectUrl")
+            or data.get("connectionUrl")
+            or data.get("authUrl")
+        )
+
+    # --- Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array) ---
     try:
-        result = await asyncio.to_thread(_execute)
+        result = await asyncio.to_thread(_execute_meta_tool)
         if result.get("successful"):
-            data = result.get("data", {})
-            response_data = data.get("response_data", {})
-            redirect_url = (
-                response_data.get("redirect_url")
-                or response_data.get("redirectUrl")
-                or response_data.get("connectionUrl")
-                or response_data.get("authUrl")
-            )
+            redirect_url = _extract_redirect_url_from_dict(result.get("data", {}))
             if redirect_url:
-                logger.info(f"Composio: Connection initiated for {service_lower}")
+                logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
-            status = response_data.get("status", "")
+            status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
-        error = result.get("error") or "Could not get connection URL"
-        logger.warning(f"Composio: initiate_service_connection failed for {service_lower}: {error}")
+        meta_error = result.get("error") or "No redirect URL returned"
+        logger.warning(
+            f"Composio: meta-tool initiate failed for {service_lower}: {meta_error} — falling back to direct SDK"
+        )
+    except Exception as meta_exc:
+        logger.warning(
+            f"Composio: meta-tool initiate exception for {service_lower}: {meta_exc} — falling back to direct SDK"
+        )
+
+    # --- Attempt 2: Direct SDK connected_accounts.initiate() ---
+    try:
+        sdk_result = await asyncio.to_thread(_execute_sdk_direct)
+        # SDK returns an object; probe attributes for the redirect URL
+        redirect_url = None
+        for attr in ("redirect_url", "redirectUrl", "connectionUrl", "authUrl", "connection_url"):
+            val = getattr(sdk_result, attr, None)
+            if val:
+                redirect_url = val
+                break
+        if not redirect_url and isinstance(sdk_result, dict):
+            redirect_url = _extract_redirect_url_from_dict(sdk_result)
+        if redirect_url:
+            logger.info(f"Composio: Connection initiated via direct SDK for {service_lower}")
+            _initiated_connections[service_lower] = time.time()
+            return redirect_url, display_name
+        logger.warning(
+            f"Composio: direct SDK initiate returned no redirect URL for {service_lower}: {sdk_result}"
+        )
         return f"I couldn't set up the {display_name} connection right now.", ""
     except Exception as exc:
-        logger.error(f"Composio: initiate_service_connection exception for {service_lower}: {exc}")
+        logger.error(f"Composio: initiate_service_connection all paths failed for {service_lower}: {exc}")
         return f"Connection setup for {display_name} failed due to a system error", ""
 
 
