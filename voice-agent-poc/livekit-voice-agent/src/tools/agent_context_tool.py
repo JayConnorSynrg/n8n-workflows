@@ -27,6 +27,24 @@ from ..utils.context_cache import get_cache_manager
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Module-level session ID set by agent at session start.
+# Allows tool functions to default to the active room session
+# rather than falling back to the generic "livekit-agent" string.
+_current_session_id: Optional[str] = None
+
+
+def set_current_session_id(session_id: str) -> None:
+    """Set the active session ID for this module.
+
+    Called by the agent entrypoint when a room is joined so that
+    query_context_tool and get_session_summary_tool can resolve
+    the correct session without requiring callers to pass session_id.
+    """
+    global _current_session_id
+    _current_session_id = session_id
+    logger.debug(f"agent_context_tool: active session_id set to {session_id!r}")
+
+
 QueryType = Literal[
     "session_context",
     "tool_history",
@@ -132,7 +150,7 @@ async def query_context_tool(
     Returns:
         Query results formatted for voice or error message
     """
-    effective_session_id = session_id or "livekit-agent"
+    effective_session_id = session_id or _current_session_id or "livekit-agent"
 
     # Validate custom_query has search_query
     if query_type == "custom_query" and not search_query:
@@ -271,7 +289,7 @@ async def get_session_summary_tool(
     Returns:
         Session summary or error message
     """
-    effective_session_id = session_id or "livekit-agent"
+    effective_session_id = session_id or _current_session_id or "livekit-agent"
 
     # Check specialized session cache first
     cache_manager = get_cache_manager()
