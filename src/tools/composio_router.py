@@ -451,12 +451,17 @@ def _resolve_slug_fast(raw_slug: str) -> tuple[str | None, int]:
         return suffix_matches[0], _TIER_SUFFIX
 
     # Tier 3: Prefix expansion (TEAMS_ → MICROSOFT_TEAMS_, etc.)
+    # Longer/more-specific prefixes must come first to prevent partial matching.
     prefix_expansions = {
+        "GOOGLE_DRIVE_": "GOOGLEDRIVE_",    # GOOGLE_DRIVE_X → GOOGLEDRIVE_X
+        "GOOGLE_SHEETS_": "GOOGLESHEETS_",  # GOOGLE_SHEETS_X → GOOGLESHEETS_X
+        "GOOGLE_DOCS_": "GOOGLEDOCS_",      # GOOGLE_DOCS_X → GOOGLEDOCS_X
         "TEAMS_": "MICROSOFT_TEAMS_",
         "ONEDRIVE_": "ONE_DRIVE_",
         "SHEETS_": "GOOGLESHEETS_",
         "DOCS_": "GOOGLEDOCS_",
-        "DRIVE_": "ONE_DRIVE_",
+        # NOTE: "DRIVE_" → "ONE_DRIVE_" removed — it incorrectly mapped
+        # GOOGLE_DRIVE_* slugs to OneDrive when they fell through to Tier 6.
     }
     for short_prefix, full_prefix in prefix_expansions.items():
         if upper.startswith(short_prefix):
