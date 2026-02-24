@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import Optional
 
 from livekit import rtc
@@ -38,6 +39,14 @@ _AIO_WAKE_PATTERN = re.compile(
     r'\b(AIO|A\.I\.O\.|aye[- ]?oh?|ayo|eyoh|eye[- ]?oh|a[- ]\.?i[- ]\.?o)\b',
     re.IGNORECASE
 )
+_last_agent_listening_time: float = 0.0
+_WAKE_GATE_GRACE_PERIOD_SECS: float = 2.5
+_CONVERSATIONAL_BYPASS_PHRASES: frozenset = frozenset({
+    "thanks", "thank you", "appreciate", "cool", "nice",
+    "ok", "okay", "alright", "got it", "understood", "roger",
+    "yes", "yeah", "yep", "yup", "correct", "right", "exactly",
+    "no", "nope", "nah", "not really",
+})
 
 
 def get_turn_detector():
@@ -1157,9 +1166,23 @@ async def entrypoint(ctx: JobContext):
             and getattr(_task_tracker, '_current_objective', None) is not None
             and not getattr(_task_tracker, '_objective_completed', True)
         )
+        # Grace period: bypass gate within 2.5s of agent finishing speaking
+        _secs_since_listened = time.time() - _last_agent_listening_time
+        _in_grace_period = (
+            _last_agent_listening_time > 0
+            and _secs_since_listened < _WAKE_GATE_GRACE_PERIOD_SECS
+        )
+        # Conversational bypass: short acknowledgments always pass through
+        _is_conversational = any(
+            phrase in _transcript_text.lower() for phrase in _CONVERSATIONAL_BYPASS_PHRASES
+        )
+
         if _has_wake_word:
             _wake_gate_suppress = False
             logger.debug("[WakeGate] Wake word detected — response allowed")
+        elif _in_grace_period or _is_conversational:
+            _wake_gate_suppress = False
+            logger.debug("[WakeGate] Grace period bypass (%.1fs since listening, conversational=%s)", _secs_since_listened, _is_conversational)
         elif not _has_active_task:
             _wake_gate_suppress = True
             logger.debug("[WakeGate] No wake word — suppressing next response")
@@ -1200,12 +1223,15 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
         elif "listening" in state_str:
+            global _last_agent_listening_time
+            _last_agent_listening_time = time.time()
             _task_tracker.record_agent_idle()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"listening"}',
                 log_type="agent.state"
             ))
         elif "idle" in state_str:
+            _last_agent_listening_time = time.time()
             _task_tracker.record_agent_idle()
             total = tracker.end("total_latency")
             if total:
@@ -1243,6 +1269,12 @@ async def entrypoint(ctx: JobContext):
 
         if role != 'assistant':
             return  # Only publish agent responses, user transcripts handled separately
+
+        # Wake gate: don't publish agent text if response was suppressed
+        # This prevents split-brain where chat shows text but audio is silent
+        if _wake_gate_suppress:
+            logger.debug("[WakeGate] Blocking suppressed assistant message from chat publication")
+            return
 
         # Extract text content from the item
         text = ""
@@ -2005,7 +2037,7 @@ async def entrypoint(ctx: JobContext):
         - Also trims chat_ctx every TRIM_EVERY_N cycles to bound memory growth
         """
         HEARTBEAT_INTERVAL = 4.0   # Assess every 4 seconds
-        TRIM_EVERY_N_CYCLES = 15   # Trim chat_ctx every 15*4=60 seconds
+        TRIM_EVERY_N_CYCLES = 5    # Trim chat_ctx every 5*4=20 seconds
         _hb_count = 0
         logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s, trim=60s)")
         while True:
@@ -2015,7 +2047,7 @@ async def entrypoint(ctx: JobContext):
 
                 # Periodic chat context trim — only when agent is idle to avoid races
                 if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
-                    await _trim_chat_context(session_ref, max_messages=20)
+                    await _trim_chat_context(session_ref, max_messages=15)
 
                 # Suppress continuation while gamma is generating in the background.
                 # Without this guard the heartbeat re-triggers the LLM every 6s,
