@@ -68,6 +68,59 @@ async def log_turn(
         logger.debug(f"[PgLogger] Turn log failed (non-critical): {e}")
 
 
+async def read_session_history(
+    session_id: str,
+    limit: int = 50,
+) -> list:
+    """Read conversation turns for a session directly from conversation_log.
+
+    Returns empty list if pool unavailable or session has no logged turns.
+    Primary read path for checkContext — bypasses n8n webhook entirely.
+    """
+    if not _pg_available or _pool is None:
+        return []
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT role, content, tool_name, created_at
+                FROM conversation_log
+                WHERE session_id = $1
+                ORDER BY created_at ASC
+                LIMIT $2
+                """,
+                session_id,
+                limit,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.debug(f"[PgLogger] read_session_history failed: {e}")
+        return []
+
+
+async def save_session_summary(session_id: str, summary: str) -> None:
+    """Save a session-level summary to conversation_log at session end.
+
+    Written as a 'system' role entry with tool_name='session_summary'.
+    Enables fast recall of what happened in a session without scanning all turns.
+    """
+    if not _pg_available or _pool is None:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO conversation_log (session_id, role, content, tool_name)
+                VALUES ($1, 'system', $2, 'session_summary')
+                """,
+                session_id,
+                summary[:4000],
+            )
+        logger.info("[PgLogger] Session summary saved for %s", session_id)
+    except Exception as e:
+        logger.debug(f"[PgLogger] save_session_summary failed (non-critical): {e}")
+
+
 async def close_pool() -> None:
     """Close the connection pool. Call once on worker shutdown."""
     global _pool, _pg_available
