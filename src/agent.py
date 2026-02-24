@@ -972,6 +972,10 @@ async def entrypoint(ctx: JobContext):
         min_continuation_gap_seconds=8.0,     # 8s cooldown between Case 2/3 injections
     )
 
+    # Session transcript buffer for LLM memory synthesis (OpenClaw write-back)
+    # Populated by on_user_input_transcribed + on_conversation_item_added
+    _session_transcript: list[dict] = []
+
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
 
@@ -1022,6 +1026,8 @@ async def entrypoint(ctx: JobContext):
             _task_tracker.record_user_message(text)
             # Log user turn to PostgreSQL for full session context
             asyncio.create_task(_pg_logger.log_turn(session_id, "user", text))
+            # Buffer for OpenClaw LLM synthesis at session end
+            _session_transcript.append({"role": "user", "content": text})
 
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
@@ -1129,6 +1135,8 @@ async def entrypoint(ctx: JobContext):
             # Log assistant turn to PostgreSQL for full session context
             if text:
                 asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text))
+                # Buffer for OpenClaw LLM synthesis at session end
+                _session_transcript.append({"role": "assistant", "content": text})
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
@@ -1938,6 +1946,24 @@ async def entrypoint(ctx: JobContext):
             logger.error("[Memory] Session flush failed: %s", _e)
         finally:
             _mem_capture.reset_session()
+
+    # OpenClaw LLM synthesis write-back — update USER.md, SOUL.md, MEMORY.md
+    # Separate timeout from fact flush; failures never block session cleanup
+    if _MEM_AVAILABLE and _session_writer is not None and len(_session_transcript) >= 4:
+        try:
+            await asyncio.wait_for(
+                _session_writer.synthesize_and_update(
+                    _user_mem_dir,
+                    _session_transcript,
+                    settings.fireworks_api_key,
+                    settings.fireworks_model,
+                ),
+                timeout=25.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[Memory] Synthesis timed out — memory files not updated this session")
+        except Exception as _me:
+            logger.error("[Memory] Synthesis failed: %s", _me)
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
