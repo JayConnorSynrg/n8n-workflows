@@ -11,6 +11,33 @@ Architecture:
 import time
 from typing import Optional
 
+try:
+    from ..utils.tool_logger import log_composio_call as _log_native_call
+    _TOOL_LOGGER_AVAILABLE = True
+except Exception:
+    _TOOL_LOGGER_AVAILABLE = False
+    _log_native_call = None  # type: ignore[assignment]
+
+
+def _fire_native_log(slug: str, arguments: dict, voice_result: str, duration_ms: int) -> None:
+    """Best-effort fire-and-forget log for native (non-Composio) tool calls."""
+    if not _TOOL_LOGGER_AVAILABLE or _log_native_call is None:
+        return
+    try:
+        _log_native_call(
+            user_id=None,
+            slug=slug,
+            arguments=arguments,
+            result_data=None,
+            voice_result=voice_result,
+            success=True,
+            error_message=None,
+            duration_ms=duration_ms,
+            source="native",
+        )
+    except Exception:  # nosec B110 — fire-and-forget logging; import failure is non-fatal
+        pass
+
 from livekit.agents import llm
 
 from ..utils.async_tool_worker import get_worker
@@ -59,8 +86,12 @@ async def send_email_async(
     """Send email synchronously — LLM gets real confirmation back to confirm task completion."""
     call_id = await publish_tool_start("sendEmail", {"to": to, "subject": subject})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     await email_tool.send_email_tool(to, subject, body, cc)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, "Email sent")
+    result = f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
+    _fire_native_log("send_email", {"to": to, "subject": subject}, result, _dur)
     # Capture recipient preference for fast-path email (non-blocking, best-effort)
     try:
         store_tool_result(
@@ -72,7 +103,7 @@ async def send_email_async(
         )
     except Exception:  # nosec B110
         pass  # Never block email delivery for preference capture failure
-    return f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
+    return result
 
 
 # =============================================================================
@@ -90,8 +121,11 @@ async def search_documents_async(
     """Search Drive documents - runs synchronously for immediate results."""
     call_id = await publish_tool_start("searchDrive", {"query": query})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await google_drive_tool.search_documents_tool(query, max_results)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100])
+    _fire_native_log("search_drive", {"query": query, "max_results": max_results}, result, _dur)
     return result
 
 
@@ -103,8 +137,11 @@ async def get_document_async(file_id: str) -> str:
     """Get document content - runs synchronously for immediate results."""
     call_id = await publish_tool_start("getFile", {"file_id": file_id})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await google_drive_tool.get_document_tool(file_id)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100])
+    _fire_native_log("get_file", {"file_id": file_id}, result, _dur)
     return result
 
 
@@ -116,8 +153,11 @@ async def list_drive_files_async(max_results: int = 10) -> str:
     """List Drive files - runs synchronously for immediate results."""
     call_id = await publish_tool_start("listFiles", {"max_results": max_results})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await google_drive_tool.list_drive_files_tool(max_results)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100])
+    _fire_native_log("list_files", {"max_results": max_results}, result, _dur)
     return result
 
 
@@ -170,8 +210,11 @@ async def database_query_async(query: str) -> str:
     """Query database - runs synchronously for immediate results."""
     call_id = await publish_tool_start("queryDatabase", {"query": query})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await database_tool.query_database_tool(query)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100])
+    _fire_native_log("query_database", {"query": query}, result, _dur)
     return result
 
 
@@ -190,8 +233,11 @@ async def query_context_async(
     """Query session context - runs synchronously for immediate results."""
     call_id = await publish_tool_start("checkContext", {"context_type": context_type})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await agent_context_tool.query_context_tool(context_type, query)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100] if result else "")
+    _fire_native_log("check_context", {"context_type": context_type, "query": query or ""}, result or "", _dur)
     return result
 
 
@@ -318,6 +364,7 @@ async def add_contact_async(
     """Add contact with multi-gate confirmation - runs synchronously for immediate gate response."""
     call_id = await publish_tool_start("addContact", {"name": name, "gate": gate})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await contact_tool.add_contact_tool(
         name=name,
         email=email,
@@ -328,7 +375,9 @@ async def add_contact_async(
         name_confirmed=name_confirmed,
         email_confirmed=email_confirmed,
     )
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100] if result else "")
+    _fire_native_log("add_contact", {"name": name, "email": email or "", "gate": gate}, result or "", _dur)
     return result
 
 
@@ -345,13 +394,16 @@ async def get_contact_async(
     """Get contact - runs synchronously for immediate results."""
     call_id = await publish_tool_start("getContact", {"query": query or name or email or ""})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await contact_tool.get_contact_tool(
         query=query,
         name=name,
         email=email,
         contact_id=contact_id,
     )
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100] if result else "")
+    _fire_native_log("get_contact", {"query": query or name or email or ""}, result or "", _dur)
     return result
 
 
@@ -363,8 +415,11 @@ async def search_contacts_async(query: str) -> str:
     """Search contacts - runs synchronously for immediate results."""
     call_id = await publish_tool_start("searchContacts", {"query": query})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
     result = await contact_tool.search_contacts_tool(query)
+    _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100] if result else "")
+    _fire_native_log("search_contacts", {"query": query}, result or "", _dur)
     return result
 
 
