@@ -171,10 +171,20 @@ async def _start_gamma_generation(
         status = data.get("status", "unknown")
 
         if status == "completed" and data.get("gammaUrl"):
-            # Rare: instant completion
+            # Rare: instant completion — push silent notification so _gamma_notification_monitor
+            # injects gammaUrl into chat_ctx without speaking (prevents re-generation on follow-up turns)
+            gamma_url = data.get("gammaUrl")
+            await _notification_queue.put({
+                "message": "",  # Silent — no voice output, just context injection
+                "gamma_url": gamma_url,
+                "generation_id": generation_id or "",
+                "topic": topic,
+                "job_id": job_id,
+                "content_type": content_type,
+            })
             return (
                 f"Your {content_type} on {topic} is already ready. "
-                f"You can view it at gamma dot app. "
+                f"Gamma link: {gamma_url} "
                 f"Would you like me to email you the link?"
             )
 

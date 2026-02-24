@@ -1736,7 +1736,36 @@ async def entrypoint(ctx: JobContext):
                         except Exception as retry_err:
                             logger.error(f"Gamma monitor: retry also failed job={job_id}: {retry_err}")
                 else:
-                    logger.warning(f"Gamma monitor: empty message in notification job={job_id}")
+                    # Silent notification (e.g. instant completion path) — no voice output,
+                    # but still perform session_facts + chat_ctx injection so the LLM has the URL
+                    if gamma_url:
+                        logger.info(f"Gamma monitor: silent notification — injecting context job={job_id} url={gamma_url[:60]}")
+                        generation_id = notification.get("generation_id", "")
+                        _store_fact(session_id, f"gamma_{content_type}_url", gamma_url)
+                        _store_fact(session_id, f"gamma_{content_type}_topic", topic)
+                        if generation_id:
+                            _store_fact(session_id, f"gamma_{content_type}_generation_id", generation_id)
+                        try:
+                            context_note = (
+                                f"[AIO internal context — do not read aloud] "
+                                f"The {content_type} on '{topic}' has been generated. "
+                                f"URL: {gamma_url}. "
+                                + (f"Generation ID: {generation_id}. " if generation_id else "")
+                                + f"For any modifications or changes to this {content_type}, "
+                                f"reference this URL and generation ID. "
+                                f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
+                            )
+                            _ctx = (getattr(session_ref, "chat_ctx", None)
+                                    or getattr(session_ref, "_chat_ctx", None))
+                            if _ctx is not None:
+                                _ctx.append(role="assistant", text=context_note)
+                                logger.info(f"Gamma monitor: silent context injected job={job_id}")
+                            else:
+                                logger.debug(f"Gamma monitor: chat_ctx unavailable for silent injection job={job_id}")
+                        except Exception as ctx_err:
+                            logger.warning(f"Gamma monitor: silent chat_ctx inject failed job={job_id}: {ctx_err}")
+                    else:
+                        logger.warning(f"Gamma monitor: empty message and no gamma_url in notification job={job_id}")
 
             except asyncio.CancelledError:
                 logger.info("Gamma notification monitor cancelled")
