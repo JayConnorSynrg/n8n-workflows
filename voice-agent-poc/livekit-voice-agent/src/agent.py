@@ -390,20 +390,26 @@ When the user asks about a presentation, slide deck, document, or webpage that w
   Step 1: Call recall(query="gamma presentation") or recall(query="gamma document") — the gammaUrl is stored in session facts automatically after every generation
   If found: use the gammaUrl directly — it is the live link — email it or share it per RULE 7 and RULE 8
   NEVER call searchDrive or listFiles for Gamma content — presentations live on gamma.app NOT in Google Drive
-  NEVER call GAMMA_LIST_FOLDERS for content created this session — recall is always faster and is guaranteed to have it
-  Only use GAMMA_LIST_FOLDERS when the user is asking about a Gamma from a PREVIOUS session not this one
+  NEVER call GAMMA_LIST_FOLDERS for any Gamma URL lookup — it returns folder structure only, never presentation URLs
 
 GAMMA RETRIEVAL — finding an existing Gamma the user already has (prior sessions)
 GAMMA_LIST_THEMES is a design THEME BROWSER — it shows color palettes and layout styles NOT existing presentations
-GAMMA_LIST_FOLDERS is the correct tool for browsing your saved Gamma content from previous sessions
+GAMMA_LIST_FOLDERS returns FOLDER STRUCTURE ONLY — it NEVER returns presentation URLs and CANNOT be used to look up existing presentations
+
+GAMMA URL RETRIEVAL — HARD CONSTRAINTS:
+  GAMMA_LIST_FOLDERS returns FOLDER STRUCTURE ONLY — it NEVER returns presentation URLs. Do NOT call it to find URLs.
+  GAMMA_GET_GAMMA_FILE_URLS requires a specific generation_id from when a presentation was created. It CANNOT look up old presentations by title or topic.
+  There is NO Gamma API endpoint to list all existing presentations or get their URLs by name.
 
 When user says "find", "open", "show", "pull up", "send me", "email me" a Gamma they already made AND it was NOT created this session:
-  Step 1: composioExecute GAMMA_LIST_FOLDERS — the response lists saved presentations with their URLs
-  If found: capture the gammaUrl from the result and proceed directly to email it (RULE 7 / RULE 8)
-  If not found: Say "I could not find that one — can you describe the title or topic?" then retry with a broader query
+  Step 1: Call checkContext — gammaUrl and gammaGenerationId are stored in session_facts automatically after every generation and will appear in the context response
+  Step 2: If checkContext does not have it, call recall(query="gamma presentation") — URLs from past sessions may be in long-term memory
+  Step 3: If neither has it, tell the user: "I don't have that URL stored — please check your Gamma dashboard at gamma.app to find it directly."
+  NEVER call GAMMA_LIST_FOLDERS to find presentation URLs — it cannot return them
   NEVER call GAMMA_GENERATE_GAMMA when the user is asking for something they already made
   NEVER use GAMMA_LIST_THEMES as a search proxy for existing presentations
   NEVER call searchDrive or listFiles to find a Gamma — they are NOT stored in Google Drive
+  NEVER loop through Gamma API calls attempting to locate a URL — if checkContext and recall both fail, direct the user to gamma.app
 
 ONLY use GAMMA_GENERATE_GAMMA when the user explicitly says:
   "create" | "make" | "build" | "generate" | "write me a" | "put together a" | "new presentation" | "new document"
@@ -1070,6 +1076,14 @@ async def entrypoint(ctx: JobContext):
         max_continuations_per_objective=5,    # 5 attempts before giving up
         min_continuation_gap_seconds=8.0,     # 8s cooldown between Case 2/3 injections
     )
+
+    # Register tracker with composio_router so it can call record_tool_call_started()
+    # before slug resolution begins, preventing heartbeat CASE 2 false-positive fires.
+    try:
+        from .tools.composio_router import set_task_tracker as _set_composio_tracker
+        _set_composio_tracker(_task_tracker)
+    except Exception:  # nosec B110 — tracker registration is optional; never block entrypoint
+        pass
 
     # Register event handlers BEFORE starting session
     # LiveKit Agents 1.3.x requires synchronous callbacks - async work via asyncio.create_task
