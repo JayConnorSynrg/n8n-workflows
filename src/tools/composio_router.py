@@ -161,36 +161,106 @@ def is_slug_cached(slug: str) -> bool:
     return False
 
 
+def _extract_items_from_response(response) -> list:
+    """RC2 fix: probe multiple attribute names for paginated item list.
+
+    Composio SDK 1.0.0-rc2 uses .items; older/alternate shapes use
+    .data, .connected_accounts, or a bare list. Probing all prevents
+    silent [] fallback when the attribute name changes across versions.
+    """
+    for attr in ("items", "data", "connected_accounts", "accounts"):
+        val = getattr(response, attr, None)
+        if isinstance(val, list):
+            return val
+    # Final fallback: if response itself is iterable (bare list)
+    try:
+        return list(response)
+    except TypeError:
+        return []
+
+
 def _discover_connected_toolkits(client, user_id: str) -> list[str]:
     """Query Composio API for the user's actually connected app toolkits.
 
-    Returns toolkit slugs (lowercase) for all apps the user has connected
-    on the Composio dashboard. These are merged with the static config
-    to ensure we only index tools the user can actually execute.
-
-    SDK signature: client.connected_accounts.list(user_ids=[...], statuses=[...])
-    Returns ConnectedAccountListResponse with .items: List[Item]
-    Each Item has .toolkit.slug (str) and .status (str)
+    Returns toolkit slugs (lowercase) for all apps the user has connected.
+    Fixes applied:
+      RC1 — pagination: loops via next_cursor until exhausted
+      RC2 — attribute probe: handles .items / .data / .connected_accounts
+      RC5 — fallback: if ACTIVE query returns empty, retries without filter
+             and logs a warning so operator can diagnose stale index builds
     """
+    def _fetch_page(cursor=None):
+        kwargs = {"user_ids": [user_id], "statuses": ["ACTIVE"]}
+        if cursor:
+            kwargs["cursor"] = cursor
+        return client.connected_accounts.list(**kwargs)
+
     try:
-        response = client.connected_accounts.list(
-            user_ids=[user_id],
-            statuses=["ACTIVE"],
-        )
-
-        items = response.items if hasattr(response, "items") else []
-        if not items:
-            logger.info("Composio: No active connected accounts found for user")
-            return []
-
         connected = set()
-        for account in items:
-            toolkit_obj = getattr(account, "toolkit", None)
-            slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
-            if slug:
-                connected.add(slug.lower().strip())
+        cursor = None
+        page_num = 0
 
-        logger.info(f"Composio: {len(connected)} connected accounts discovered — {sorted(connected)}")
+        # RC1: paginate until no next_cursor
+        while True:
+            page_num += 1
+            response = _fetch_page(cursor)
+            items = _extract_items_from_response(response)  # RC2
+
+            for account in items:
+                toolkit_obj = getattr(account, "toolkit", None)
+                slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
+                acct_id = getattr(account, "id", getattr(account, "account_id", "?"))
+                if slug:
+                    connected.add(slug.lower().strip())
+                    logger.debug(
+                        f"Composio: discovered {slug.lower()} account_id={acct_id}"
+                    )
+
+            # Advance cursor — SDK may expose it as next_cursor, cursor, or nextCursor
+            cursor = (
+                getattr(response, "next_cursor", None)
+                or getattr(response, "cursor", None)
+                or getattr(response, "nextCursor", None)
+            )
+            if not cursor:
+                break
+
+        # RC5: if ACTIVE query returned nothing, retry without status filter
+        # to detect INITIATED/EXPIRED connections and surface a warning
+        if not connected:
+            logger.warning(
+                "Composio: ACTIVE query returned 0 connections — retrying without "
+                "status filter to check for non-ACTIVE connections"
+            )
+            try:
+                fallback_resp = client.connected_accounts.list(user_ids=[user_id])
+                fallback_items = _extract_items_from_response(fallback_resp)
+                non_active = {}
+                for account in fallback_items:
+                    toolkit_obj = getattr(account, "toolkit", None)
+                    slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
+                    status = getattr(account, "status", "UNKNOWN")
+                    if slug:
+                        non_active[slug.lower().strip()] = status
+                if non_active:
+                    logger.warning(
+                        f"Composio: Found {len(non_active)} non-ACTIVE connection(s) — "
+                        f"these will NOT be indexed: {non_active}. "
+                        "If a connection shows ACTIVE in the dashboard but not here, "
+                        "the connection may be in a different API key project scope (RC4)."
+                    )
+                else:
+                    logger.warning(
+                        "Composio: No connections found even without status filter. "
+                        "Verify COMPOSIO_API_KEY project scope matches where connections were created."
+                    )
+            except Exception as fb_exc:
+                logger.warning(f"Composio: Fallback status check failed: {fb_exc}")
+
+        logger.info(
+            f"Composio: {len(connected)} connected toolkit(s) discovered "
+            f"across {page_num} page(s) — {sorted(connected)}"
+        )
         return list(connected)
 
     except Exception as exc:
