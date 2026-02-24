@@ -50,6 +50,12 @@ _CB_MAX_FAILURES = 2
 # Prevents hammering services that can't execute until user re-authenticates.
 _service_auth_failed: dict[str, bool] = {}
 
+# INITIATED connection tracking: service_key → timestamp when auth link was sent.
+# Composio INITIATED connections auto-expire after 10 minutes.
+# We warn at 8 minutes and prompt the user to re-request the link.
+_initiated_connections: dict[str, float] = {}
+_INITIATED_EXPIRY_SECS = 480  # 8 min — warn before Composio's 10-min hard expiry
+
 # Canonical slug index: ALL available tool slugs from connected toolkits.
 # Built once at first execute(), used to resolve LLM-generated short slugs
 # (e.g. "TEAMS_LIST_CHANNELS") to canonical SDK slugs
@@ -838,6 +844,7 @@ async def refresh_slug_index() -> str:
     _slug_index_built = False
     _failed_slugs.clear()
     _service_auth_failed.clear()  # Re-auth completed — clear auth circuit breakers
+    _initiated_connections.clear()
     _slug_required_params = {}
     _slug_schemas = {}
     _active_call_schemas.clear()  # Defensive: discard any stale per-call states from before refresh
@@ -999,6 +1006,18 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             f"Do not retry {service_display} tools."
         )
 
+    # INITIATED expiry check: auth link sent but service still not ACTIVE after 8 min
+    if service_key and service_key in _initiated_connections:
+        elapsed = time.time() - _initiated_connections[service_key]
+        if elapsed > _INITIATED_EXPIRY_SECS:
+            del _initiated_connections[service_key]
+            service_display = service_key.replace("_", " ").title()
+            logger.warning(f"Composio: INITIATED auth link expired for {service_key} ({elapsed:.0f}s ago)")
+            return (
+                f"The {service_display} connection link has expired — auth links are only valid for 10 minutes. "
+                f"Use manageConnections with action connect to get a fresh link now."
+            )
+
     if not settings.composio_api_key or not settings.composio_user_id:
         return "That connected service is not available on this instance"
 
@@ -1062,6 +1081,39 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     # On SUCCESS → schema never enters LLM context (voice result only, clean output)
     # On ERROR   → schema enters LLM context so LLM can self-correct and retry
     call_schema = _slug_schemas.get(resolved_slug, {})
+    if not call_schema:
+        # Cache miss — this tool may be from a newly-connected service.
+        # Fetch schema live so pre-execution validation and error hints work correctly.
+        logger.info(f"Composio: Schema cache miss for {resolved_slug} — fetching live")
+        try:
+            def _fetch_raw_for_schema():
+                try:
+                    terms = resolved_slug.replace("_", " ").lower()
+                    results = client.tools.get_raw_composio_tools(search=terms, limit=5)
+                    for tool in results:
+                        if tool.slug == resolved_slug:
+                            return tool
+                except Exception:
+                    return None
+                return None
+
+            raw_tool = await asyncio.to_thread(_fetch_raw_for_schema)
+            if raw_tool is not None:
+                try:
+                    input_schema = raw_tool.input_parameters
+                    if hasattr(input_schema, "properties"):
+                        props = {}
+                        for pname, pinfo in input_schema.properties.items():
+                            desc = getattr(pinfo, "description", "") or getattr(pinfo, "title", "")
+                            props[pname] = desc
+                        required = list(getattr(input_schema, "required", []) or [])
+                        call_schema = {"required": required, "properties": props}
+                        _slug_schemas[resolved_slug] = call_schema  # Cache for subsequent calls
+                        logger.info(f"Composio: Schema fetched live for {resolved_slug}: required={required}")
+                except Exception as schema_parse_err:
+                    logger.debug(f"Composio: Schema parse failed for {resolved_slug}: {schema_parse_err}")
+        except Exception as live_err:
+            logger.debug(f"Composio: Live schema fetch error for {resolved_slug}: {live_err}")
     _active_call_schemas[call_id] = call_schema
     call_required = call_schema.get("required", [])
     call_properties = call_schema.get("properties", {})
@@ -1298,34 +1350,84 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
 
 async def get_connected_services_status() -> str:
-    """Return voice-friendly list of connected and available services.
+    """Return voice-friendly list of services with live status values (ACTIVE/INITIATED/EXPIRED/FAILED).
 
-    Uses the slug index service grouping to report what's connected.
-    If index not built, triggers a build first.
+    Calls connected_accounts.list() with all statuses so INITIATED and EXPIRED
+    connections are visible. Side-effect: syncs _service_auth_failed with live data.
     """
-    await ensure_slug_index()
+    from ..config import get_settings
+    settings = get_settings()
+    live_statuses: dict[str, str] = {}
 
-    if not _slugs_by_service:
-        return "No services are connected yet"
+    if settings.composio_api_key and settings.composio_user_id:
+        try:
+            client = _get_client(settings)
+            user_id = settings.composio_user_id.strip()
 
-    # Exclude meta-toolkits from the connected list
+            def _fetch():
+                return client.connected_accounts.list(user_ids=[user_id])
+
+            response = await asyncio.to_thread(_fetch)
+            items = response.items if hasattr(response, "items") else []
+            for account in items:
+                toolkit_obj = getattr(account, "toolkit", None)
+                slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
+                status = getattr(account, "status", None)
+                if slug and status:
+                    service_key = slug.lower().strip()
+                    live_statuses[service_key] = status
+                    # Side-effect: keep auth failure state in sync with live data
+                    if status in ("EXPIRED", "FAILED"):
+                        _service_auth_failed[service_key] = True
+                    elif status == "ACTIVE":
+                        _service_auth_failed.pop(service_key, None)
+        except Exception as exc:
+            logger.warning(f"Composio: Could not fetch live connection statuses: {exc}")
+
+    # Fall back to index-based view if live query failed
+    if not live_statuses:
+        await ensure_slug_index()
+        if not _slugs_by_service:
+            return "No services are connected yet"
+        _EXCLUDED = {"composio", "composio_search", "other"}
+        connected = sorted(k for k in _slugs_by_service.keys() if k not in _EXCLUDED)
+        if not connected:
+            return "No external services are connected yet"
+        names = [_COMPOSIO_VOICE_NAMES.get(s, s.replace("_", " ").title()) for s in connected]
+        return f"You have {len(connected)} active services: {', '.join(names)}"
+
     _EXCLUDED = {"composio", "composio_search", "other"}
-    connected = sorted(k for k in _slugs_by_service.keys() if k not in _EXCLUDED)
+    active_list, initiated_list, failed_list = [], [], []
 
-    if not connected:
-        return "No external services are connected yet"
+    for service_key in sorted(live_statuses):
+        if service_key in _EXCLUDED:
+            continue
+        status = live_statuses[service_key]
+        display = _COMPOSIO_VOICE_NAMES.get(service_key, service_key.replace("_", " ").title())
 
-    names = [_COMPOSIO_VOICE_NAMES.get(s, s.replace("_", " ").title()) for s in connected]
-    tool_counts = [f"{_COMPOSIO_VOICE_NAMES.get(s, s)} with {len(_slugs_by_service[s])} tools" for s in connected]
+        if status == "ACTIVE":
+            tool_count = len(_slugs_by_service.get(service_key, []))
+            cnt = f" ({tool_count} tools)" if tool_count else ""
+            active_list.append(f"{display}{cnt}")
+        elif status == "INITIATED":
+            elapsed = time.time() - _initiated_connections.get(service_key, time.time())
+            remaining = max(0, 600 - int(elapsed))
+            if remaining > 60:
+                initiated_list.append(f"{display} (auth link sent — {remaining // 60}m remaining to complete)")
+            else:
+                initiated_list.append(f"{display} (auth link expiring soon — complete it now or request a new one)")
+        elif status in ("EXPIRED", "FAILED"):
+            failed_list.append(f"{display} (needs re-authentication)")
 
-    if len(names) == 1:
-        summary = names[0]
-    elif len(names) == 2:
-        summary = f"{names[0]} and {names[1]}"
-    else:
-        summary = ", ".join(names[:-1]) + f", and {names[-1]}"
+    parts = []
+    if active_list:
+        parts.append(f"Active: {', '.join(active_list)}")
+    if initiated_list:
+        parts.append(f"Pending auth: {', '.join(initiated_list)}")
+    if failed_list:
+        parts.append(f"Needs re-auth: {', '.join(failed_list)}")
 
-    return f"You have {len(connected)} services connected: {summary}"
+    return " | ".join(parts) if parts else "No external services are connected yet"
 
 
 async def initiate_service_connection(service: str) -> tuple[str, str]:
@@ -1371,6 +1473,8 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
             )
             if redirect_url:
                 logger.info(f"Composio: Connection initiated for {service_lower}, status={response_data.get('status')}")
+                # Track when this auth link was sent for expiry detection
+                _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
             # Already connected — redirect_url absent when no OAuth needed
             status = response_data.get("status", "")

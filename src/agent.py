@@ -2034,6 +2034,31 @@ async def entrypoint(ctx: JobContext):
     _heartbeat_task = asyncio.create_task(_heartbeat_monitor(session, _task_tracker))
     logger.info("[Heartbeat] In-session monitor started (4s interval, 4s stall threshold)")
 
+    async def _composio_health_monitor():
+        """Periodic background check: proactively detect EXPIRED/FAILED Composio connections.
+
+        Runs every 10 minutes. Calls get_connected_services_status() which has the
+        side-effect of syncing _service_auth_failed with live Composio API data.
+        This means expired services are detected before a tool call fails —
+        the LLM receives early re-auth guidance instead of a confusing execution error.
+        """
+        INTERVAL = 600  # 10 minutes
+        logger.info("[ComposioHealth] Periodic connection health monitor started (interval=10min)")
+        while True:
+            try:
+                await asyncio.sleep(INTERVAL)
+                from .tools.composio_router import get_connected_services_status
+                status_summary = await get_connected_services_status()
+                logger.info(f"[ComposioHealth] Periodic check complete: {status_summary[:120]}")
+            except asyncio.CancelledError:
+                logger.info("[ComposioHealth] Monitor cancelled — session ending")
+                break
+            except Exception as e:
+                logger.warning(f"[ComposioHealth] Periodic check failed: {e}")
+
+    _composio_health_task = asyncio.create_task(_composio_health_monitor())
+    logger.info("[ComposioHealth] Periodic Composio connection health monitor started")
+
     # CRITICAL: Keep the agent alive until the room closes
     # Without this, the entrypoint returns and the agent disconnects!
     # If we started without a client, wait for one to connect
