@@ -233,7 +233,7 @@ COMPOSIO_SEARCH_TOOLS — discover relevant tools and check connection status
   Use FIRST when you need the correct slug for a task or want to verify a service is connected before executing
 
 COMPOSIO_MANAGE_CONNECTIONS — handle OAuth and API key authentication for any service
-  Pass: toolkit="github"
+  Pass: toolkits=["github"]  (NOTE: "toolkits" is plural and must be an array — never "toolkit" singular)
   Returns: auth link for the user to click and complete authentication
   Use when: COMPOSIO_SEARCH_TOOLS or manageConnections reports a service is not connected or needs re-auth
 
