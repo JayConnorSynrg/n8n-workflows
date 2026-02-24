@@ -1162,6 +1162,15 @@ async def entrypoint(ctx: JobContext):
         elif not _has_active_task:
             _wake_gate_suppress = True
             logger.debug("[WakeGate] No wake word — suppressing next response")
+            # Interrupt immediately before preemptive generation can commit text to chat.
+            # This eliminates the race condition where preemptive_generation=True causes the
+            # LLM to commit text to conversation_item_added BEFORE on_agent_state_changed("thinking")
+            # fires — resulting in chat text with silent audio.
+            try:
+                session.interrupt()
+                logger.debug("[WakeGate] Preemptive interrupt() issued at transcription time")
+            except Exception as _wg_err:
+                logger.debug("[WakeGate] Preemptive interrupt() call failed: %s", _wg_err)
         # If _has_active_task and no wake word: allow continuation of current task (don't suppress)
 
     @session.on("agent_state_changed")
@@ -1172,15 +1181,12 @@ async def entrypoint(ctx: JobContext):
 
         state_str = str(state).lower()
         if "thinking" in state_str:
-            # Wake word gate: if suppress flag is set, interrupt before generating response
+            # Wake word gate: reset suppress flag if it was set (interrupt already fired at
+            # transcription time in on_user_input_transcribed — no second interrupt needed here)
             global _wake_gate_suppress
             if _wake_gate_suppress:
-                _wake_gate_suppress = False  # Always reset
-                logger.info("[WakeGate] Suppressing agent response — no wake word for this turn")
-                try:
-                    session.interrupt()
-                except Exception as _wg_err:
-                    logger.debug("[WakeGate] interrupt() call failed: %s", _wg_err)
+                _wake_gate_suppress = False  # Reset flag; interrupt already issued upstream
+                logger.info("[WakeGate] Suppress flag reset in thinking state — interrupt already fired at transcription")
                 return  # Skip task tracker update
             _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
