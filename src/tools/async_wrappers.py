@@ -181,16 +181,26 @@ async def database_query_async(query: str) -> str:
 
 @llm.function_tool(
     name="checkContext",
-    description="Check conversation context or session history to recall what was discussed earlier.",
+    description=(
+        "Query the PostgreSQL session database for conversation history, tool calls, and "
+        "what was discussed this session. Always call this when the user asks about session "
+        "context, history, or what has been discussed. "
+        "query_type options: session_context (default), tool_history, global_context, "
+        "search_history, custom_query. search_query: keyword for search_history/custom_query."
+    ),
 )
 async def query_context_async(
-    context_type: str,
-    query: Optional[str] = None,
+    query_type: str = "session_context",
+    search_query: Optional[str] = None,
 ) -> str:
-    """Query session context - runs synchronously for immediate results."""
-    call_id = await publish_tool_start("checkContext", {"context_type": context_type})
+    """Query session context from PostgreSQL via n8n webhook."""
+    call_id = await publish_tool_start("checkContext", {"query_type": query_type})
     await publish_tool_executing(call_id)
-    result = await agent_context_tool.query_context_tool(context_type, query)
+    # Use keyword args — session_id is resolved internally from _current_session_id
+    result = await agent_context_tool.query_context_tool(
+        query_type=query_type,
+        search_query=search_query,
+    )
     await publish_tool_completed(call_id, result[:100] if result else "")
     return result
 
