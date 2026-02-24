@@ -1762,7 +1762,7 @@ async def entrypoint(ctx: JobContext):
     async def _trim_chat_context(session_ref, max_messages: int = 20) -> None:
         """Trim chat context to prevent unbounded memory growth.
 
-        Keeps system message + last max_messages non-system messages.
+        Keeps last max_messages items (system message preserved automatically).
         Called periodically (~60s) from heartbeat to bound session memory.
         Only trims when agent is not responding to avoid race conditions.
         """
@@ -1771,27 +1771,16 @@ async def entrypoint(ctx: JobContext):
             if chat_ctx is None:
                 logger.debug("[Memory] chat_ctx not accessible on session — trim skipped")
                 return
-            msgs = chat_ctx.messages
-            if len(msgs) <= max_messages + 1:
+            before = len(chat_ctx.items)
+            if before <= max_messages + 1:
                 return  # Nothing to trim
 
-            system_msgs = [m for m in msgs if getattr(m, 'role', '') == "system"]
-            non_system_msgs = [m for m in msgs if getattr(m, 'role', '') != "system"]
-
-            if len(non_system_msgs) <= max_messages:
-                return  # Non-system messages within budget
-
-            trimmed_non_system = non_system_msgs[-max_messages:]
-            removed = len(non_system_msgs) - len(trimmed_non_system)
-
-            # Rebuild messages list in-place
-            msgs.clear()
-            msgs.extend(system_msgs)
-            msgs.extend(trimmed_non_system)
+            chat_ctx.truncate(max_items=max_messages)
+            removed = before - len(chat_ctx.items)
 
             logger.info(
                 f"[Memory] Chat context trimmed: removed {removed} old messages, "
-                f"kept {len(system_msgs)} system + {len(trimmed_non_system)} conversation messages"
+                f"kept {len(chat_ctx.items)} items"
             )
         except Exception as e:
             logger.warning(f"[Memory] Chat context trim failed: {e}")
