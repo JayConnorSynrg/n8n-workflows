@@ -2002,6 +2002,18 @@ async def entrypoint(ctx: JobContext):
         except Exception as _me:
             logger.error("[Memory] Synthesis failed: %s", _me)
 
+    # Save session summary to PostgreSQL conversation_log
+    if _session_transcript:
+        _turn_count = len(_session_transcript)
+        _user_turns = sum(1 for t in _session_transcript if t.get("role") == "user")
+        _summary = (
+            f"Session ended. Room: {session_id}. "
+            f"{_turn_count} total turns ({_user_turns} from user). "
+            f"Logged at session close."
+        )
+        asyncio.create_task(_pg_logger.save_session_summary(session_id, _summary))
+        logger.info("[PgLogger] Session summary queued for %s (%d turns)", session_id, _turn_count)
+
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
     cleared_facts = _clear_facts(session_id)
