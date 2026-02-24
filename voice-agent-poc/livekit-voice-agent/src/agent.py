@@ -791,6 +791,14 @@ async def entrypoint(ctx: JobContext):
             logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
     # ── End per-user memory routing ──────────────────────────────────────────
 
+    # Reset Composio slug index per-session so newly connected services are visible
+    try:
+        from .tools import composio_router as _cr
+        _cr._slug_index_built = False
+        logger.info("[Composio] Slug index reset — will rebuild on first tool call this session")
+    except Exception:  # nosec B110
+        pass
+
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
         vad = ctx.proc.userdata["vad"]
