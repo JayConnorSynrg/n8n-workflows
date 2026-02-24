@@ -112,7 +112,13 @@ async def send_email_async(
 
 @llm.function_tool(
     name="searchDrive",
-    description="Search Google Drive for documents by keyword or topic. Summarize findings for the user.",
+    description=(
+        "Search Google Drive for documents by keyword or topic. Summarize findings for the user. "
+        "NOTE: Gamma presentations and slide decks are NOT stored in Google Drive — they live on gamma.app. "
+        "For a Gamma created this session use recall(query='gamma presentation'). "
+        "For saved Gamma content use composioExecute GAMMA_LIST_FOLDERS. "
+        "Never call this tool when the user is asking about a presentation, slide deck, or Gamma."
+    ),
 )
 async def search_documents_async(
     query: str,
@@ -147,7 +153,11 @@ async def get_document_async(file_id: str) -> str:
 
 @llm.function_tool(
     name="listFiles",
-    description="List recent files in Google Drive. Summarize results naturally.",
+    description=(
+        "List recent files in Google Drive. Summarize results naturally. "
+        "NOTE: Gamma presentations are hosted on gamma.app and do NOT appear in Drive listings. "
+        "Use recall(query='gamma presentation') for a Gamma created this session."
+    ),
 )
 async def list_drive_files_async(max_results: int = 10) -> str:
     """List Drive files - runs synchronously for immediate results."""
