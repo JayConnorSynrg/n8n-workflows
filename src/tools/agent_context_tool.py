@@ -44,6 +44,17 @@ CACHE_TTLS = {
     "custom_query": 60.0,       # 1 minute
 }
 
+# Module-level session_id — set once at session start by agent.py
+# Allows checkContext to query the correct session without the LLM knowing the ID
+_current_session_id: str = ""
+
+
+def set_current_session_id(session_id: str) -> None:
+    """Called by agent.py immediately after session_id is determined."""
+    global _current_session_id
+    _current_session_id = session_id
+    logger.info("[ContextTool] Session ID set: %s", session_id)
+
 
 def _make_cache_key(
     query_type: str,
@@ -132,7 +143,7 @@ async def query_context_tool(
     Returns:
         Query results formatted for voice or error message
     """
-    effective_session_id = session_id or "livekit-agent"
+    effective_session_id = session_id or _current_session_id or "livekit-agent"
 
     # Validate custom_query has search_query
     if query_type == "custom_query" and not search_query:
@@ -269,7 +280,7 @@ async def get_session_summary_tool(
     Returns:
         Session summary or error message
     """
-    effective_session_id = session_id or "livekit-agent"
+    effective_session_id = session_id or _current_session_id or "livekit-agent"
 
     # Check specialized session cache first
     cache_manager = get_cache_manager()
