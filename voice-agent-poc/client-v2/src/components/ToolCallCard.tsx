@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 interface ToolCall {
   id: string
@@ -38,15 +38,19 @@ const TOOL_WORKFLOW_MAP: Record<string, { id: string; webhook: string }> = {
 /**
  * Converts a camelCase or snake_case tool name to a human-readable Title Case string.
  * This is the default path for any tool not in TOOL_REGISTRY.
+ *
+ * Uses boundary-aware regex — does NOT space individual uppercase letters in
+ * all-caps sequences (avoids "M I C R O S O F T" from "MICROSOFTTEAMS").
  */
 function autoDisplayName(toolName: string): string {
   if (!toolName) return 'Unknown Tool'
   return toolName
-    .replace(/([A-Z])/g, ' $1')   // camelCase → insert space before uppercase
-    .replace(/_/g, ' ')            // snake_case → spaces
-    .replace(/\s+/g, ' ')          // collapse multiple spaces
+    .replace(/_/g, ' ')                            // snake_case → spaces first
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')         // camelCase: lower/digit → UPPER
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')     // all-caps prefix: "HTMLParser" → "HTML Parser"
+    .replace(/\s+/g, ' ')
     .trim()
-    .replace(/^\w/, c => c.toUpperCase()) // capitalize first letter
+    .replace(/^\w/, c => c.toUpperCase())
 }
 
 /**
@@ -297,79 +301,72 @@ interface ToolCallCardProps {
   toolCall: ToolCall
   position: 'left' | 'right'
   index: number
+  /** Opacity override — used by panel to fade error cards before removal */
+  fadeOpacity?: number
 }
 
-export function ToolCallCard({ toolCall, position, index }: ToolCallCardProps) {
-  const workflow = TOOL_WORKFLOW_MAP[toolCall.name] || { id: '', webhook: '' }
-
+export function ToolCallCard({ toolCall, position, index, fadeOpacity = 1 }: ToolCallCardProps) {
   // Null guard on toolCall.name before any use
   const rawName = toolCall.name ?? 'Unknown Tool'
-  const { displayName, icon } = resolveToolDisplay(rawName)
+  const { displayName, icon, composioResolved } = resolveToolDisplay(rawName)
 
-  // Log tool call state changes
-  useEffect(() => {
-    console.log(`[ToolCallCard] ${rawName} status: ${toolCall.status}`, {
-      id: toolCall.id,
-      workflowId: workflow.id,
-    })
-  }, [toolCall.status])
+  // Compact label: show only the action, not the service prefix
+  // Priority: Composio action → colon-format action → full displayName
+  // Truncate to 15 chars to fit the compact card width
+  const compactLabel = (() => {
+    if (composioResolved) {
+      const a = composioResolved.action
+      return a.length > 15 ? a.slice(0, 14) + '…' : a
+    }
+    // Colon-format from Python agent ("Teams: Send Message") → extract action after colon
+    const colonIdx = displayName.indexOf(':')
+    if (colonIdx > 0) {
+      const action = displayName.slice(colonIdx + 1).trim()
+      return action.length > 15 ? action.slice(0, 14) + '…' : action
+    }
+    return displayName.length > 15 ? displayName.slice(0, 14) + '…' : displayName
+  })()
 
-  // Status colors — text color and tint rgba for the glass overlay
-  const statusColors = {
-    pending:   { text: 'text-gray-500',    tint: 'rgba(148,163,184,0.08)' },
-    executing: { text: 'text-gray-800',    tint: 'rgba(78,234,170,0.14)' },
-    completed: { text: 'text-emerald-700', tint: 'rgba(34,197,94,0.14)' },
-    error:     { text: 'text-red-600',     tint: 'rgba(239,68,68,0.14)' },
-  }
-
-  const colors = statusColors[toolCall.status]
-
-  // Animation variants
   const cardVariants = {
     initial: {
       opacity: 0,
-      x: position === 'left' ? -50 : 50,
-      scale: 0.9,
+      x: position === 'left' ? -24 : 24,
+      scale: 0.92,
     },
     animate: {
-      opacity: 1,
+      opacity: fadeOpacity,
       x: 0,
       scale: 1,
       transition: {
         type: 'spring',
-        stiffness: 300,
-        damping: 25,
-        delay: index * 0.1,
+        stiffness: 340,
+        damping: 28,
+        delay: index * 0.06,
       },
     },
     exit: {
       opacity: 0,
-      x: position === 'left' ? -30 : 30,
-      scale: 0.95,
-      transition: {
-        duration: 0.2,
-        ease: 'easeOut',
-      },
+      x: position === 'left' ? -16 : 16,
+      scale: 0.94,
+      transition: { duration: 0.18, ease: 'easeOut' },
     },
   }
 
-  // Derive sub-status chip config
-  const subStatusChip = (() => {
-    if (!toolCall.subStatus || toolCall.subStatus === 'done') return null
-    if (toolCall.subStatus === 'searching') return { label: 'Searching...', icon: '🔍' }
-    if (toolCall.subStatus === 'executing') return { label: 'Executing...', icon: '⚡' }
-    // Unknown sub-statuses — render as-is
-    return { label: toolCall.subStatus, icon: '⏳' }
-  })()
+  // Status dot config
+  const statusDot = {
+    pending:   { color: 'bg-gray-300',      pulse: false },
+    executing: { color: 'bg-[#4EEAAA]',     pulse: true  },
+    completed: { color: 'bg-emerald-400',   pulse: false },
+    error:     { color: 'bg-red-400',       pulse: false },
+  }[toolCall.status]
 
-  // Duration display — only for terminal states
-  const isTerminal = toolCall.status === 'completed' || toolCall.status === 'error'
-  const durationLabel = isTerminal && toolCall.duration !== undefined
-    ? formatDuration(toolCall.duration)
-    : null
-
-  // Result preview
-  const resultPreview = toolCall.status === 'completed' ? generatePresentation(toolCall) : null
+  // Tint overlay per status
+  const tint = {
+    pending:   'rgba(148,163,184,0.06)',
+    executing: 'rgba(78,234,170,0.10)',
+    completed: 'rgba(34,197,94,0.08)',
+    error:     'rgba(239,68,68,0.10)',
+  }[toolCall.status]
 
   return (
     <motion.div
@@ -381,121 +378,58 @@ export function ToolCallCard({ toolCall, position, index }: ToolCallCardProps) {
       data-testid="tool-call-card"
       data-tool-id={toolCall.id}
       data-status={toolCall.status}
-      className="relative overflow-hidden rounded-xl transition-all duration-300 w-full max-w-[160px] min-w-[80px] p-2 sm:p-3"
+      // Compact horizontal pill — ~30px tall, fits 4+ cards in the panel
+      className="relative overflow-hidden rounded-lg w-full max-w-[148px] min-w-[100px]"
       style={{
-        background: 'rgba(248,250,252,0.82)',
-        backdropFilter: 'blur(20px) saturate(200%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(200%)',
-        border: '1px solid rgba(255,255,255,0.7)',
-        boxShadow: `
-          8px 8px 20px rgba(0,0,0,0.13),
-          -4px -4px 12px rgba(255,255,255,0.95),
-          inset 0 1px 0 rgba(255,255,255,0.8),
-          inset 0 -1px 0 rgba(0,0,0,0.03)
-        `,
+        background: 'rgba(248,250,252,0.85)',
+        backdropFilter: 'blur(16px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+        border: '1px solid rgba(255,255,255,0.65)',
+        boxShadow: '4px 4px 12px rgba(0,0,0,0.09), -2px -2px 8px rgba(255,255,255,0.9), inset 0 1px 0 rgba(255,255,255,0.75)',
       }}
     >
-      {/* Pending: slow breathing pulse — card dims and brightens to signal waiting */}
-      {toolCall.status === 'pending' && (
-        <motion.div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            background: 'rgba(78,234,170,0.12)',
-          }}
-          animate={{ opacity: [0.3, 1, 0.3] }}
-          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
-        />
-      )}
-
-      {/* Executing: single deliberate sweep left→right, long pause, then repeat — feels like work happening */}
+      {/* Executing sweep animation */}
       {toolCall.status === 'executing' && (
         <motion.div
           style={{
             position: 'absolute',
             inset: 0,
             pointerEvents: 'none',
-            background: 'linear-gradient(90deg, transparent 0%, rgba(78,234,170,0.5) 30%, rgba(34,211,238,0.5) 55%, rgba(139,92,246,0.4) 80%, transparent 100%)',
+            background: 'linear-gradient(90deg, transparent 0%, rgba(78,234,170,0.35) 40%, rgba(34,211,238,0.35) 65%, transparent 100%)',
           }}
           animate={{ x: ['-110%', '110%'] }}
-          transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut', repeatDelay: 0.8 }}
+          transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut', repeatDelay: 0.6 }}
         />
       )}
 
-      {/* Status tint overlay */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          background: colors.tint,
-        }}
-      />
+      {/* Status tint */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: tint }} />
 
-      {/* Content - centered, stacked layout */}
-      <div className="flex flex-col items-center text-center gap-1">
-        {/* Icon + Status indicator row */}
-        <div className="flex items-center justify-center gap-1">
-          <span className="text-base sm:text-lg">{icon}</span>
-          {toolCall.status === 'executing' && (
-            <motion.span
-              className="w-1.5 h-1.5 rounded-full bg-synrg-mint"
-              animate={{ opacity: [1, 0.4, 1] }}
-              transition={{ duration: 1, repeat: Infinity }}
-            />
-          )}
-          {toolCall.status === 'completed' && (
-            <span className="text-[10px] text-success">✓</span>
-          )}
-          {toolCall.status === 'error' && (
-            <span className="text-[10px] text-error">✕</span>
-          )}
-          {/* Duration badge — inline with status indicator for terminal states */}
-          {durationLabel && (
-            <span className="text-[9px] text-gray-400 ml-0.5">{durationLabel}</span>
-          )}
-        </div>
+      {/* Single-row content: icon · name · spacer · status dot */}
+      <div className="relative flex items-center gap-1.5 px-2 py-1.5">
+        {/* Icon */}
+        <span className="text-sm flex-shrink-0 leading-none">{icon}</span>
 
-        {/* Tool name */}
+        {/* Tool name — truncated, fills available space */}
         <span
           data-testid="tool-name"
-          className={`text-[10px] sm:text-xs font-medium ${colors.text} leading-tight`}
+          className="text-[9px] font-medium text-gray-600 leading-tight truncate flex-1 min-w-0"
         >
-          {displayName}
+          {compactLabel}
         </span>
 
-        {/* Sub-status chip — only when truthy and not 'done' */}
-        {subStatusChip && (
-          <span className="text-[8px] text-gray-500 bg-white/60 rounded-full px-1.5 py-0.5 leading-tight">
-            {subStatusChip.icon} {subStatusChip.label}
-          </span>
-        )}
-
-        {/* Status text */}
-        <p className="text-[9px] sm:text-[10px] text-gray-400">
-          {toolCall.status === 'pending' && 'Queued'}
-          {toolCall.status === 'executing' && 'Processing'}
-          {toolCall.status === 'completed' && 'Done'}
-          {toolCall.status === 'error' && 'Failed'}
-        </p>
-
-        {/* Error message — only when status is 'error' and error field is set */}
-        {toolCall.error && toolCall.status === 'error' && (
-          <p
-            className="text-[8px] text-red-400 mt-0.5 leading-tight w-full truncate"
-            title={toolCall.error}
-          >
-            {toolCall.error.length > 80 ? toolCall.error.slice(0, 80) + '…' : toolCall.error}
-          </p>
-        )}
-
-        {/* Result preview — only on completed with a non-null presentation */}
-        {resultPreview && (
-          <p className="text-[8px] text-green-500 mt-0.5 leading-tight w-full truncate" title={resultPreview}>
-            {resultPreview}
-          </p>
-        )}
+        {/* Status indicator */}
+        <span className="flex-shrink-0 flex items-center">
+          {statusDot.pulse ? (
+            <motion.span
+              className={`w-1.5 h-1.5 rounded-full ${statusDot.color}`}
+              animate={{ opacity: [1, 0.35, 1] }}
+              transition={{ duration: 0.9, repeat: Infinity }}
+            />
+          ) : (
+            <span className={`w-1.5 h-1.5 rounded-full ${statusDot.color}`} />
+          )}
+        </span>
       </div>
     </motion.div>
   )
@@ -507,33 +441,66 @@ interface ToolCallPanelProps {
   maxVisible?: number
 }
 
+// How long (ms) an error card is visible before being dismissed
+const ERROR_DISMISS_DELAY = 2800
+
 export function ToolCallPanel({ toolCalls, position, maxVisible = 3 }: ToolCallPanelProps) {
-  // Filter for active/recent tool calls
+  // Track which error card IDs have been scheduled for dismissal
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
+  // Track which error card IDs are currently in their fade phase (opacity reduced)
+  const [fadingIds, setFadingIds] = useState<Set<string>>(new Set())
+
+  // When new error cards appear, schedule fade → dismiss
+  useEffect(() => {
+    const newErrors = toolCalls.filter(
+      tc => tc.status === 'error' && !dismissedIds.has(tc.id) && !fadingIds.has(tc.id)
+    )
+    if (newErrors.length === 0) return
+
+    const fadeTimers = newErrors.map(tc =>
+      setTimeout(() => {
+        setFadingIds(prev => new Set([...prev, tc.id]))
+      }, ERROR_DISMISS_DELAY * 0.6) // fade starts at 60% of delay
+    )
+
+    const dismissTimers = newErrors.map(tc =>
+      setTimeout(() => {
+        setDismissedIds(prev => new Set([...prev, tc.id]))
+      }, ERROR_DISMISS_DELAY)
+    )
+
+    return () => {
+      fadeTimers.forEach(clearTimeout)
+      dismissTimers.forEach(clearTimeout)
+    }
+  }, [toolCalls]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Active tools first (pending/executing)
   const activeTools = toolCalls
-    .filter(tc => tc.status === 'pending' || tc.status === 'executing')
+    .filter(tc => (tc.status === 'pending' || tc.status === 'executing') && !dismissedIds.has(tc.id))
     .slice(0, maxVisible)
 
+  // Recently completed (not errors) fill remaining slots
   const recentCompleted = toolCalls
-    .filter(tc => tc.status === 'completed' || tc.status === 'error')
+    .filter(tc => tc.status === 'completed' && !dismissedIds.has(tc.id))
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, Math.max(0, maxVisible - activeTools.length))
 
-  const visibleTools = [...activeTools, ...recentCompleted].slice(0, maxVisible)
+  // Error cards that haven't been dismissed yet
+  const errorTools = toolCalls
+    .filter(tc => tc.status === 'error' && !dismissedIds.has(tc.id))
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, Math.max(0, maxVisible - activeTools.length - recentCompleted.length))
 
-  // Log panel state
-  useEffect(() => {
-    if (visibleTools.length > 0) {
-      console.log(`[ToolCallPanel:${position}] Visible tools:`, visibleTools.map(t => `${t.name}:${t.status}`))
-    }
-  }, [visibleTools, position])
+  const visibleTools = [...activeTools, ...recentCompleted, ...errorTools].slice(0, maxVisible)
 
   return (
     <div
       className={`
-        flex flex-col gap-2 sm:gap-3
-        w-full max-w-[120px] sm:max-w-[160px]
-        min-h-[150px] sm:min-h-[200px]
+        flex flex-col gap-1.5
+        w-full max-w-[148px]
         items-center justify-center
+        min-h-[80px]
       `}
     >
       <AnimatePresence mode="popLayout">
@@ -543,13 +510,13 @@ export function ToolCallPanel({ toolCalls, position, maxVisible = 3 }: ToolCallP
             toolCall={toolCall}
             position={position}
             index={index}
+            fadeOpacity={fadingIds.has(toolCall.id) ? 0.15 : 1}
           />
         ))}
       </AnimatePresence>
 
-      {/* Empty state placeholder - maintains vertical centering */}
       {visibleTools.length === 0 && (
-        <div className="h-14 w-full opacity-0" />
+        <div className="h-8 w-full opacity-0" />
       )}
     </div>
   )
