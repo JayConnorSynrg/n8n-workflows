@@ -65,3 +65,46 @@ def clear_facts(session_id: str) -> int:
     if count:
         logger.info(f"[SessionFacts] Cleared {count} facts for session {session_id}")
     return count
+
+
+async def flush_facts_to_db(session_id: str, postgres_url: Optional[str]) -> None:
+    """Persist all in-memory facts for a session to the session_facts_log table.
+
+    Uses a single asyncpg connection (no pool) — this is a one-shot flush at
+    session end.  Silently skips if postgres_url is not set, there are no facts,
+    or any DB error occurs.  Never raises.
+    """
+    if not postgres_url:
+        return
+
+    facts = get_all_facts(session_id)
+    if not facts:
+        logger.debug(f"[SessionFacts] No facts to flush for session {session_id}")
+        return
+
+    try:
+        import asyncpg  # type: ignore
+        conn = await asyncpg.connect(postgres_url, command_timeout=8)
+        try:
+            for key, value in facts.items():
+                await conn.execute(
+                    """
+                    INSERT INTO session_facts_log (session_id, key, value, metadata_json, created_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                    ON CONFLICT (session_id, key)
+                    DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
+                    """,
+                    session_id,
+                    key,
+                    str(value),
+                    None,
+                )
+            logger.info(
+                f"[SessionFacts] Flushed {len(facts)} facts to DB for session {session_id}"
+            )
+        finally:
+            await conn.close()
+    except ImportError:
+        logger.warning("[SessionFacts] asyncpg not installed — DB flush skipped")
+    except Exception as exc:
+        logger.warning(f"[SessionFacts] DB flush failed (non-critical): {exc}")
