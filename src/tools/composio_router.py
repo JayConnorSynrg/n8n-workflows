@@ -1585,6 +1585,8 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
 
     Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array).
     Attempt 2: SDK direct — auth_configs.list() → connected_accounts.initiate(user_id, auth_config_id).
+    Attempt 3: Direct httpx REST API — GET /api/v1/integrations → POST /api/v1/connectedAccounts.
+               This path bypasses the SDK entirely and hits the Composio backend directly.
 
     Returns (auth_url, display_name) on success, or (error_message, "") on failure.
     """
@@ -1617,30 +1619,15 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         """Direct SDK fallback: connected_accounts.initiate() via auth_config_id lookup.
 
         Correct high-level signature: initiate(user_id, auth_config_id, ...)
-        auth_configs.list() on SDK 1.0.0-rc2 does NOT accept 'toolkit=' kwarg —
-        fetch all configs and filter locally by toolkit/app_key attribute.
+        Does NOT accept a 'toolkit' kwarg — must resolve auth_config_id first
+        via client.auth_configs.list(toolkit=service_lower).
         """
-        configs_response = client.auth_configs.list()  # no filter kwargs in rc2
-        all_configs = _extract_items_from_response(configs_response)
-        # Filter by toolkit name — probe multiple attribute names across SDK versions
-        configs = [
-            c for c in all_configs
-            if (
-                (getattr(c, "toolkit", None) or "").lower() == service_lower
-                or (getattr(c, "app_key", None) or "").lower() == service_lower
-                or (getattr(c, "app_name", None) or "").lower() == service_lower
-            )
-        ]
+        configs_response = client.auth_configs.list(toolkit=service_lower)
+        configs = _extract_items_from_response(configs_response)
         if not configs:
-            # Log sample to diagnose the correct attribute name on next deploy
-            if all_configs:
-                sample = vars(all_configs[0]) if hasattr(all_configs[0], "__dict__") else str(all_configs[0])
-                logger.warning(
-                    f"Composio: No auth config matched {service_lower!r}. "
-                    f"Sample config attrs: {sample}"
-                )
             raise ValueError(
-                f"No auth config found for {service_lower} — SDK fallback cannot proceed."
+                f"No auth config found for {service_lower} — SDK fallback cannot proceed. "
+                "The service may not be available for this entity."
             )
         auth_config_id = (
             getattr(configs[0], "id", None)
@@ -1671,29 +1658,13 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     try:
         result = await asyncio.to_thread(_execute_meta_tool)
         if result.get("successful"):
-            data = result.get("data", {}) or {}
-            redirect_url = _extract_redirect_url_from_dict(data)
+            redirect_url = _extract_redirect_url_from_dict(result.get("data", {}))
             if redirect_url:
                 logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
-            # Check multiple "already connected" response shapes:
-            # Shape A: data.response_data.status == "ACTIVE"
-            response_data = data.get("response_data", {}) or {}
-            status = response_data.get("status", "")
-            # Shape B: data.message == "All connections are active" (meta-tool v2)
-            message = (data.get("message") or "").lower()
-            # Shape C: data.results.{service}.has_active_connection == True
-            service_result = (data.get("results", {}) or {}).get(service_lower, {}) or {}
-            already_active = (
-                status in ("ACTIVE", "CONNECTED")
-                or "all connections are active" in message
-                or service_result.get("has_active_connection") is True
-            )
-            if already_active:
-                logger.info(
-                    f"Composio: {service_lower} already connected (meta-tool reported active)"
-                )
+            status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
+            if status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape
@@ -1726,10 +1697,101 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         logger.warning(
             f"Composio: direct SDK initiate returned no redirect URL for {service_lower}: {sdk_result}"
         )
-        return f"I couldn't set up the {display_name} connection right now.", ""
     except Exception as exc:
-        logger.error(f"Composio: initiate_service_connection all paths failed for {service_lower}: {exc}")
-        return f"Connection setup for {display_name} failed due to a system error", ""
+        logger.warning(
+            f"Composio: SDK initiate exception for {service_lower}: {exc} — trying REST API fallback"
+        )
+
+    # --- Attempt 3: Direct REST API via httpx (bypasses SDK and meta-tool entirely) ---
+    # This path hits the Composio backend directly, independent of SDK version quirks.
+    try:
+        import httpx  # already in requirements.txt
+
+        _rest_headers = {
+            "x-api-key": settings.composio_api_key,
+            "Content-Type": "application/json",
+        }
+        _base = "https://backend.composio.tech"
+
+        async def _rest_initiate() -> str | None:
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                # Step 1: resolve integration_id for this service
+                integration_id: str | None = None
+                for path in ("/api/v1/integrations", "/api/v2/integrations"):
+                    try:
+                        r = await http.get(
+                            f"{_base}{path}",
+                            params={"appName": service_lower, "page": 1, "pageSize": 10},
+                            headers=_rest_headers,
+                        )
+                        if r.status_code == 200:
+                            body = r.json()
+                            items = body.get("items") or body.get("integrations") or []
+                            for item in items:
+                                iid = item.get("id") or item.get("integrationId")
+                                if iid:
+                                    integration_id = iid
+                                    break
+                        if integration_id:
+                            logger.info(
+                                f"Composio REST: resolved integration_id={integration_id}"
+                                f" for {service_lower} via {path}"
+                            )
+                            break
+                        else:
+                            logger.debug(
+                                f"Composio REST: {path} status={r.status_code}"
+                                f" body_keys={list(r.json().keys()) if r.status_code == 200 else r.text[:120]}"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Composio REST: {path} exception: {_e}")
+
+                if not integration_id:
+                    logger.warning(f"Composio REST: no integration_id found for {service_lower}")
+                    return None
+
+                # Step 2: initiate connected account → redirect URL
+                for path in ("/api/v1/connectedAccounts", "/api/v2/connectedAccounts"):
+                    try:
+                        r = await http.post(
+                            f"{_base}{path}",
+                            json={"integrationId": integration_id, "userUuid": user_id},
+                            headers=_rest_headers,
+                        )
+                        if r.status_code in (200, 201):
+                            body = r.json()
+                            url = (
+                                body.get("redirectUrl")
+                                or body.get("redirect_url")
+                                or body.get("connectionUrl")
+                                or body.get("authUrl")
+                                or body.get("oauthUrl")
+                                or (body.get("connectedAccount") or {}).get("redirectUrl")
+                            )
+                            if url:
+                                return url
+                            logger.warning(
+                                f"Composio REST: {path} 200 but no URL — keys={list(body.keys())}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Composio REST: {path} returned {r.status_code}: {r.text[:200]}"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Composio REST: {path} POST exception: {_e}")
+                return None
+
+        redirect_url = await _rest_initiate()
+        if redirect_url:
+            logger.info(f"Composio: Connection initiated via REST API for {service_lower}")
+            _initiated_connections[service_lower] = time.time()
+            return redirect_url, display_name
+
+        logger.error(f"Composio: REST API initiation returned no URL for {service_lower}")
+    except Exception as rest_exc:
+        logger.error(f"Composio: REST API fallback exception for {service_lower}: {rest_exc}")
+
+    return f"Connection setup for {display_name} is temporarily unavailable — all initiation paths failed. Please try again in a moment.", ""
 
 
 async def batch_execute_composio_tools(tools: list) -> str:
