@@ -1617,15 +1617,30 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         """Direct SDK fallback: connected_accounts.initiate() via auth_config_id lookup.
 
         Correct high-level signature: initiate(user_id, auth_config_id, ...)
-        Does NOT accept a 'toolkit' kwarg — must resolve auth_config_id first
-        via client.auth_configs.list(toolkit=service_lower).
+        auth_configs.list() on SDK 1.0.0-rc2 does NOT accept 'toolkit=' kwarg —
+        fetch all configs and filter locally by toolkit/app_key attribute.
         """
-        configs_response = client.auth_configs.list(toolkit=service_lower)
-        configs = _extract_items_from_response(configs_response)
+        configs_response = client.auth_configs.list()  # no filter kwargs in rc2
+        all_configs = _extract_items_from_response(configs_response)
+        # Filter by toolkit name — probe multiple attribute names across SDK versions
+        configs = [
+            c for c in all_configs
+            if (
+                (getattr(c, "toolkit", None) or "").lower() == service_lower
+                or (getattr(c, "app_key", None) or "").lower() == service_lower
+                or (getattr(c, "app_name", None) or "").lower() == service_lower
+            )
+        ]
         if not configs:
+            # Log sample to diagnose the correct attribute name on next deploy
+            if all_configs:
+                sample = vars(all_configs[0]) if hasattr(all_configs[0], "__dict__") else str(all_configs[0])
+                logger.warning(
+                    f"Composio: No auth config matched {service_lower!r}. "
+                    f"Sample config attrs: {sample}"
+                )
             raise ValueError(
-                f"No auth config found for {service_lower} — SDK fallback cannot proceed. "
-                "The service may not be available for this entity."
+                f"No auth config found for {service_lower} — SDK fallback cannot proceed."
             )
         auth_config_id = (
             getattr(configs[0], "id", None)
@@ -1656,13 +1671,29 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
     try:
         result = await asyncio.to_thread(_execute_meta_tool)
         if result.get("successful"):
-            redirect_url = _extract_redirect_url_from_dict(result.get("data", {}))
+            data = result.get("data", {}) or {}
+            redirect_url = _extract_redirect_url_from_dict(data)
             if redirect_url:
                 logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 return redirect_url, display_name
-            status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
-            if status in ("ACTIVE", "CONNECTED"):
+            # Check multiple "already connected" response shapes:
+            # Shape A: data.response_data.status == "ACTIVE"
+            response_data = data.get("response_data", {}) or {}
+            status = response_data.get("status", "")
+            # Shape B: data.message == "All connections are active" (meta-tool v2)
+            message = (data.get("message") or "").lower()
+            # Shape C: data.results.{service}.has_active_connection == True
+            service_result = (data.get("results", {}) or {}).get(service_lower, {}) or {}
+            already_active = (
+                status in ("ACTIVE", "CONNECTED")
+                or "all connections are active" in message
+                or service_result.get("has_active_connection") is True
+            )
+            if already_active:
+                logger.info(
+                    f"Composio: {service_lower} already connected (meta-tool reported active)"
+                )
                 return f"{display_name} is already connected and active", ""
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape
