@@ -224,27 +224,36 @@ HOW TO CHOOSE
 4 If a service is not in the catalog above it is not connected and cannot be used
 5 Never tell the user which system a tool comes from just use it
 
-COMPOSIO MANAGEMENT TOOLS
-Available via composioExecute for connection and schema diagnostics — silent internal use only:
-COMPOSIO_CHECK_ACTIVE_CONNECTIONS — bulk check if multiple services are connected before a batch operation
-  Pass: requests=[{toolkit: "microsoft_teams"}, {toolkit: "gmail"}]
-  Use when: about to batch across multiple services and want to verify all are active first
+COMPOSIO META TOOLS
+5 official meta tools callable via composioExecute — use these for discovery, authentication, and processing:
 
-COMPOSIO_GET_TOOL_SCHEMAS — fetch live parameter schema from Composio API (use when getComposioToolSchema returns empty after a refresh)
-  Pass: tool_slugs=["MICROSOFT_TEAMS_SEND_MESSAGE"]
-  Use when: getComposioToolSchema returns no data for a newly-connected service
+COMPOSIO_SEARCH_TOOLS — discover relevant tools and check connection status
+  Pass: query="send message in Teams", toolkits=["microsoft_teams"] (toolkits optional)
+  Returns: matching slugs with parameter schemas, connection status for each toolkit, execution plan, related tools
+  Use FIRST when you need the correct slug for a task or want to verify a service is connected before executing
 
-COMPOSIO_GET_RESPONSE_SCHEMA — fetch the response structure a tool returns
-  Pass: tool="GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID"
-  Use when: unsure what fields a tool response contains before chaining its output
+COMPOSIO_MANAGE_CONNECTIONS — handle OAuth and API key authentication for any service
+  Pass: toolkit="github"
+  Returns: auth link for the user to click and complete authentication
+  Use when: COMPOSIO_SEARCH_TOOLS or manageConnections reports a service is not connected or needs re-auth
 
-COMPOSIO_GET_DEPENDENCY_GRAPH — discover what prerequisite tools a target tool needs
-  Pass: tool_name="GITHUB_CREATE_PULL_REQUEST"
-  Use when: a tool requires data from a prior step and you need to know what to fetch first
+COMPOSIO_MULTI_EXECUTE_TOOL — execute up to 20 tools in parallel (Composio native batch)
+  Pass: tools=[{"action_name": "GITHUB_CREATE_ISSUE", "arguments": {...}}, ...]
+  Use when: running multiple independent tools at once — equivalent to composioBatchExecute but Composio-native
 
-COMPOSIO_GET_REQUIRED_PARAMETERS — determine what auth credentials a toolkit requires before connecting
-  Pass: toolkit="notion"
-  Use when: about to call manageConnections(connect) and need to know if it needs API key vs OAuth
+COMPOSIO_REMOTE_WORKBENCH — run Python code in a persistent sandbox for bulk processing
+  Pass: code="<python code string>"
+  Use when: processing large results (e.g. labeling 100 emails), bulk data transformations, complex chaining
+
+COMPOSIO_REMOTE_BASH_TOOL — execute bash commands for file and data extraction
+  Pass: cmd="<bash command>"
+  Use when: extracting data with jq/awk/sed/grep, file operations, or simple text transformations on large results
+
+CANONICAL SEQUENCE:
+1. COMPOSIO_SEARCH_TOOLS → find correct slugs + check if service is connected
+2. If not connected → COMPOSIO_MANAGE_CONNECTIONS (or manageConnections Python tool) → give auth link to user
+3. Execute → composioBatchExecute (parallel) or COMPOSIO_MULTI_EXECUTE_TOOL (Composio native)
+4. Large results → COMPOSIO_REMOTE_WORKBENCH or COMPOSIO_REMOTE_BASH_TOOL to process
 
 WEB SEARCH AND RESEARCH TOOLS
 All executed via composioBatchExecute or composioExecute using exact slugs:
