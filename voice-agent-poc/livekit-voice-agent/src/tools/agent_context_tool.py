@@ -166,6 +166,8 @@ async def query_context_tool(
         # Guard against empty/None responses from webhook
         if result is None:
             logger.warning(f"Webhook returned None for {query_type}")
+            if query_type == "session_context":
+                return "No conversation history recorded for this session yet."
             return "Could not reach the context service right now"
 
         # Check for errors
