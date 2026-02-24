@@ -36,9 +36,6 @@ export function TranscriptCycler({
 
   // Combine and sort messages and tool calls by timestamp (newest first for cycling)
   useEffect(() => {
-    console.log('[TranscriptCycler] Messages received:', messages.length, messages)
-    console.log('[TranscriptCycler] ToolCalls received:', toolCalls.length)
-
     const combined: TranscriptItem[] = [
       ...messages.map(m => ({ ...m, type: 'message' as const })),
       ...toolCalls.map(t => ({ ...t, type: 'tool' as const }))
@@ -47,13 +44,12 @@ export function TranscriptCycler({
 
     // Only show the most recent items
     const visible = combined.slice(0, maxVisible)
-    console.log('[TranscriptCycler] Visible items:', visible.length, visible)
     setVisibleItems(visible)
   }, [messages, toolCalls, maxVisible])
 
   // Always render container to prevent layout shift
   return (
-    <div className="w-full max-w-3xl mx-auto">
+    <div className="w-full">
       {/* Glassmorphic container - LARGER for more transcript context */}
       <div
         className="
@@ -65,7 +61,7 @@ export function TranscriptCycler({
           shadow-[0_8px_32px_rgba(0,0,0,0.25)]
           px-5 py-3
         "
-        style={{ height: '280px' }}
+        style={{ height: 'clamp(200px, 30vh, 340px)' }}
       >
         {/* Content area with vertical spacing - fixed height container */}
         <div className="space-y-3 h-full overflow-hidden">

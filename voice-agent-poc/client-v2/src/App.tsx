@@ -8,6 +8,7 @@ import { SessionReplay } from './components/SessionReplay'
 import { DemoRunner } from './components/DemoRunner'
 import { useLiveKitAgent } from './hooks/useLiveKitAgent'
 import { useStore } from './lib/store'
+import { StatusIndicator } from './components/StatusIndicator'
 
 // Extend Window interface for global readiness state
 declare global {
@@ -114,7 +115,7 @@ function App() {
   }, [livekitUrl, livekitToken, mockMode])
 
   // Get connection status
-  const { isConnected, error } = agent
+  const { isConnected, isConnecting, error } = agent
 
   // Determine if fully ready (for Recall.ai signaling)
   const isFullyReady = isConnected && agentConnected
@@ -206,7 +207,7 @@ function App() {
   // FULLY CONNECTED: Show complete UI - user sees "Ready" immediately
   // Layout: Orb → State Label → Transcript (center) → Waveform → Logo
   return (
-    <div data-testid="app-root" className="min-h-screen bg-white flex flex-col items-center justify-center overflow-hidden py-6">
+    <div data-testid="app-root" className="min-h-screen bg-white flex flex-col items-center justify-center py-4 sm:py-6">
 
       {/* Mode badge - top left */}
       <div className="absolute top-3 left-3">
@@ -216,7 +217,7 @@ function App() {
       </div>
 
       {/* Main content - vertical stack, all separated */}
-      <div className="flex flex-col items-center gap-4 w-full max-w-2xl px-4">
+      <div className="flex flex-col items-center gap-2 sm:gap-4 w-full max-w-2xl sm:max-w-3xl px-3 sm:px-6">
 
         {/* The Orb */}
         <div style={{ height: '140px', width: '140px' }}>
@@ -224,7 +225,7 @@ function App() {
             agentState={displayAgentState}
             inputVolume={displayInputVolume}
             outputVolume={orbOutputVolume}
-            isConnected={true}
+            isConnected={mockMode ? true : isConnected}
             size={140}
           />
         </div>
@@ -243,13 +244,26 @@ function App() {
           </p>
         </div>
 
+        {/* Connection and audio status indicators */}
+        {!mockMode && (
+          <div className="flex justify-center">
+            <StatusIndicator
+              isConnected={isConnected}
+              isConnecting={isConnecting}
+              agentConnected={agentConnected}
+              audioStatus={audioStatus}
+              error={error}
+            />
+          </div>
+        )}
+
         {/* Transcript with Tool Call Panels on sides */}
         <div className="w-full flex items-center justify-center gap-6">
           {/* Left Tool Call Panel - flex centered with padding */}
           <div
             data-testid="tool-call-panel-left"
             className="flex items-center justify-end flex-shrink-0"
-            style={{ minWidth: '180px' }}
+            style={{ minWidth: '152px' }}
           >
             <ToolCallPanel
               toolCalls={displayToolCalls}
@@ -268,7 +282,7 @@ function App() {
           </div>
 
           {/* Right Tool Call Panel - flex centered with padding */}
-          <div className="flex items-center justify-start flex-shrink-0" style={{ minWidth: '180px' }}>
+          <div className="flex items-center justify-start flex-shrink-0" style={{ minWidth: '152px' }}>
             <ToolCallPanel
               toolCalls={displayToolCalls}
               position="right"
