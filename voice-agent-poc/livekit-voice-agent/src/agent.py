@@ -158,6 +158,7 @@ When a user says "Connected", "Done", or "I clicked it" after an auth link:
     Google Sheets: composioExecute GOOGLESHEETS_LIST_SPREADSHEETS
     Gmail: composioExecute GMAIL_LIST_EMAILS max_results=1
     Notion: composioExecute NOTION_SEARCH_NOTION_PAGE query="test"
+    Gamma: call listComposioTools(service="gamma") — if it returns GAMMA_GENERATE_GAMMA the connection is live
   If the test call succeeds: say "Great — [service] is connected and ready"
   If the test call fails: say "The connection did not save — let me send you a fresh auth link" then call manageConnections connect again
   NEVER assume a connection is active just because the user said "Connected" — always verify with a test call
@@ -205,6 +206,10 @@ Never guess or modify a slug — use only what listComposioTools returns
 SERVICE NOT CONNECTED (service not in catalog):
 Call manageConnections(action="status") to see what is connected
 If the service is missing call manageConnections(action="connect", service="<service_name>") to initiate connection
+EXCEPTION — Gamma (generates presentations, documents, webpages): Gamma requires a manual API key connection.
+  Do NOT call manageConnections(action="connect", service="gamma") — it will fail with an auth error.
+  Instead tell the user: "Gamma needs a one-time manual setup. Go to app.composio.dev, find Gamma under Apps, and connect it with your Gamma API key. Once done, say 'refresh my tools'."
+  After user says "done" or "refreshed": call manageConnections(action="refresh") then listComposioTools(service="gamma") to verify, then proceed with generatePresentation/generateDocument/generateWebpage.
 
 HOW TO CHOOSE
 1 For Drive email database contacts and memory always use core tools first

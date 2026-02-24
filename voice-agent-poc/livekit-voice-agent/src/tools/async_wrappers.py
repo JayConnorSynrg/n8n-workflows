@@ -479,6 +479,15 @@ async def manage_connections_async(
 
         if not display_name:
             # Error case — auth_url contains the error message
+            # Detect API-key-based services (e.g. Gamma) that cannot be connected via OAuth redirect
+            if "generic_api_key" in auth_url.lower() or "api_key" in auth_url.lower():
+                service_title = service.strip().title()
+                await publish_tool_completed(call_id, f"{service_title} requires manual API key setup")
+                return (
+                    f"{service_title} uses an API key for authentication, which requires a one-time manual setup. "
+                    f"Please go to app.composio.dev, click Apps, search for {service_title}, and connect it with your {service_title} API key. "
+                    f"Once connected, say 'refresh my tools' and I will activate it immediately."
+                )
             await publish_tool_completed(call_id, "Connection setup unavailable")
             return auth_url
 
