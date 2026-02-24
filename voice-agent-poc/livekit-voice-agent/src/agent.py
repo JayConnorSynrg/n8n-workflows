@@ -40,7 +40,7 @@ _AIO_WAKE_PATTERN = re.compile(
     re.IGNORECASE
 )
 _last_agent_listening_time: float = 0.0
-_WAKE_GATE_GRACE_PERIOD_SECS: float = 2.5
+_WAKE_GATE_GRACE_PERIOD_SECS: float = 30.0
 _CONVERSATIONAL_BYPASS_PHRASES: frozenset = frozenset({
     "thanks", "thank you", "appreciate", "cool", "nice",
     "ok", "okay", "alright", "got it", "understood", "roger",
