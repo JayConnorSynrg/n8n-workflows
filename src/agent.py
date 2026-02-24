@@ -81,6 +81,7 @@ from .utils.task_tracker import TaskTracker
 from .utils.session_facts import (
     store_fact as _store_fact,
     clear_facts as _clear_facts,
+    flush_facts_to_db as _flush_facts_to_db,
 )
 from .utils import pg_logger as _pg_logger
 from .utils import user_identity as _user_identity
@@ -2166,6 +2167,11 @@ async def entrypoint(ctx: JobContext):
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+
+    # Persist session facts to PostgreSQL before clearing them in memory
+    if settings.postgres_url:
+        asyncio.create_task(_flush_facts_to_db(session_id, settings.postgres_url))
+
     cleared_facts = _clear_facts(session_id)
     if cleared_facts:
         logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
