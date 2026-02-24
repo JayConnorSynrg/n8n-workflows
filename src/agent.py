@@ -69,9 +69,11 @@ from .utils.short_term_memory import clear_session as clear_session_memory
 from .utils.task_tracker import TaskTracker
 from .utils.session_facts import (
     store_fact as _store_fact,
+    get_all_facts as _get_all_facts,
     clear_facts as _clear_facts,
 )
 from .utils import pg_logger as _pg_logger
+from .utils import pg_session_store as _pg_session_store
 from .utils import user_identity as _user_identity
 
 # Initialize logging
@@ -1581,9 +1583,12 @@ async def entrypoint(ctx: JobContext):
         session_id = ctx.room.name or "livekit-agent"
         _set_context_session_id(session_id)  # checkContext uses this to query correct session
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
-        # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
+        # Initialize pg_logger pool — awaited so the pool is guaranteed ready before
+        # we query it for prior session context injection below.
+        # init_pool is idempotent: no-op if pool already exists from a prior session.
         if settings.postgres_url:
-            asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
+            await _pg_logger.init_pool(settings.postgres_url)
+            _pg_session_store.set_current_user_id(_user_id)
 
         await session.start(
             agent=agent,
@@ -1641,6 +1646,28 @@ async def entrypoint(ctx: JobContext):
                 logger.info(f"[Heartbeat] Returning user — {len(_existing_memories)} prior memory entries found")
         except Exception as _nud_err:
             logger.debug(f"[Heartbeat] New user detection failed (non-critical): {_nud_err}")
+
+    # ── PostgreSQL secondary memory — inject prior session facts into chat_ctx ──
+    # Pool is guaranteed ready (awaited above). Load the most recent value per key
+    # across all prior sessions for this user and inject as a silent context note.
+    # The LLM can reference these facts without re-asking the user.
+    if settings.postgres_url:
+        try:
+            _pg_prior_facts = await _pg_session_store.load_user_context(_user_id)
+            if _pg_prior_facts:
+                _pg_context_block = _pg_session_store.build_context_injection(_pg_prior_facts)
+                if _pg_context_block:
+                    _ctx = (
+                        getattr(session, "chat_ctx", None)
+                        or getattr(session, "_chat_ctx", None)
+                    )
+                    if _ctx is not None:
+                        _ctx.append(role="assistant", text=_pg_context_block)
+                        logger.info(
+                            f"[PgStore] Injected {len(_pg_prior_facts)} prior session facts into chat_ctx"
+                        )
+        except Exception as _pge:
+            logger.warning(f"[PgStore] Prior context injection failed (non-critical): {_pge}")
 
     # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
@@ -2016,6 +2043,17 @@ async def entrypoint(ctx: JobContext):
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+
+    # Persist session facts to PostgreSQL before clearing volatile store.
+    # Enables cross-session context injection for returning users.
+    if settings.postgres_url:
+        try:
+            _facts_to_save = _get_all_facts(session_id)
+            if _facts_to_save:
+                await _pg_session_store.save_session_facts(session_id, _user_id, _facts_to_save)
+        except Exception as _pgsave_err:
+            logger.warning(f"[PgStore] Fact save failed (non-critical): {_pgsave_err}")
+
     cleared_facts = _clear_facts(session_id)
     if cleared_facts:
         logger.info(f"Cleared {cleared_facts} session facts for {session_id}")

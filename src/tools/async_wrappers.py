@@ -299,6 +299,38 @@ async def memory_summary_async() -> str:
     return get_memory_summary()
 
 
+# =============================================================================
+# RECALL PRIOR SESSION — PostgreSQL secondary memory query
+# =============================================================================
+
+@llm.function_tool(
+    name="recallSession",
+    description=(
+        "Search prior session history stored in PostgreSQL for specific topics, "
+        "URLs, decisions, or information discussed in previous sessions. "
+        "Use when the user asks about something from a past session or references "
+        "something they previously mentioned. Returns matching conversation excerpts."
+    ),
+)
+async def recall_session_async(query: str) -> str:
+    """Search prior session conversation history via PostgreSQL secondary memory."""
+    call_id = await publish_tool_start("recallSession", {"query": query[:40]})
+    await publish_tool_executing(call_id)
+
+    try:
+        from ..utils import pg_session_store as _pg_session_store
+        user_id = _pg_session_store.get_current_user_id()
+
+        results = await _pg_session_store.search_prior_sessions(user_id, query, limit=6)
+        formatted = _pg_session_store.format_search_results(results)
+
+        await publish_tool_completed(call_id, f"{len(results)} results")
+        return formatted
+    except Exception as exc:
+        await publish_tool_error(call_id, str(exc)[:100])
+        return f"Could not search prior session history right now: {exc}"
+
+
 @llm.function_tool(
     name="recallDrive",
     description="Recall previous Drive search or listing results from memory.",
@@ -703,6 +735,7 @@ ASYNC_TOOLS = [
     recall_data_async,
     recall_drive_data_async,
     memory_summary_async,
+    recall_session_async,
     vector_store_async,
     database_query_async,
     query_context_async,
