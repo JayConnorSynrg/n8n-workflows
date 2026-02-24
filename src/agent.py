@@ -1863,33 +1863,10 @@ async def entrypoint(ctx: JobContext):
                             if generation_id:
                                 _store_fact(session_id, "gammaGenerationId", generation_id)
 
-                        # Inject context note into chat_ctx so the LLM sees the URL
-                        # on follow-up turns (e.g. "change the colors").
-                        if gamma_url:
-                            try:
-                                context_note = (
-                                    f"[AIO internal context — do not read aloud] "
-                                    f"The {content_type} on '{topic}' has been generated. "
-                                    f"URL: {gamma_url}. "
-                                    + (f"Generation ID: {generation_id}. " if generation_id else "")
-                                    + f"For any modifications or changes to this {content_type}, "
-                                    f"reference this URL and generation ID. "
-                                    f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
-                                )
-                                # Safely resolve chat_ctx — attribute name varies across SDK versions
-                                _ctx = (getattr(session_ref, "chat_ctx", None)
-                                        or getattr(session_ref, "_chat_ctx", None))
-                                if _ctx is not None:
-                                    _ctx.add_message(role="assistant", content=context_note)
-                                    logger.info(
-                                        f"Gamma monitor: context injected into chat_ctx job={job_id} url={gamma_url[:60]}"
-                                    )
-                                else:
-                                    logger.debug(
-                                        f"Gamma monitor: chat_ctx unavailable, skipping injection job={job_id}"
-                                    )
-                            except Exception as ctx_err:
-                                logger.warning(f"Gamma monitor: chat_ctx append failed job={job_id}: {ctx_err}")
+                        # session_facts already stores the URL persistently for follow-up
+                        # turns via checkContext/_append_gamma_facts. No chat_ctx injection
+                        # needed — injecting an assistant message here confuses LiveKit's
+                        # turn-completion detection and can cause the reply to be suppressed.
                     except Exception as say_err:
                         logger.error(f"Gamma monitor: session.say() failed job={job_id}: {say_err}")
                         # Retry once after brief delay (session may be transitioning)
@@ -1915,25 +1892,30 @@ async def entrypoint(ctx: JobContext):
                         _store_fact(session_id, "gammaLastTopic", topic)
                         if generation_id:
                             _store_fact(session_id, "gammaGenerationId", generation_id)
+                        # Deliver the result via generate_reply so LiveKit produces actual
+                        # speech. Injecting a silent assistant message into chat_ctx was
+                        # causing LiveKit to consider the turn already answered → agent
+                        # went to listening silently → heartbeat CASE 1 fired → second
+                        # Gamma generation started. generate_reply forces a real LLM turn.
                         try:
-                            context_note = (
-                                f"[AIO internal context — do not read aloud] "
-                                f"The {content_type} on '{topic}' has been generated. "
+                            instructions = (
+                                f"The Gamma {content_type} on '{topic}' is ready. "
                                 f"URL: {gamma_url}. "
                                 + (f"Generation ID: {generation_id}. " if generation_id else "")
-                                + f"For any modifications or changes to this {content_type}, "
-                                f"reference this URL and generation ID. "
+                                + f"Tell the user it's done and share the link. "
                                 f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
                             )
-                            _ctx = (getattr(session_ref, "chat_ctx", None)
-                                    or getattr(session_ref, "_chat_ctx", None))
-                            if _ctx is not None:
-                                _ctx.add_message(role="assistant", content=context_note)
-                                logger.info(f"Gamma monitor: silent context injected job={job_id}")
-                            else:
-                                logger.debug(f"Gamma monitor: chat_ctx unavailable for silent injection job={job_id}")
-                        except Exception as ctx_err:
-                            logger.warning(f"Gamma monitor: silent chat_ctx inject failed job={job_id}: {ctx_err}")
+                            await session_ref.generate_reply(instructions=instructions)
+                            logger.info(f"Gamma monitor: silent path — generate_reply delivered job={job_id}")
+                        except AttributeError:
+                            logger.warning(f"Gamma monitor: generate_reply unavailable, falling back to say() job={job_id}")
+                            try:
+                                fallback_msg = f"Your Gamma {content_type} on '{topic}' is ready. Here's the link: {gamma_url}"
+                                await session_ref.say(fallback_msg, allow_interruptions=True)
+                            except Exception as say_err:
+                                logger.error(f"Gamma monitor: silent fallback say() failed job={job_id}: {say_err}")
+                        except Exception as gen_err:
+                            logger.error(f"Gamma monitor: generate_reply failed job={job_id}: {gen_err}")
                     else:
                         logger.warning(f"Gamma monitor: empty message and no gamma_url in notification job={job_id}")
 
