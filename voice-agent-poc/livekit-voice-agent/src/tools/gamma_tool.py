@@ -25,9 +25,29 @@ logger = logging.getLogger(__name__)
 # Module-level notification queue — agent.py monitors this and calls session.say()
 _notification_queue: asyncio.Queue = asyncio.Queue()
 
+# Module-level set of in-progress gamma job IDs.
+# Heartbeat monitor checks is_gamma_pending() to suppress continuation injection
+# while background polling is running (prevents the LLM re-calling the tool in a loop).
+_gamma_pending_jobs: set = set()
+
 
 def get_notification_queue() -> asyncio.Queue:
     return _notification_queue
+
+
+def set_gamma_pending(job_id: str) -> None:
+    """Mark a gamma job as in-progress. Call when background poller starts."""
+    _gamma_pending_jobs.add(job_id)
+
+
+def clear_gamma_pending(job_id: str) -> None:
+    """Mark a gamma job as complete. Call when poller resolves."""
+    _gamma_pending_jobs.discard(job_id)
+
+
+def is_gamma_pending() -> bool:
+    """True if any gamma generation is currently running in the background."""
+    return len(_gamma_pending_jobs) > 0
 
 
 GAMMA_ETA_SECONDS = 45  # ~45s typical generation time
@@ -77,6 +97,7 @@ async def _poll_gamma_completion(
 
             if status == "completed":
                 gamma_url = data.get("gammaUrl", "")
+                clear_gamma_pending(job_id)  # Release heartbeat suppression
                 message = (
                     f"Your {content_type} on {topic} is ready. "
                     f"You can find it at gamma dot app. "
@@ -95,7 +116,8 @@ async def _poll_gamma_completion(
         except Exception as e:
             logger.error(f"Gamma poll error [{job_id}] attempt={attempt + 1}: {e}")
 
-    # Timeout after max polls
+    # Timeout after max polls — release pending flag regardless
+    clear_gamma_pending(job_id)
     await _notification_queue.put({
         "message": (
             f"Your {content_type} on {topic} is taking longer than expected. "
@@ -191,6 +213,10 @@ async def _start_gamma_generation(
         if not generation_id:
             logger.error(f"Gamma returned no generationId [{job_id}]: {data}")
             return f"I could not start the {content_type}. Please try again."
+
+        # Mark job as pending before spawning poller — heartbeat will suppress
+        # continuation injection until clear_gamma_pending() is called on completion
+        set_gamma_pending(job_id)
 
         # Spawn background poller — asyncio.create_task keeps it alive independently
         asyncio.create_task(

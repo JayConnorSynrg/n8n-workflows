@@ -1149,6 +1149,30 @@ async def entrypoint(ctx: JobContext):
         # to determine whether a multi-step task was in progress
         _task_tracker.record_tool_call_completed()
 
+        # Load tool call result into session facts so the LLM is aware of what
+        # already ran. Prevents re-calling gamma tools (or any tool) on heartbeat
+        # continuation turns where the LLM would otherwise have no call history.
+        try:
+            tool_name = (
+                getattr(ev, 'name', None)
+                or getattr(ev, 'function_name', None)
+                or getattr(ev, 'tool_name', None)
+                or ''
+            )
+            tool_output = str(getattr(ev, 'output', '') or getattr(ev, 'result', '') or '')
+            if tool_name:
+                _store_fact(session_id, 'last_tool_called', tool_name)
+                if tool_output:
+                    _store_fact(session_id, 'last_tool_output', tool_output[:300])
+                # Gamma-specific: flag that generation was started so the LLM
+                # can reference it in follow-up turns without re-triggering
+                if tool_name in ('generatePresentation', 'generateDocument', 'generateWebpage'):
+                    _store_fact(session_id, 'gamma_generation_started', tool_name)
+                    _store_fact(session_id, 'gamma_generation_output', tool_output[:300])
+                    logger.info(f"[GammaTracker] Stored {tool_name} call in session facts")
+        except Exception as e:
+            logger.debug(f"on_function_tools_executed: session fact storage skipped: {e}")
+
     @session.on("metrics_collected")
     def on_metrics_collected(ev):
         """Collect and log metrics."""
@@ -1854,6 +1878,13 @@ async def entrypoint(ctx: JobContext):
                 # Periodic chat context trim — only when agent is idle to avoid races
                 if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
                     await _trim_chat_context(session_ref, max_messages=20)
+
+                # Suppress continuation while gamma is generating in the background.
+                # Without this guard the heartbeat re-triggers the LLM every 6s,
+                # which calls generatePresentation/generateDocument again in a loop.
+                from .tools.gamma_tool import is_gamma_pending
+                if is_gamma_pending():
+                    continue  # Gamma poller is running — stay silent until it completes
 
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
