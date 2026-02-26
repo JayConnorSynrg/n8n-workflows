@@ -44,11 +44,12 @@ class Settings(BaseSettings):
         default="https://jayconnorexe.app.n8n.cloud/webhook",
         alias="N8N_WEBHOOK_BASE_URL"
     )
+    n8n_webhook_secret: str = Field(default="", alias="N8N_WEBHOOK_SECRET")
 
     # Agent Settings
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    max_tool_steps: int = Field(default=8, alias="MAX_TOOL_STEPS")  # 8 steps is sufficient for multi-step tool flows; 20 allows runaway retry loops
+    max_tool_steps: int = Field(default=12, alias="MAX_TOOL_STEPS")  # 12 steps — enough for complex multi-tool flows, prevents the runaway loops seen at 20
 
     # Composio Integration (SDK-only execution via composioBatchExecute/composioExecute)
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")

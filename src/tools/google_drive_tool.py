@@ -224,7 +224,10 @@ async def search_documents_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()
@@ -310,7 +313,10 @@ async def get_document_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()
@@ -407,7 +413,10 @@ async def list_drive_files_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()

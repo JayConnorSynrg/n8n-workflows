@@ -113,7 +113,10 @@ async def _fetch_from_webhook(
         async with http_session.post(
             webhook_url,
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+            },
             timeout=aiohttp.ClientTimeout(total=30),  # Reduced from 60s
         ) as response:
             return await response.json()
@@ -360,7 +363,10 @@ async def get_session_summary_tool(
             async with http_session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 result = await response.json()

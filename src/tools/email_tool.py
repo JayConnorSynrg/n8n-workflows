@@ -67,7 +67,10 @@ async def send_email_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 # Increased timeout for gated workflow execution
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as response:

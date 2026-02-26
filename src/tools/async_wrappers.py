@@ -40,6 +40,7 @@ def _fire_native_log(slug: str, arguments: dict, voice_result: str, duration_ms:
 
 from livekit.agents import llm
 
+from ..config import get_settings as _get_settings
 from ..utils.async_tool_worker import get_worker
 from ..utils.room_publisher import (
     publish_tool_start,
@@ -591,6 +592,10 @@ async def manage_connections_async(
                 async with http_session.post(
                     _N8N_GMAIL_WEBHOOK,
                     json=email_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-AIO-Webhook-Secret": _get_settings().n8n_webhook_secret,
+                    },
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status in (200, 201, 202):
@@ -849,6 +854,10 @@ async def run_lead_gen_async(
             async with http_session.post(
                 _N8N_LEAD_GEN_WEBHOOK,
                 json={"lead_type": lead_type, "mode": mode, "limit": limit},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": _get_settings().n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status in (200, 201, 202):

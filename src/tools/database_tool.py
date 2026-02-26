@@ -65,7 +65,10 @@ async def query_database_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 # 20s timeout — sufficient for Pinecone embedding+query; 60s is too long for voice UX
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
@@ -168,7 +171,10 @@ async def vector_search_tool(
             async with session.post(
                 webhook_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
+                },
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 if response.status != 200:
