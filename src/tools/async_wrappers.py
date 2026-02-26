@@ -233,6 +233,58 @@ async def database_query_async(query: str) -> str:
     return result
 
 
+@llm.function_tool(
+    name="vectorSearch",
+    description=(
+        "Search the knowledge base for information. "
+        "Use when the user asks to look up, find, or search for documents or stored information. "
+        "Returns ranked results by relevance. Execute immediately - no confirmation needed."
+    ),
+)
+async def vector_search_async(
+    query: str,
+    max_results: Optional[int] = 5,
+) -> str:
+    """Search knowledge base via Pinecone vector search - runs synchronously for immediate results."""
+    call_id = await publish_tool_start("vectorSearch", {"query": query, "max_results": max_results})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    result = await database_tool.vector_search_tool(query=query, max_results=max_results)
+    _dur = int((time.monotonic() - _t0) * 1000)
+
+    if not result.get("success"):
+        error_msg = result.get("error", "Unknown error")
+        await publish_tool_completed(call_id, "Search failed")
+        _fire_native_log("vector_search", {"query": query}, error_msg, _dur)
+        return f"I was unable to search the knowledge base. {error_msg}"
+
+    # Use pre-formatted voice_response from the workflow if available
+    voice_response = result.get("voice_response", "")
+    if voice_response:
+        await publish_tool_completed(call_id, voice_response[:100])
+        _fire_native_log("vector_search", {"query": query}, voice_response, _dur)
+        return voice_response
+
+    # Format the flat result array into a readable response
+    results = result.get("results", [])
+    if not results:
+        msg = "I searched the knowledge base but found no matching results for that query."
+        await publish_tool_completed(call_id, msg)
+        _fire_native_log("vector_search", {"query": query}, msg, _dur)
+        return msg
+
+    lines = []
+    for i, item in enumerate(results[:max_results], 1):
+        text = item.get("text", "").strip()
+        if text:
+            lines.append(f"{i}. {text[:200]}")
+
+    formatted = f"Found {len(results)} result{'s' if len(results) != 1 else ''}: " + " | ".join(lines)
+    await publish_tool_completed(call_id, formatted[:100])
+    _fire_native_log("vector_search", {"query": query}, formatted, _dur)
+    return formatted
+
+
 # =============================================================================
 # SESSION CONTEXT - READ OPERATION
 # =============================================================================
@@ -828,6 +880,7 @@ ASYNC_TOOLS = [
     memory_summary_async,
     vector_store_async,
     database_query_async,
+    vector_search_async,
     query_context_async,
     # Contacts
     add_contact_async,

@@ -129,3 +129,89 @@ async def query_database_tool(
         return f"Network error querying database: {str(e)}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
+
+
+async def vector_search_tool(
+    query: str,
+    max_results: Optional[int] = 5,
+    session_id: str = "livekit-agent",
+) -> dict:
+    """Search the knowledge base via n8n vector search webhook.
+
+    Wired to n8n workflow z02K1a54akYXMkyj (Voice Tool: Query Vector DB).
+    Webhook path: /voice-query-vector-db
+
+    Args:
+        query: Natural language search query
+        max_results: Maximum number of results to return (default 5)
+        session_id: Session identifier for the tool call record
+
+    Returns:
+        dict with:
+          success: bool
+          voice_response: str (pre-formatted for TTS, if present)
+          results: list of {score, text, metadata}
+          error: str (on failure)
+    """
+    webhook_url = f"{settings.n8n_webhook_base_url}/voice-query-vector-db"
+    intent_id = f"lk_{uuid.uuid4().hex[:12]}"
+
+    payload = {
+        "query": query,
+        "top_k": max_results,
+        "intent_id": intent_id,
+        "session_id": session_id,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                webhook_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    return {
+                        "success": False,
+                        "error": f"Vector search returned HTTP {response.status}",
+                    }
+
+                data = await response.json()
+
+                # Prefer pre-formatted voice_response from workflow
+                voice_response = data.get("voice_response") or ""
+
+                # Extract result array — flat list of {score, text, metadata} objects
+                raw_result = data.get("result", [])
+                if isinstance(raw_result, dict):
+                    # Older shape: result.documents or result.top_results
+                    raw_result = (
+                        raw_result.get("documents")
+                        or raw_result.get("top_results")
+                        or []
+                    )
+
+                results = []
+                for item in raw_result:
+                    if not isinstance(item, dict):
+                        continue
+                    results.append({
+                        "score": item.get("score", 0.0),
+                        "text": item.get("text", ""),
+                        "metadata": item.get("metadata", {}),
+                    })
+
+                return {
+                    "success": True,
+                    "voice_response": voice_response,
+                    "results": results,
+                    "status": data.get("status", "COMPLETED"),
+                }
+
+    except aiohttp.ClientError as e:
+        logger.error(f"vector_search_tool network error: {e}")
+        return {"success": False, "error": f"Network error: {str(e)}"}
+    except Exception as e:
+        logger.error(f"vector_search_tool unexpected error: {e}")
+        return {"success": False, "error": f"Unexpected error: {str(e)}"}
