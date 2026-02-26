@@ -2051,6 +2051,11 @@ async def entrypoint(ctx: JobContext):
                 if _hb_count % TRIM_EVERY_N_CYCLES == 0 and not task_tracker_ref.is_agent_responding:
                     await _trim_chat_context(session_ref, max_messages=15)
 
+                if _hb_count % 15 == 0:  # Every 60s — force GC to reclaim audio/embedding memory
+                    import gc
+                    gc.collect()
+                    logger.debug(f"[Heartbeat] GC collected (cycle {_hb_count})")
+
                 # Suppress continuation while gamma is generating in the background.
                 # Without this guard the heartbeat re-triggers the LLM every 6s,
                 # which calls generatePresentation/generateDocument again in a loop.

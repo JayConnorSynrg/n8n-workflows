@@ -1619,15 +1619,28 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         """Direct SDK fallback: connected_accounts.initiate() via auth_config_id lookup.
 
         Correct high-level signature: initiate(user_id, auth_config_id, ...)
-        Does NOT accept a 'toolkit' kwarg — must resolve auth_config_id first
-        via client.auth_configs.list(toolkit=service_lower).
+        Does NOT accept a 'toolkit' kwarg — must resolve auth_config_id first.
+        SDK auth_configs.list() does not accept a 'toolkit' filter kwarg, so
+        list all configs and filter client-side by appName/slug/name fields.
         """
-        configs_response = client.auth_configs.list(toolkit=service_lower)
-        configs = _extract_items_from_response(configs_response)
+        # List all auth configs, filter by toolkit slug client-side
+        # (SDK does not accept 'toolkit' kwarg — list() takes no filter args)
+        configs_response = client.auth_configs.list()
+        all_configs = _extract_items_from_response(configs_response)
+        # Filter to matching service by probing multiple field names
+        configs = [
+            c for c in all_configs
+            if (
+                getattr(c, "appName", "") or getattr(c, "app_name", "") or getattr(c, "slug", "") or ""
+            ).lower().replace(" ", "_") == service_lower
+            or (
+                getattr(c, "name", "") or ""
+            ).lower().replace(" ", "_") == service_lower
+        ]
         if not configs:
             raise ValueError(
-                f"No auth config found for {service_lower} — SDK fallback cannot proceed. "
-                "The service may not be available for this entity."
+                f"No auth config found for {service_lower} in {len(all_configs)} total configs — "
+                "service may not be available for this entity."
             )
         auth_config_id = (
             getattr(configs[0], "id", None)
@@ -1636,7 +1649,8 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         if not auth_config_id:
             raise ValueError(f"Auth config for {service_lower} has no id field: {configs[0]}")
         logger.info(
-            f"Composio: SDK fallback using auth_config_id={auth_config_id} for {service_lower}"
+            f"Composio: SDK fallback found auth_config_id={auth_config_id} for {service_lower} "
+            f"(filtered from {len(all_configs)} configs)"
         )
         return client.connected_accounts.initiate(user_id, auth_config_id)
 
@@ -1665,6 +1679,14 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
                 return redirect_url, display_name
             status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if status in ("ACTIVE", "CONNECTED"):
+                return f"{display_name} is already connected and active", ""
+            # Check for already-active summary shape:
+            # e.g. {"summary": "active_connections=1, message='All connections are active'"}
+            data = result.get("data", {}) or {}
+            summary_str = str(data.get("summary", "") or data.get("message", "") or "").lower()
+            if "active" in summary_str and "all connections" in summary_str:
+                return f"{display_name} is already connected and active", ""
+            if "active_connections" in summary_str:
                 return f"{display_name} is already connected and active", ""
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape
@@ -1716,35 +1738,45 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
         async def _rest_initiate() -> str | None:
             async with httpx.AsyncClient(timeout=15.0) as http:
                 # Step 1: resolve integration_id for this service
+                # Try multiple appName formats — Composio app names may differ from lowercase service name
                 integration_id: str | None = None
+                _app_name_variants = [
+                    service_lower,
+                    service_lower.upper(),
+                    service_lower.replace("_", ""),
+                    service_lower.title(),
+                ]
                 for path in ("/api/v1/integrations", "/api/v2/integrations"):
-                    try:
-                        r = await http.get(
-                            f"{_base}{path}",
-                            params={"appName": service_lower, "page": 1, "pageSize": 10},
-                            headers=_rest_headers,
-                        )
-                        if r.status_code == 200:
-                            body = r.json()
-                            items = body.get("items") or body.get("integrations") or []
-                            for item in items:
-                                iid = item.get("id") or item.get("integrationId")
-                                if iid:
-                                    integration_id = iid
-                                    break
-                        if integration_id:
-                            logger.info(
-                                f"Composio REST: resolved integration_id={integration_id}"
-                                f" for {service_lower} via {path}"
+                    if integration_id:
+                        break
+                    for app_name in _app_name_variants:
+                        try:
+                            r = await http.get(
+                                f"{_base}{path}",
+                                params={"appName": app_name, "page": 1, "pageSize": 10},
+                                headers=_rest_headers,
                             )
-                            break
-                        else:
-                            logger.debug(
-                                f"Composio REST: {path} status={r.status_code}"
-                                f" body_keys={list(r.json().keys()) if r.status_code == 200 else r.text[:120]}"
-                            )
-                    except Exception as _e:
-                        logger.debug(f"Composio REST: {path} exception: {_e}")
+                            if r.status_code == 200:
+                                body = r.json()
+                                items = body.get("items") or body.get("integrations") or []
+                                for item in items:
+                                    iid = item.get("id") or item.get("integrationId")
+                                    if iid:
+                                        integration_id = iid
+                                        break
+                            if integration_id:
+                                logger.info(
+                                    f"Composio REST: resolved integration_id={integration_id}"
+                                    f" for {service_lower} (appName={app_name!r}) via {path}"
+                                )
+                                break
+                            else:
+                                logger.debug(
+                                    f"Composio REST: {path} appName={app_name!r} status={r.status_code}"
+                                    f" body_keys={list(r.json().keys()) if r.status_code == 200 else r.text[:120]}"
+                                )
+                        except Exception as _e:
+                            logger.debug(f"Composio REST: {path} appName={app_name!r} exception: {_e}")
 
                 if not integration_id:
                     logger.warning(f"Composio REST: no integration_id found for {service_lower}")

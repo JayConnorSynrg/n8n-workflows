@@ -66,8 +66,8 @@ async def query_database_tool(
                 webhook_url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                # Increased timeout for gated workflow execution
-                timeout=aiohttp.ClientTimeout(total=60),
+                # 20s timeout — sufficient for Pinecone embedding+query; 60s is too long for voice UX
+                timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
                 result = await response.json()
 
