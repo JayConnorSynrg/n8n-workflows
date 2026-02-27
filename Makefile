@@ -1,8 +1,10 @@
 # AIO Voice Agent — Deploy Tooling
-# Standalone repo (permanent location for Railway deploys)
+# Standalone repos (permanent locations for Railway deploys)
 STANDALONE_DIR := $(HOME)/CODING/livekit-voice-agent
+RELAY_DIR      := $(HOME)/CODING/voice-agent-relay
+RELAY_SRC      := $(CURDIR)/voice-agent-poc/relay-server
 
-.PHONY: deploy-agent sync-agent check-standalone
+.PHONY: deploy-agent sync-agent check-standalone deploy-relay sync-relay check-relay
 
 ## deploy-agent: Sync agent code to standalone repo and push to Railway
 deploy-agent: check-standalone
@@ -30,5 +32,33 @@ check-standalone:
 	@if [ ! -d "$(STANDALONE_DIR)/.git" ]; then \
 		echo "ERROR: Standalone repo not found at $(STANDALONE_DIR)"; \
 		echo "Run: git clone https://github.com/JayConnorSynrg/livekit-voice-agent.git $(STANDALONE_DIR)"; \
+		exit 1; \
+	fi
+
+## deploy-relay: Sync relay code to standalone repo and push (triggers Railway auto-deploy)
+deploy-relay: check-relay
+	@echo "==> Pulling latest relay standalone..."
+	@git -C $(RELAY_DIR) pull origin main
+	@echo "==> Syncing relay source from monorepo..."
+	@cp -r $(RELAY_SRC)/. $(RELAY_DIR)/
+	@rm -rf $(RELAY_DIR)/node_modules
+	@echo "==> Committing to relay standalone..."
+	@cd $(RELAY_DIR) && git add -A && \
+		git commit -m "sync: relay from monorepo $$(git -C $(CURDIR) rev-parse --short HEAD)" || echo "Nothing to commit"
+	@git -C $(RELAY_DIR) push origin main
+	@echo "==> Railway deploy triggered. Run: railway logs --service voice-agent-relay -n 30"
+
+## sync-relay: Sync relay files only (no push)
+sync-relay: check-relay
+	@echo "==> Syncing relay source to standalone (no push)..."
+	@cp -r $(RELAY_SRC)/. $(RELAY_DIR)/
+	@rm -rf $(RELAY_DIR)/node_modules
+	@echo "==> Sync complete. Review changes at $(RELAY_DIR)"
+
+## check-relay: Verify relay standalone repo exists
+check-relay:
+	@if [ ! -d "$(RELAY_DIR)/.git" ]; then \
+		echo "ERROR: Relay standalone repo not found at $(RELAY_DIR)"; \
+		echo "Run: git clone https://github.com/JayConnorSynrg/voice-agent-relay.git $(RELAY_DIR)"; \
 		exit 1; \
 	fi
