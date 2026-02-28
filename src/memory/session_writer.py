@@ -81,6 +81,80 @@ AIO updates this through conversations. Edit directly to adjust agent behavior.
 <!-- Background knowledge that helps AIO be more useful -->
 """
 
+_AGENTS_MD_TEMPLATE = """\
+# AIO Agent Behavior & Session Rules
+
+## Memory Loading
+- Every session: SOUL.md, USER.md, today's session log, yesterday's session log
+- Always inject cross-session memory context (max 500 tokens) into system prompt
+
+## Response Rules
+- Always respond to direct questions and requests
+- Use wake word gate (AIO/aye-yo) to filter unsolicited speech during standby
+- During active tasks: respond without wake word requirement
+
+## Proactive Work
+- No mental notes — store important information using deepStore immediately
+- Write facts to memory when the user says "remember", "save that", "note that"
+- Confirm destructive actions (email send, contact add) before executing
+
+## Tool Behavior
+- Prefer Composio tools for standard app integrations
+- Use n8n webhooks for internal data (Drive, contacts, vector DB)
+- Always confirm WRITE operations with user before executing
+
+## Communication Style
+- Voice-first: responses must be spoken aloud naturally (no markdown tables in speech)
+- Concise: prefer 1-2 sentences unless asked for detail
+- Proactive: surface relevant context without being asked
+"""
+
+_IDENTITY_MD_TEMPLATE = """\
+# AIO Voice Assistant
+
+- **Name**: AIO (pronounced "aye-yo")
+- **Type**: AI Voice Assistant
+- **Wake Word**: AIO / aye-yo / eye-oh
+- **Voice**: Cartesia Sonic-3
+- **Platform**: LiveKit voice rooms
+- **Emoji**: 🔊
+- **Purpose**: Enterprise voice assistant for productivity and automation
+"""
+
+_TOOLS_MD_TEMPLATE = """\
+# AIO Environment & Infrastructure
+
+## n8n Webhooks
+- Base URL: configured via N8N_WEBHOOK_BASE_URL env var
+- All calls authenticated via X-AIO-Webhook-Secret header
+
+## Active Tool Categories
+- Google Drive: search, get, list documents
+- Gmail: send email (confirmation required)
+- Contacts: search, add, update
+- Vector DB: semantic search (Pinecone)
+- Composio: 400+ app integrations (dynamic)
+- Gamma: AI presentation generation
+
+## Notes
+- Add environment-specific infrastructure notes here
+- Device names, room names, SSH hosts, custom nicknames
+"""
+
+_HEARTBEAT_MD_TEMPLATE = """\
+# AIO Periodic Tasks
+
+## Session Monitoring
+- Heartbeat loop: 4s, stall threshold 6s, max 5 continuations
+- Chat context trim: every 20s idle, keeps system + last 15 messages
+
+## Scheduled Work
+<!-- Add periodic monitoring tasks here, e.g.: -->
+<!-- - Check calendar every morning session -->
+<!-- - Surface pending emails on session start -->
+<!-- - Remind about follow-ups -->
+"""
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Initialization
@@ -114,6 +188,30 @@ def ensure_memory_files(memory_dir: str) -> None:
             f.write(_SOUL_MD_TEMPLATE)
         logger.info("[SessionWriter] Created SOUL.md at %s", soul_md)
 
+    agents_md = os.path.join(memory_dir, "AGENTS.md")
+    if not os.path.exists(agents_md):
+        with open(agents_md, "w", encoding="utf-8") as f:
+            f.write(_AGENTS_MD_TEMPLATE)
+        logger.info("[SessionWriter] Created AGENTS.md at %s", agents_md)
+
+    identity_md = os.path.join(memory_dir, "IDENTITY.md")
+    if not os.path.exists(identity_md):
+        with open(identity_md, "w", encoding="utf-8") as f:
+            f.write(_IDENTITY_MD_TEMPLATE)
+        logger.info("[SessionWriter] Created IDENTITY.md at %s", identity_md)
+
+    tools_md = os.path.join(memory_dir, "TOOLS.md")
+    if not os.path.exists(tools_md):
+        with open(tools_md, "w", encoding="utf-8") as f:
+            f.write(_TOOLS_MD_TEMPLATE)
+        logger.info("[SessionWriter] Created TOOLS.md at %s", tools_md)
+
+    heartbeat_md = os.path.join(memory_dir, "HEARTBEAT.md")
+    if not os.path.exists(heartbeat_md):
+        with open(heartbeat_md, "w", encoding="utf-8") as f:
+            f.write(_HEARTBEAT_MD_TEMPLATE)
+        logger.info("[SessionWriter] Created HEARTBEAT.md at %s", heartbeat_md)
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Context loading for system prompt injection
@@ -121,8 +219,12 @@ def ensure_memory_files(memory_dir: str) -> None:
 
 def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
     """
-    Load MEMORY.md and USER.md and return a formatted string for system prompt injection.
+    Load SOUL.md, MEMORY.md, USER.md, and the most recent 1-2 session logs and
+    return a formatted string for system prompt injection.
     Content is capped at approximately max_tokens (estimated at 4 chars per token).
+
+    Session logs are loaded AFTER the 3 main files. If the main files already
+    fill the budget, session logs are omitted gracefully.
 
     Returns empty string if files don't exist or are empty.
     """
@@ -144,10 +246,42 @@ def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
         except Exception as exc:
             logger.warning("[SessionWriter] Failed to load %s: %s", filename, exc)
 
-    if not parts:
+    combined = "\n\n".join(parts) if parts else ""
+
+    # Load recent session logs (OpenClaw parity: today + yesterday)
+    sessions_dir = os.path.join(memory_dir, "sessions")
+    try:
+        if os.path.isdir(sessions_dir):
+            log_files = sorted(
+                [f for f in os.listdir(sessions_dir) if f.endswith(".md")],
+                reverse=True,  # lexicographic descending = most recent first
+            )
+            recent_logs: list[str] = []
+            for log_file in log_files[:2]:
+                log_path = os.path.join(sessions_dir, log_file)
+                try:
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        log_content = f.read().strip()
+                    if log_content:
+                        date_label = log_file.replace(".md", "")
+                        recent_logs.append(f"#### {date_label}\n{log_content}")
+                except Exception as log_exc:
+                    logger.warning("[SessionWriter] Failed to load session log %s: %s", log_file, log_exc)
+
+            if recent_logs:
+                session_block = "### Recent Session Log\n" + "\n\n".join(recent_logs)
+                # Only append if budget remains
+                chars_used = len(combined)
+                chars_remaining = max_chars - chars_used - 4  # 4 chars for separator
+                if chars_remaining > 100:
+                    truncated_block = session_block[:chars_remaining]
+                    combined = (combined + "\n\n" + truncated_block) if combined else truncated_block
+    except Exception as exc:
+        logger.warning("[SessionWriter] Failed to load session logs: %s", exc)
+
+    if not combined:
         return ""
 
-    combined = "\n\n".join(parts)
     if len(combined) > max_chars:
         combined = combined[:max_chars] + "\n\n[Memory truncated — full content in /app/data/memory/]"
 
@@ -162,6 +296,35 @@ def _is_template_only(content: str) -> bool:
         if line.strip() and not line.strip().startswith("#") and not line.strip().startswith("<!--")
     ]
     return len(real_lines) == 0
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# MEMORY.md write-back (auto-append captured facts)
+# ────────────────────────────────────────────────────────────────────────────────
+
+def _append_to_memory_md(memory_dir: str, facts: list[str]) -> None:
+    """
+    Append auto-captured session facts to MEMORY.md.
+    Always appends — never truncates or overwrites existing content.
+
+    Args:
+        memory_dir: Path to user memory directory (contains MEMORY.md)
+        facts: Non-empty list of fact strings to persist
+    """
+    memory_md = os.path.join(memory_dir, "MEMORY.md")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+    lines = [f"\n## [{timestamp}]"]
+    for fact in facts:
+        lines.append(f"- {fact}")
+    lines.append("")  # trailing newline
+
+    try:
+        with open(memory_md, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        logger.info("[SessionWriter] Appended %d facts to MEMORY.md", len(facts))
+    except Exception as exc:
+        logger.error("[SessionWriter] Failed to append to MEMORY.md: %s", exc)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -214,6 +377,10 @@ async def flush_session(
     """
     Async entry point for session end. Runs synchronous file I/O in executor.
     Designed to be called with asyncio.wait_for(..., timeout=8.0).
+
+    Writes:
+    1. Session log entry to sessions/YYYY-MM-DD.md (always)
+    2. Captured facts appended to MEMORY.md (only when captured_facts is non-empty)
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
@@ -223,3 +390,11 @@ async def flush_session(
         tool_summary,
         captured_facts,
     )
+    # Write-back: persist captured facts to MEMORY.md for cross-session recall
+    if captured_facts:
+        await loop.run_in_executor(
+            None,
+            _append_to_memory_md,
+            memory_dir,
+            captured_facts,
+        )
