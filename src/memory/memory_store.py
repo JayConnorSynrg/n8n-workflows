@@ -160,17 +160,25 @@ def _create_schema(db_path: str) -> None:
                 created_at  INTEGER NOT NULL
             )
         """)
-        # Schema evolution: add user_id and session_id to memories if missing
-        for col_def in [
-            ("user_id", "TEXT"),
-            ("session_id", "TEXT"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE memories ADD COLUMN {col_def[0]} {col_def[1]}")
-            except Exception:
-                pass  # Column already exists
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
+        # Schema evolution: add user_id and session_id to memories if missing.
+        # Use PRAGMA table_info to guard index creation — prevents "no such column: user_id"
+        # race on multi-worker Railway startup where losers get `database is locked` on
+        # ALTER TABLE (silently swallowed) then hit CREATE INDEX on a non-existent column.
+        existing_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        for col_name, col_type in [("user_id", "TEXT"), ("session_id", "TEXT")]:
+            if col_name not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE memories ADD COLUMN {col_name} {col_type}")
+                    existing_cols.add(col_name)
+                except Exception:
+                    pass  # Lost write-lock race — another worker already added it
+        if "user_id" in existing_cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)")
+        if "session_id" in existing_cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 text,
