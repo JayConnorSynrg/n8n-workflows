@@ -48,6 +48,7 @@ async def log_turn(
     role: str,
     content: str,
     tool_name: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> None:
     """Log a single conversation turn. Fire-and-forget — errors are suppressed."""
     if not _pg_available or _pool is None:
@@ -56,16 +57,66 @@ async def log_turn(
         async with _pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO conversation_log (session_id, role, content, tool_name)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO conversation_log (session_id, role, content, tool_name, user_id)
+                VALUES ($1, $2, $3, $4, $5)
                 """,
                 session_id,
                 role,
                 content[:4000],  # Cap at 4KB per turn
                 tool_name,
+                user_id,
             )
     except Exception as e:
         logger.debug(f"[PgLogger] Turn log failed (non-critical): {e}")
+
+
+async def log_session_start(
+    session_id: str,
+    user_id: Optional[str] = None,
+    room_name: Optional[str] = None,
+) -> None:
+    if not _pg_available or _pool is None:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO sessions (session_id, user_id, room_name, started_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (session_id) DO NOTHING
+                """,
+                session_id, user_id, room_name,
+            )
+    except Exception as e:
+        logger.debug(f"log_session_start error: {e}")
+
+
+async def log_session_end(
+    session_id: str,
+    user_id: Optional[str] = None,
+    summary: Optional[str] = None,
+    message_count: int = 0,
+    tool_call_count: int = 0,
+) -> None:
+    if not _pg_available or _pool is None:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO sessions (session_id, user_id, ended_at, summary, message_count, tool_call_count)
+                VALUES ($1, $2, NOW(), $3, $4, $5)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    ended_at = NOW(),
+                    summary = EXCLUDED.summary,
+                    message_count = EXCLUDED.message_count,
+                    tool_call_count = EXCLUDED.tool_call_count,
+                    user_id = COALESCE(sessions.user_id, EXCLUDED.user_id)
+                """,
+                session_id, user_id, summary, message_count, tool_call_count,
+            )
+    except Exception as e:
+        logger.debug(f"log_session_end error: {e}")
 
 
 async def close_pool() -> None:

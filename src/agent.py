@@ -1156,7 +1156,7 @@ async def entrypoint(ctx: JobContext):
         if text:
             _task_tracker.record_user_message(text)
             # Log user turn to PostgreSQL for full session context
-            asyncio.create_task(_pg_logger.log_turn(session_id, "user", text))
+            asyncio.create_task(_pg_logger.log_turn(session_id, "user", text, user_id=_user_id))
 
         # Publish user transcript to client for UI display
         asyncio.create_task(safe_publish_data(
@@ -1320,7 +1320,7 @@ async def entrypoint(ctx: JobContext):
             _task_tracker.record_agent_speech(text)
             # Log assistant turn to PostgreSQL for full session context
             if text:
-                asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text))
+                asyncio.create_task(_pg_logger.log_turn(session_id, "assistant", text, user_id=_user_id))
 
     @session.on("function_tools_executed")
     def on_function_tools_executed(ev):
@@ -1791,6 +1791,7 @@ async def entrypoint(ctx: JobContext):
         # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
             asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
+            asyncio.create_task(_pg_logger.log_session_start(session_id, _user_id, ctx.room.name))
 
         await session.start(
             agent=agent,
@@ -2250,6 +2251,13 @@ async def entrypoint(ctx: JobContext):
     # Persist session facts to PostgreSQL before clearing them in memory
     if settings.postgres_url:
         asyncio.create_task(_flush_facts_to_db(session_id, settings.postgres_url))
+        asyncio.create_task(_pg_logger.log_session_end(
+            session_id,
+            _user_id,
+            locals().get("_summary"),
+            locals().get("_msg_count", 0),
+            locals().get("_n_calls", 0),
+        ))
 
     cleared_facts = _clear_facts(session_id)
     if cleared_facts:
