@@ -248,34 +248,43 @@ def _create_schema(db_path: str) -> None:
         """)
 
         # ── deep_store schema evolution ──────────────────────────────────────
-        # Same PRAGMA-first pattern: check before ALTER, re-check before index.
-        # user_id and created_at exist in the original CREATE TABLE so their
-        # indexes are always safe; only `embedding` needs the ALTER guard.
+        # PRAGMA first — only ALTER TABLE if column genuinely missing.
+        # Older DB files may lack user_id/session_id/embedding (pre-2026-02-28
+        # schema). Concurrent workers may both reach ALTER simultaneously; the
+        # loser gets "duplicate column" (swallowed). Re-PRAGMA after all ALTERs
+        # to confirm presence before index creation — eliminates "no such column"
+        # race on any column regardless of which DDL generation created the table.
         try:
             ds_existing_cols = {
                 row[1]
                 for row in conn.execute("PRAGMA table_info(deep_store)").fetchall()
             }
-            if "embedding" not in ds_existing_cols:
-                try:
-                    conn.execute("ALTER TABLE deep_store ADD COLUMN embedding TEXT")
-                except Exception:
-                    pass  # Concurrent worker beat us — column is being added
-            # Re-check after ALTER attempt before creating any dependent indexes
+            for col_name, col_def in [
+                ("user_id",    "TEXT NOT NULL DEFAULT '_default'"),
+                ("session_id", "TEXT"),
+                ("embedding",  "TEXT"),
+            ]:
+                if col_name not in ds_existing_cols:
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE deep_store ADD COLUMN {col_name} {col_def}"
+                        )
+                    except Exception:
+                        pass  # Concurrent worker beat us — column is being added
+            # Re-check after all ALTER attempts so indexes only run when confirmed
             ds_existing_cols = {
                 row[1]
                 for row in conn.execute("PRAGMA table_info(deep_store)").fetchall()
             }
-            # user_id and created_at are in the base schema — always present
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_deep_store_user_id ON deep_store(user_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_deep_store_created_at ON deep_store(created_at)"
-            )
-            if "embedding" in ds_existing_cols:
-                # Placeholder for future embedding index if needed
-                pass
+            if "user_id" in ds_existing_cols:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_deep_store_user_id ON deep_store(user_id)"
+                )
+            if "created_at" in ds_existing_cols:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_deep_store_created_at ON deep_store(created_at)"
+                )
+            # embedding index placeholder — no index needed currently
         except Exception as _exc:
             logger.warning("[Memory] Schema evolution (deep_store) partial failure: %s", _exc)
 
