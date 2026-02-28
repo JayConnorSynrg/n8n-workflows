@@ -203,6 +203,22 @@ def _create_schema(db_path: str) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT NOT NULL UNIQUE,
+                user_id       TEXT NOT NULL DEFAULT '_default',
+                summary       TEXT NOT NULL,
+                topics        TEXT NOT NULL DEFAULT '[]',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                embedding     TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ss_user_created
+                ON session_summaries(user_id, created_at DESC)
+        """)
         conn.commit()
 
 
@@ -642,3 +658,159 @@ def deep_store_search(
     except Exception as exc:
         logger.error("[DeepStore] Search error: %s", exc)
         return []
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Session Summaries — cross-session semantic recall over distilled session text
+# ────────────────────────────────────────────────────────────────────────────────
+
+def save_session_summary(
+    session_id: str,
+    summary: str,
+    topics: Optional[list] = None,
+    message_count: int = 0,
+    user_id: str = "_default",
+) -> bool:
+    """Store a distilled session summary with fastembed embedding.
+
+    Uses INSERT OR REPLACE to handle re-saves of the same session_id.
+    Returns True on success, False on failure.
+    """
+    if not _initialized or _init_failed or _db_path is None:
+        logger.warning("[SessionSummary] Store not initialized — cannot save")
+        return False
+
+    topics_json = json.dumps(topics or [])
+    embedding = embedder.embed(summary)
+    embedding_json = json.dumps(embedding) if embedding is not None else None
+
+    with _lock:
+        try:
+            with sqlite3.connect(_db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO session_summaries
+                        (session_id, user_id, summary, topics, message_count, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, summary, topics_json, message_count, embedding_json),
+                )
+                conn.commit()
+            logger.info(
+                "[SessionSummary] Saved session_id=%r user=%r msgs=%d",
+                session_id, user_id, message_count,
+            )
+            return True
+        except Exception as exc:
+            logger.error("[SessionSummary] Save error: %s", exc)
+            return False
+
+
+def search_session_summaries(
+    query: str,
+    user_id: str = "_default",
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Semantic search over session summaries for a user.
+
+    Returns list of dicts: {session_id, summary, topics, message_count, score, created_at}
+    sorted by cosine similarity descending.
+    Falls back to recency order if no embeddings are stored.
+    """
+    if not _initialized or _init_failed or _db_path is None:
+        return []
+
+    try:
+        with sqlite3.connect(_db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT session_id, summary, topics, message_count, embedding, created_at
+                FROM session_summaries
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        query_embedding = embedder.embed(query)
+
+        scored: list[tuple[float, tuple]] = []
+        for row in rows:
+            row_session_id, row_summary, row_topics_json, row_msg_count, row_emb_json, row_created = row
+            if query_embedding is not None and row_emb_json:
+                try:
+                    row_vec = json.loads(row_emb_json)
+                    score = embedder.cosine_similarity(query_embedding, row_vec)
+                except Exception:
+                    score = 0.0
+            else:
+                # No embedding available — use recency score (already ordered DESC)
+                score = 0.0
+            scored.append((score, row))
+
+        # Sort by score descending; ties preserve recency order (stable sort)
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:limit]
+
+        results = []
+        for score, row in top:
+            row_session_id, row_summary, row_topics_json, row_msg_count, _, row_created = row
+            try:
+                topics_list = json.loads(row_topics_json) if row_topics_json else []
+            except Exception:
+                topics_list = []
+            results.append({
+                "session_id": row_session_id,
+                "summary": row_summary,
+                "topics": topics_list,
+                "message_count": row_msg_count,
+                "score": round(score, 4),
+                "created_at": row_created or "",
+            })
+
+        return results
+
+    except Exception as exc:
+        logger.error("[SessionSummary] Search error: %s", exc)
+        return []
+
+
+def get_session_summary(session_id: str) -> Optional[dict[str, Any]]:
+    """Get a specific session summary by session_id. Returns None if not found."""
+    if not _initialized or _init_failed or _db_path is None:
+        return None
+
+    try:
+        with sqlite3.connect(_db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT session_id, summary, topics, message_count, created_at
+                FROM session_summaries
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        row_session_id, row_summary, row_topics_json, row_msg_count, row_created = row
+        try:
+            topics_list = json.loads(row_topics_json) if row_topics_json else []
+        except Exception:
+            topics_list = []
+
+        return {
+            "session_id": row_session_id,
+            "summary": row_summary,
+            "topics": topics_list,
+            "message_count": row_msg_count,
+            "created_at": row_created or "",
+        }
+
+    except Exception as exc:
+        logger.error("[SessionSummary] Get error: %s", exc)
+        return None

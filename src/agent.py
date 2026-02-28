@@ -145,6 +145,7 @@ Immediate read tools no confirmation needed
 - queryDatabase: Search the Auto Pay Plus candidate database - use this to find candidates applicants job postings hiring records or any recruitment data - execute immediately with natural language queries
 - knowledgeBase with action search: Search the candidate knowledge base - use when you need to find and possibly store in the same action
 - checkContext: Remember what was discussed earlier
+- recallSessions: Search distilled summaries of past sessions semantically. Returns what was discussed and the session ID. After finding a relevant session, use checkContext with that session ID to retrieve the full conversation transcript.
 - recall: Reference earlier results without re-fetching
 - recallDrive: Reference earlier Drive results
 - memoryStatus: See what is in session memory
@@ -2219,6 +2220,27 @@ async def entrypoint(ctx: JobContext):
             logger.error("[Memory] Session flush failed: %s", _e)
         finally:
             _mem_capture.reset_session()
+
+    # Save session summary to SQLite for cross-session semantic recall (recallSessions tool)
+    if _MEM_AVAILABLE and _mem_store is not None:
+        try:
+            _tool_summary = locals().get("_summary", "")
+            _tool_topics = list(_stats.get("categories", {}).keys()) if "_stats" in locals() else []
+            _msg_count = len(ctx.chat_ctx.messages) if hasattr(ctx, "chat_ctx") else 0
+            if _tool_summary:
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        _mem_store.save_session_summary,
+                        session_id,
+                        _tool_summary,
+                        _tool_topics,
+                        _msg_count,
+                        _user_id,
+                    )
+                )
+                logger.info("[SessionSummary] Queued save for session_id=%r", session_id)
+        except Exception as _ss_exc:
+            logger.warning("[SessionSummary] Failed to queue summary save: %s", _ss_exc)
 
     cleared_count = clear_session_memory(session_id)
     logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")

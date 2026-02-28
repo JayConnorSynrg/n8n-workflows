@@ -402,6 +402,61 @@ def _format_recall(result: dict) -> str:
 
 
 @llm.function_tool(
+    name="recallSessions",
+    description=(
+        "Search distilled summaries of past voice sessions semantically. "
+        "Use when the user asks about previous conversations, past demos, "
+        "or what was discussed in earlier sessions. "
+        "Returns session summaries with session IDs. "
+        "Use the session ID with checkContext to retrieve the full session transcript."
+    ),
+)
+async def recall_sessions_async(
+    query: str,
+    limit: int = 3,
+) -> str:
+    """Semantic search over past session summaries stored in SQLite."""
+    import asyncio as _asyncio
+    call_id = await publish_tool_start("recallSessions", {"query": query[:60]})
+    await publish_tool_executing(call_id)
+
+    if not _MEMORY_AVAILABLE or _memory_store is None:
+        await publish_tool_error(call_id, "Memory unavailable")
+        return "Session memory is not available right now."
+
+    try:
+        results = await _asyncio.to_thread(
+            _memory_store.search_session_summaries,
+            query,
+            "_default",
+            limit,
+        )
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error("[recallSessions] Search failed: %s", _exc)
+        await publish_tool_error(call_id, "Search failed")
+        return "Could not search past sessions right now."
+
+    if not results:
+        await publish_tool_completed(call_id, "No past sessions found")
+        return "No past sessions found matching that query."
+
+    # Format for voice — natural language, session ID at end for follow-up
+    parts = []
+    for i, r in enumerate(results, 1):
+        created = r.get("created_at", "")[:10]  # YYYY-MM-DD
+        topics = r.get("topics", [])
+        topic_str = f" Topics: {', '.join(topics[:4])}." if topics else ""
+        sid = r.get("session_id", "")
+        parts.append(
+            f"{i}. {created}: {r['summary']}{topic_str} [Session ID: {sid}]"
+        )
+
+    await publish_tool_completed(call_id, f"Found {len(results)} sessions")
+    return "\n\n".join(parts)
+
+
+@llm.function_tool(
     name="memoryStatus",
     description="Get overview of data currently stored in session memory.",
 )
@@ -996,6 +1051,7 @@ ASYNC_TOOLS = [
     get_document_async,
     list_drive_files_async,
     recall_data_async,
+    recall_sessions_async,         # SESSION RECALL: semantic search over past session summaries (READ, no gate)
     recall_drive_data_async,
     memory_summary_async,
     deep_store_async,              # DEEP STORE: unlimited cross-session archive (no confirmation gate)
