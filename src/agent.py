@@ -2186,16 +2186,25 @@ async def entrypoint(ctx: JobContext):
     # Flush session to persistent memory (8s timeout — must not block disconnect)
     if _MEM_AVAILABLE and _session_writer is not None and _mem_capture is not None:
         try:
-            # Build a brief session summary from STM stats
+            # Build a meaningful session summary using captured facts as objectives
             from .tools.short_term_memory import get_session_stats
             _stats = get_session_stats(session_id)
+            # Compute pending facts FIRST so they can be used in the title
+            _pending = _mem_capture.get_pending_facts()
+            _fact_texts = [f for f, _ in _pending]
+
             _cats = list(_stats.get('categories', {}).keys())
             _cat_str = ", ".join(_cats[:4]) if _cats else "general"
             _n_calls = _stats.get('total_entries', 0)
-            _summary = f"Voice session. Tools: {_n_calls} calls ({_cat_str})."
-            # Flush auto-captured facts to SQLite
-            _pending = _mem_capture.get_pending_facts()
-            _fact_texts = [f for f, _ in _pending]
+
+            if _fact_texts:
+                # Use first 2 captured facts as the session objectives descriptor
+                _objectives = "; ".join([f.rstrip(".").strip() for f in _fact_texts[:2]])
+                if len(_objectives) > 120:
+                    _objectives = _objectives[:117] + "..."
+                _summary = f"{_objectives}. ({_n_calls} tool calls, {_cat_str})"
+            else:
+                _summary = f"Voice session. {_n_calls} tool calls ({_cat_str})."
             # Write session log to user's sessions/ dir (with 8s timeout)
             await asyncio.wait_for(
                 _session_writer.flush_session(_user_mem_dir, _summary, _fact_texts),
