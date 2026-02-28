@@ -895,6 +895,37 @@ async def entrypoint(ctx: JobContext):
             logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
     # ── End per-user memory routing ──────────────────────────────────────────
 
+    # ── New user detection ──────────────────────────────────────────────────
+    def _resolve_participant_display_name() -> str:
+        """Return the best available display name for the non-agent participant."""
+        try:
+            for p in ctx.room.remote_participants.values():
+                ident = getattr(p, "identity", "") or ""
+                if ident.lower() in ("agent", "aiagent", "aio"):
+                    continue
+                name = getattr(p, "name", "") or ""
+                return name.strip() or ident.strip()
+        except Exception:
+            pass
+        return ""
+
+    def _user_profile_is_empty(mem_dir: str) -> bool:
+        """Return True if USER.md exists but contains only template boilerplate."""
+        from .memory.session_writer import _is_template_only as _check_template
+        user_md = os.path.join(mem_dir, "USER.md")
+        try:
+            if not os.path.exists(user_md):
+                return True
+            with open(user_md, "r", encoding="utf-8") as _f:
+                return _check_template(_f.read())
+        except Exception:
+            return True
+
+    _is_new_user: bool = _user_profile_is_empty(_user_mem_dir)
+    _participant_display_name: str = _resolve_participant_display_name()
+    logger.info("[NewUser] is_new_user=%s display_name=%r", _is_new_user, _participant_display_name)
+    # ── End new user detection ───────────────────────────────────────────────
+
     # Reset Composio slug index per-session so newly connected services are visible
     try:
         from .tools import composio_router as _cr
@@ -1081,6 +1112,28 @@ async def entrypoint(ctx: JobContext):
             "and offer to recall full details from any session if needed."
         )
         active_prompt = active_prompt + _session_list_instruction
+
+    if _is_new_user:
+        _name_hint = (
+            f" Their display name or ID appears to be '{_participant_display_name}'."
+            if _participant_display_name else ""
+        )
+        _new_user_section = (
+            "\n\n## NEW USER IDENTIFICATION (this session only)\n"
+            f"You are meeting someone whose profile you don't yet have on file.{_name_hint}\n\n"
+            "After your greeting, naturally work through this sequence:\n"
+            "1. Mention you haven't built a profile for them yet and ask if they'd like you to remember them going forward.\n"
+            "2. If yes — ask their name (if not already confirmed), role/title, and company. "
+            "Ask one question at a time, conversationally.\n"
+            "3. Use deepStore to save a user profile entry: "
+            "\"User profile: [Name], [Role] at [Company], first session [today's date]\"\n"
+            "4. Call searchContacts with their name to check if they're already saved as a contact.\n"
+            "5. If not in contacts, ask if they'd like to be added. If yes, use addContact.\n"
+            "6. Once complete, proceed normally with whatever they need.\n\n"
+            "Keep this natural and brief — one exchange at a time, never like a form. "
+            "If they decline to be remembered, respect that and move on immediately."
+        )
+        active_prompt = active_prompt + _new_user_section
 
     # Define agent with all tools (no MCP servers)
     agent = Agent(
@@ -1632,6 +1685,33 @@ async def entrypoint(ctx: JobContext):
         # List their current tracks
         for pub in participant.track_publications.values():
             logger.info(f"   - Has track: {pub.kind} / {pub.source} / {pub.name}")
+
+        # Check if this is a new user we haven't profiled yet (late-join identification)
+        try:
+            _joining_ident = getattr(participant, "identity", "") or ""
+            _joining_name = getattr(participant, "name", "") or _joining_ident
+            if _joining_ident.lower() not in ("agent", "aiagent", "aio") and _joining_ident:
+                _joining_user_id = _user_identity.resolve_user_id(
+                    room_name=ctx.room.name or "",
+                    room_metadata_str=getattr(ctx.room, "metadata", None) or "",
+                    participants=[participant],
+                )
+                _joining_mem_dir = _user_identity.get_user_mem_dir(_base_mem_dir, _joining_user_id)
+                if _user_profile_is_empty(_joining_mem_dir):
+                    logger.info("[NewUser] Late-join new user detected: %r — queuing identification", _joining_ident)
+                    asyncio.create_task(
+                        session.generate_reply(
+                            instructions=(
+                                f"A participant named '{_joining_name}' just joined. "
+                                "You haven't met them before. Greet them warmly and offer to add them "
+                                "to your memory. Follow the NEW USER IDENTIFICATION flow: ask their name "
+                                "(if not confirmed), role, and company one at a time. Use deepStore to save "
+                                "their profile, then check searchContacts and offer addContact if needed."
+                            )
+                        )
+                    )
+        except Exception as _e:
+            logger.debug("[NewUser] on_participant_connected identification check failed: %s", _e)
 
     # Connect to room with EXPLICIT auto_subscribe=True
     # This ensures we subscribe to ALL remote participant tracks
