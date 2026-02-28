@@ -160,6 +160,17 @@ def _create_schema(db_path: str) -> None:
                 created_at  INTEGER NOT NULL
             )
         """)
+        # Schema evolution: add user_id and session_id to memories if missing
+        for col_def in [
+            ("user_id", "TEXT"),
+            ("session_id", "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE memories ADD COLUMN {col_def[0]} {col_def[1]}")
+            except Exception:
+                pass  # Column already exists
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 text,
@@ -203,6 +214,13 @@ def _create_schema(db_path: str) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Schema evolution: add embedding column and indexes to deep_store if missing
+        try:
+            conn.execute("ALTER TABLE deep_store ADD COLUMN embedding TEXT")
+        except Exception:
+            pass  # Column already exists
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_deep_store_user_id ON deep_store(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_deep_store_created_at ON deep_store(created_at)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_summaries (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,6 +263,8 @@ def store(
     category: str = "general",
     importance: float = 0.5,
     source: str = "auto",
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Store a memory entry.
@@ -283,10 +303,10 @@ def store(
             with sqlite3.connect(_db_path) as conn:  # type: ignore[arg-type]
                 conn.execute(
                     """
-                    INSERT INTO memories (id, text, text_safe, category, importance, source, embedding, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO memories (id, text, text_safe, category, importance, source, embedding, created_at, user_id, session_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (entry_id, text, text_safe, category, importance, source, embedding_json, now),
+                    (entry_id, text, text_safe, category, importance, source, embedding_json, now, user_id or None, session_id or None),
                 )
                 conn.commit()
             logger.debug("[Memory] Stored: [%s] %.60s...", category, text)

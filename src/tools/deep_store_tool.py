@@ -32,6 +32,13 @@ except Exception:
     _memory_store = None  # type: ignore[assignment]
     _MEMORY_AVAILABLE = False
 
+try:
+    from . import agent_context_tool as _agent_context_tool
+    _AGENT_CONTEXT_AVAILABLE = True
+except Exception:
+    _agent_context_tool = None  # type: ignore[assignment]
+    _AGENT_CONTEXT_AVAILABLE = False
+
 
 @llm.function_tool(
     name="deepStore",
@@ -55,11 +62,16 @@ async def deep_store_async(
         await publish_tool_error(call_id, "Memory unavailable")
         return "Deep storage is not available right now"
 
+    _sid = (
+        _agent_context_tool._current_session_id
+        if _AGENT_CONTEXT_AVAILABLE and _agent_context_tool is not None
+        else None
+    ) or ""
     entry_id = await asyncio.to_thread(
         _memory_store.deep_store_save,
         content,
         label or "unlabeled",
-        "",
+        _sid,
     )
 
     if entry_id:

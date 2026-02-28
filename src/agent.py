@@ -78,6 +78,7 @@ from .tools.agent_context_tool import (
     get_session_summary_tool,
     warm_session_cache,
     invalidate_session_cache,
+    set_current_session_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
 from .tools.gamma_tool import get_notification_queue
@@ -1785,6 +1786,7 @@ async def entrypoint(ctx: JobContext):
         # Pre-warm context cache in background while session starts
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
+        set_current_session_id(session_id)
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
         # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
