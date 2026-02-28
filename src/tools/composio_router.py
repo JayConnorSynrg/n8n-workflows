@@ -1090,6 +1090,21 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
     slug_key = tool_slug.upper().strip()
 
+    # Block Composio MCP meta-tool slugs — these are not callable via client.tools.execute()
+    # They belong to the Composio MCP server, not the SDK action registry.
+    # The agent must use composioBatchExecute or composioExecute for all tool execution.
+    _COMPOSIO_META_SLUGS = frozenset({
+        "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_REMOTE_WORKBENCH",
+        "COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_SEARCH_TOOLS",
+        "COMPOSIO_MANAGE_CONNECTIONS",
+    })
+    if slug_key in _COMPOSIO_META_SLUGS:
+        logger.warning(f"Composio: Blocked meta-tool call to {slug_key} — use composioBatchExecute instead")
+        return (
+            f"Use composioBatchExecute or composioExecute for tool execution. "
+            f"Do not call {slug_key} directly — it is not an action tool."
+        )
+
     # Circuit breaker: check if this slug has failed too many times
     if _failed_slugs.get(slug_key, 0) >= _CB_MAX_FAILURES:
         logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")

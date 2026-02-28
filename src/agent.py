@@ -249,10 +249,6 @@ COMPOSIO_MANAGE_CONNECTIONS — handle OAuth and API key authentication for any 
   Returns: auth link for the user to click and complete authentication
   Use when: COMPOSIO_SEARCH_TOOLS or manageConnections reports a service is not connected or needs re-auth
 
-COMPOSIO_MULTI_EXECUTE_TOOL — execute up to 20 tools in parallel (Composio native batch)
-  Pass: tools=[{"action_name": "GITHUB_CREATE_ISSUE", "arguments": {...}}, ...]
-  Use when: running multiple independent tools at once — equivalent to composioBatchExecute but Composio-native
-
 COMPOSIO_REMOTE_WORKBENCH — run Python code in a persistent sandbox for bulk processing
   Pass: code="<python code string>"
   Use when: processing large results (e.g. labeling 100 emails), bulk data transformations, complex chaining
@@ -264,7 +260,7 @@ COMPOSIO_REMOTE_BASH_TOOL — execute bash commands for file and data extraction
 CANONICAL SEQUENCE:
 1. COMPOSIO_SEARCH_TOOLS → find correct slugs + check if service is connected
 2. If not connected → COMPOSIO_MANAGE_CONNECTIONS (or manageConnections Python tool) → give auth link to user
-3. Execute → composioBatchExecute (parallel) or COMPOSIO_MULTI_EXECUTE_TOOL (Composio native)
+3. Execute → composioBatchExecute (parallel) or composioExecute (single call)
 4. Large results → COMPOSIO_REMOTE_WORKBENCH or COMPOSIO_REMOTE_BASH_TOOL to process
 
 WEB SEARCH AND RESEARCH TOOLS
