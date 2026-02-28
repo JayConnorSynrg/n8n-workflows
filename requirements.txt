@@ -34,5 +34,5 @@ cryptography>=42.0.0
 composio>=0.7.0
 
 # Memory layer — cross-session persistent memory
-sentence-transformers>=2.7.0
+fastembed>=0.3.0
 numpy>=1.24.0

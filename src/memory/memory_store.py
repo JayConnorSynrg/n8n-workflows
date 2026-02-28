@@ -193,6 +193,16 @@ def _create_schema(db_path: str) -> None:
                 VALUES (new.rowid, new.text, new.id, new.category);
             END
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deep_store (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT NOT NULL DEFAULT '_default',
+                label      TEXT,
+                content    TEXT NOT NULL,
+                session_id TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
         conn.commit()
 
 
@@ -503,3 +513,132 @@ def get_stats() -> dict[str, Any]:
         }
     except Exception as exc:
         return {"available": True, "error": str(exc)}
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Deep Store — unlimited persistent archive (no size cap, no dedup, no expiry)
+# ────────────────────────────────────────────────────────────────────────────────
+
+def deep_store_save(
+    content: str,
+    label: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: str = "_default",
+) -> int:
+    """
+    Insert content into the deep_store table.
+
+    Args:
+        content:    The content to archive (no size limit).
+        label:      Short descriptive label for later recall.
+        session_id: Session identifier (optional).
+        user_id:    Per-user partition key (defaults to '_default').
+
+    Returns:
+        The row id of the inserted entry on success, 0 on failure.
+    """
+    if not _initialized or _init_failed or _db_path is None:
+        logger.warning("[DeepStore] Store not initialized — cannot save")
+        return 0
+
+    with _lock:
+        try:
+            with sqlite3.connect(_db_path) as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO deep_store (user_id, label, content, session_id)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, label or None, content, session_id or None),
+                )
+                conn.commit()
+                row_id = cursor.lastrowid or 0
+            logger.debug("[DeepStore] Saved id=%d label=%r", row_id, label)
+            return row_id
+        except Exception as exc:
+            logger.error("[DeepStore] Save error: %s", exc)
+            return 0
+
+
+def deep_store_search(
+    query: str,
+    label: Optional[str] = None,
+    limit: int = 10,
+    user_id: str = "_default",
+) -> list[dict[str, Any]]:
+    """
+    Search the deep_store table by label or content substring.
+
+    Matches rows WHERE content LIKE %query% OR label LIKE %query%.
+    If label is provided it is AND-ed as an additional filter (label LIKE %label%).
+    Results are ordered by created_at DESC.
+
+    Args:
+        query:   Text to search in content and label columns.
+        label:   Optional label filter — narrows results to matching labels.
+        limit:   Maximum number of rows to return.
+        user_id: Per-user partition key.
+
+    Returns:
+        List of dicts with keys: id, label, content, session_id, created_at.
+    """
+    if not _initialized or _init_failed or _db_path is None:
+        return []
+
+    try:
+        pattern = f"%{query}%" if query else "%"
+        if label:
+            label_pattern = f"%{label}%"
+            with sqlite3.connect(_db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, label, content, session_id, created_at
+                    FROM deep_store
+                    WHERE user_id = ?
+                      AND label LIKE ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, label_pattern, limit),
+                ).fetchall()
+        elif query:
+            with sqlite3.connect(_db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, label, content, session_id, created_at
+                    FROM deep_store
+                    WHERE user_id = ?
+                      AND (content LIKE ? OR label LIKE ?)
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, pattern, pattern, limit),
+                ).fetchall()
+        else:
+            # No query, no label — return most recent entries
+            with sqlite3.connect(_db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, label, content, session_id, created_at
+                    FROM deep_store
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, limit),
+                ).fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "label": row[1] or "",
+                "content": row[2],
+                "session_id": row[3] or "",
+                "created_at": row[4] or "",
+            }
+            for row in rows
+        ]
+
+    except Exception as exc:
+        logger.error("[DeepStore] Search error: %s", exc)
+        return []

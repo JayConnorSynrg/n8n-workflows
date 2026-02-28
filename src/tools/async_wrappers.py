@@ -58,6 +58,7 @@ from ..utils.short_term_memory import (
 )
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool, prospect_scraper_tool
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async, generate_social_async
+from .deep_store_tool import deep_store_async, deep_recall_async
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
 try:
@@ -932,6 +933,8 @@ ASYNC_TOOLS = [
     recall_data_async,
     recall_drive_data_async,
     memory_summary_async,
+    deep_store_async,              # DEEP STORE: unlimited cross-session archive (no confirmation gate)
+    deep_recall_async,             # DEEP RECALL: retrieve by label or text search (READ, no gate)
     vector_store_async,
     database_query_async,
     vector_search_async,

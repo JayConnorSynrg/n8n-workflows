@@ -89,15 +89,14 @@ async def flush_facts_to_db(session_id: str, postgres_url: Optional[str]) -> Non
             for key, value in facts.items():
                 await conn.execute(
                     """
-                    INSERT INTO session_facts_log (session_id, key, value, metadata_json, created_at)
-                    VALUES ($1, $2, $3, $4, NOW())
+                    INSERT INTO session_facts_log (session_id, key, value, created_at)
+                    VALUES ($1, $2, $3, NOW())
                     ON CONFLICT (session_id, key)
                     DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
                     """,
                     session_id,
                     key,
                     str(value),
-                    None,
                 )
             logger.info(
                 f"[SessionFacts] Flushed {len(facts)} facts to DB for session {session_id}"

@@ -56,7 +56,7 @@ async def query_database_tool(
 
     payload = {
         "query": query,
-        "topK": max_results,
+        "top_k": max_results,
         "intent_id": intent_id,
     }
 
