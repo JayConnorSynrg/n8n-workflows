@@ -56,6 +56,11 @@ _service_auth_failed: dict[str, bool] = {}
 _initiated_connections: dict[str, float] = {}
 _INITIATED_EXPIRY_SECS = 480  # 8 min — warn before Composio's 10-min hard expiry
 
+# Multi-account tracking: toolkit_slug → connected_account_id for explicit account selection.
+# Populated on slug index build (most recently connected account per toolkit).
+# Can be overridden by manageConnections(action=select) for user-explicit account selection.
+_preferred_account_by_toolkit: dict[str, str] = {}
+
 # Canonical slug index: ALL available tool slugs from connected toolkits.
 # Built once at first execute(), used to resolve LLM-generated short slugs
 # (e.g. "TEAMS_LIST_CHANNELS") to canonical SDK slugs
@@ -199,6 +204,8 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
         connected = set()
         cursor = None
         page_num = 0
+        # Build: toolkit → list of (account_id, created_at_str) for recency sorting
+        _toolkit_account_candidates: dict[str, list[tuple[str, str]]] = {}
 
         # RC1: paginate until no next_cursor
         while True:
@@ -209,12 +216,18 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
             for account in items:
                 toolkit_obj = getattr(account, "toolkit", None)
                 slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
-                acct_id = getattr(account, "id", getattr(account, "account_id", "?"))
+                acct_id = getattr(account, "id", None) or getattr(account, "account_id", None) or ""
+                created_at = str(getattr(account, "created_at", "") or "")
                 if slug:
-                    connected.add(slug.lower().strip())
+                    slug_lower = slug.lower().strip()
+                    connected.add(slug_lower)
                     logger.debug(
-                        f"Composio: discovered {slug.lower()} account_id={acct_id}"
+                        f"Composio: discovered {slug_lower} account_id={acct_id or '?'}"
                     )
+                    if acct_id:
+                        _toolkit_account_candidates.setdefault(slug_lower, []).append(
+                            (acct_id, created_at)
+                        )
 
             # Advance cursor — SDK may expose it as next_cursor, cursor, or nextCursor
             cursor = (
@@ -224,6 +237,18 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
             )
             if not cursor:
                 break
+
+        # After all pages: populate _preferred_account_by_toolkit.
+        # ISO 8601 strings sort lexicographically = chronologically, so newest first.
+        # Full clear + repopulate on each index rebuild (no stale entries from previous builds).
+        _preferred_account_by_toolkit.clear()
+        for toolkit_slug, candidates in _toolkit_account_candidates.items():
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            _preferred_account_by_toolkit[toolkit_slug] = candidates[0][0]
+            logger.debug(
+                f"Composio: {toolkit_slug} preferred_account={candidates[0][0]} "
+                f"({len(candidates)} total account{'s' if len(candidates) != 1 else ''})"
+            )
 
         # RC5: if ACTIVE query returned nothing, retry without status filter
         # to detect INITIATED/EXPIRED connections and surface a warning
@@ -1224,6 +1249,9 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         await publish_tool_executing(call_id)
         start_ms = int(time.time() * 1000)
 
+        _service_key_for_acct = (_slug_to_toolkit.get(resolved_slug) or "").lower()
+        _acct_id = _preferred_account_by_toolkit.get(_service_key_for_acct) or None
+
         result = None
         for _attempt in range(len(_RETRY_DELAYS) + 1):
             result = await asyncio.to_thread(
@@ -1231,6 +1259,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     resolved_slug,
                     arguments,
                     user_id=user_id,
+                    connected_account_id=_acct_id,
                     dangerously_skip_version_check=True,
                 )
             )
@@ -1419,6 +1448,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                             lambda: client.tools.execute(
                                 resolved_slug, arguments,
                                 user_id=user_id,
+                                connected_account_id=_acct_id,
                                 dangerously_skip_version_check=True,
                             )
                         )
@@ -1501,10 +1531,14 @@ async def get_connected_services_status() -> str:
 
     Calls connected_accounts.list() with all statuses so INITIATED and EXPIRED
     connections are visible. Side-effect: syncs _service_auth_failed with live data.
+    Also shows per-account IDs when multiple accounts exist for a toolkit,
+    and marks which account is currently selected.
     """
     from ..config import get_settings
     settings = get_settings()
     live_statuses: dict[str, str] = {}
+    # toolkit → list of (account_id, status, created_at) for multi-account display
+    _accounts_by_toolkit: dict[str, list[tuple[str, str, str]]] = {}
 
     if settings.composio_api_key and settings.composio_user_id:
         try:
@@ -1519,9 +1553,20 @@ async def get_connected_services_status() -> str:
                 toolkit_obj = getattr(account, "toolkit", None)
                 slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
                 status = getattr(account, "status", None)
+                acct_id = getattr(account, "id", None) or getattr(account, "account_id", None) or ""
+                created_at = str(getattr(account, "created_at", "") or "")
                 if slug and status:
                     service_key = slug.lower().strip()
-                    live_statuses[service_key] = status
+                    # Keep most-recent status per toolkit for the top-level list
+                    # (prefer ACTIVE over other statuses if multiple accounts)
+                    existing = live_statuses.get(service_key)
+                    if existing != "ACTIVE":
+                        live_statuses[service_key] = status
+                    # Track all accounts per toolkit for detail lines
+                    if acct_id:
+                        _accounts_by_toolkit.setdefault(service_key, []).append(
+                            (acct_id, status, created_at)
+                        )
                     # Side-effect: keep auth failure state in sync with live data
                     if status in ("EXPIRED", "FAILED", "INACTIVE"):
                         _service_auth_failed[service_key] = True
@@ -1554,7 +1599,20 @@ async def get_connected_services_status() -> str:
         if status == "ACTIVE":
             tool_count = len(_slugs_by_service.get(service_key, []))
             cnt = f" ({tool_count} tools)" if tool_count else ""
-            active_list.append(f"{display}{cnt}")
+            # Build per-account detail lines when multiple accounts exist
+            accounts = _accounts_by_toolkit.get(service_key, [])
+            if len(accounts) > 1:
+                # Sort newest first (ISO 8601 sorts lexicographically)
+                accounts_sorted = sorted(accounts, key=lambda x: x[2], reverse=True)
+                selected_id = _preferred_account_by_toolkit.get(service_key, "")
+                acct_lines = []
+                for aid, _ast, _cat in accounts_sorted:
+                    marker = " <- selected" if aid == selected_id else ""
+                    acct_lines.append(f"    {aid}{marker}")
+                acct_detail = "\n" + "\n".join(acct_lines)
+                active_list.append(f"{display}{cnt}{acct_detail}")
+            else:
+                active_list.append(f"{display}{cnt}")
         elif status == "INITIATED":
             elapsed = time.time() - _initiated_connections.get(service_key, time.time())
             remaining = max(0, 600 - int(elapsed))

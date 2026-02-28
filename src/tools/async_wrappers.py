@@ -514,10 +514,12 @@ _AUTH_EMAIL_RECIPIENT = "jayconnor@synrgscaling.com"
     name="manageConnections",
     description=(
         "Manage connected services. "
-        "Use action status to see which services are connected. "
+        "Use action status to see which services are connected and their account IDs. "
         "Use action connect with a service name to set up a new connection and send the auth link via email. "
+        "Use action select with service and account_id to switch which account is used when a service has multiple accounts. "
         "Use action refresh after connecting a new service to update your available tools mid-session. "
         "Examples: manageConnections(action='status') or manageConnections(action='connect', service='onedrive') "
+        "or manageConnections(action='select', service='gmail', account_id='ca_abc123') "
         "or manageConnections(action='refresh')."
     ),
 )
@@ -525,13 +527,18 @@ async def manage_connections_async(
     action: str = "status",
     service: str = "",
     recipient: str = "",
+    account_id: str = "",
 ) -> str:
     """Manage Composio service connections."""
     import time
+    import asyncio as _asyncio
     import aiohttp
     from .composio_router import (
         get_connected_services_status,
         initiate_service_connection,
+        _preferred_account_by_toolkit,
+        _extract_items_from_response,
+        _get_client,
     )
 
     action_lower = action.lower().strip()
@@ -542,6 +549,61 @@ async def manage_connections_async(
         result = await get_connected_services_status()
         await publish_tool_completed(call_id, result[:100])
         return result
+
+    if action_lower == "select":
+        service_lower = service.lower().strip().replace(" ", "_")
+        account_id_clean = account_id.strip()
+        if not service_lower or not account_id_clean:
+            return (
+                "Specify both service and account_id to select an account. "
+                "Use manageConnections(action=status) to see available accounts and their IDs."
+            )
+
+        call_id = await publish_tool_start(
+            "manageConnections",
+            {"action": "select", "service": service_lower, "account_id": account_id_clean},
+        )
+        await publish_tool_executing(call_id)
+
+        try:
+            from ..config import get_settings as _get_settings_inner
+            settings = _get_settings_inner()
+            client = _get_client(settings)
+            user_id = settings.composio_user_id.strip()
+
+            accts_resp = await _asyncio.to_thread(
+                lambda: client.connected_accounts.list(user_ids=[user_id], statuses=["ACTIVE"])
+            )
+            accts = _extract_items_from_response(accts_resp)
+            match = next(
+                (
+                    a for a in accts
+                    if (getattr(a, "id", None) or getattr(a, "account_id", "")) == account_id_clean
+                    and (
+                        getattr(getattr(a, "toolkit", None), "slug", "") or ""
+                    ).lower() == service_lower
+                ),
+                None,
+            )
+            if not match:
+                await publish_tool_completed(call_id, "Account not found")
+                return (
+                    f"No active account '{account_id_clean}' found for {service_lower}. "
+                    f"Use manageConnections(action=status) to see available accounts and their IDs."
+                )
+            _preferred_account_by_toolkit[service_lower] = account_id_clean
+            display = service_lower.replace("_", " ").title()
+            result = (
+                f"{display} is now set to account {account_id_clean}. "
+                f"All {display} tools will use this account."
+            )
+            await publish_tool_completed(call_id, result[:100])
+            return result
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(f"manage_connections select failed: {exc}")
+            await publish_tool_completed(call_id, "Select failed")
+            return f"Could not switch {service_lower} account: {exc}"
 
     if action_lower == "connect":
         if not service:
