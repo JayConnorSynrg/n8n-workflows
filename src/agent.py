@@ -5,6 +5,7 @@ Based on LiveKit Agents 1.3.x documentation:
 - https://docs.livekit.io/agents/multimodality/audio/
 """
 import asyncio
+import os
 import json
 import logging
 import threading
@@ -911,10 +912,11 @@ async def entrypoint(ctx: JobContext):
 
     def _user_profile_is_empty(mem_dir: str) -> bool:
         """Return True if USER.md exists but contains only template boilerplate."""
+        import os as _os
         from .memory.session_writer import _is_template_only as _check_template
-        user_md = os.path.join(mem_dir, "USER.md")
+        user_md = _os.path.join(mem_dir, "USER.md")
         try:
-            if not os.path.exists(user_md):
+            if not _os.path.exists(user_md):
                 return True
             with open(user_md, "r", encoding="utf-8") as _f:
                 return _check_template(_f.read())
