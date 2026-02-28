@@ -1655,9 +1655,16 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
         return client.connected_accounts.initiate(user_id, auth_config_id)
 
     def _extract_redirect_url_from_dict(data: dict) -> str | None:
-        """Probe multiple key shapes — SDK redirect URL field name varies across versions."""
-        response_data = data.get("response_data", {}) if isinstance(data, dict) else {}
-        return (
+        """Probe multiple key shapes — SDK redirect URL field name varies across versions.
+
+        MANAGE_CONNECTIONS returns URLs nested under data.results.{service}.redirect_url
+        (not at top-level or response_data.*), so we must scan results entries too.
+        """
+        if not isinstance(data, dict):
+            return None
+        response_data = data.get("response_data", {}) or {}
+        # Flat probes (older SDK shapes)
+        flat = (
             response_data.get("redirect_url")
             or response_data.get("redirectUrl")
             or response_data.get("connectionUrl")
@@ -1667,6 +1674,15 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
             or data.get("connectionUrl")
             or data.get("authUrl")
         )
+        if flat:
+            return flat
+        # MANAGE_CONNECTIONS shape: data.results.{service_name}.redirect_url
+        for svc_data in (data.get("results") or {}).values():
+            if isinstance(svc_data, dict):
+                url = svc_data.get("redirect_url") or svc_data.get("redirectUrl")
+                if url:
+                    return url
+        return None
 
     # --- Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool ---
     try:
@@ -1681,14 +1697,18 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
             status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if not force_reauth and status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
-            # Check for already-active summary shape:
-            # e.g. {"summary": "active_connections=1, message='All connections are active'"}
+            # Check for already-active summary shape using actual dict values, not string matching.
+            # String matching fires on "active_connections=0" (key always present in summary dict).
             data = result.get("data", {}) or {}
-            summary_str = str(data.get("summary", "") or data.get("message", "") or "").lower()
-            if not force_reauth and "active" in summary_str and "all connections" in summary_str:
-                return f"{display_name} is already connected and active", ""
-            if not force_reauth and "active_connections" in summary_str:
-                return f"{display_name} is already connected and active", ""
+            summary_dict = data.get("summary") or {}
+            message_str = (data.get("message") or "").lower()
+            if not force_reauth:
+                active_count = summary_dict.get("active_connections", 0) if isinstance(summary_dict, dict) else 0
+                initiated_count = summary_dict.get("initiated_connections", 0) if isinstance(summary_dict, dict) else 0
+                if active_count > 0 and initiated_count == 0:
+                    return f"{display_name} is already connected and active", ""
+                if "all connections are active" in message_str:
+                    return f"{display_name} is already connected and active", ""
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape
         logger.warning(
