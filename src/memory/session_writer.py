@@ -219,14 +219,16 @@ def ensure_memory_files(memory_dir: str) -> None:
 
 def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
     """
-    Load SOUL.md, MEMORY.md, USER.md, and the most recent 1-2 session logs and
-    return a formatted string for system prompt injection.
+    Load SOUL.md, MEMORY.md, and USER.md and return a formatted string for
+    system prompt injection.
     Content is capped at approximately max_tokens (estimated at 4 chars per token).
 
-    Session logs are loaded AFTER the 3 main files. If the main files already
-    fill the budget, session logs are omitted gracefully.
-
     Returns empty string if files don't exist or are empty.
+
+    Session logs NOT auto-loaded — use recall() tool for cross-session search.
+    Full session logs available in sessions/YYYY-MM-DD.md but loaded on-demand only.
+    Reason: session log files are append-only per day and grow unboundedly;
+    captured_facts are already persisted to MEMORY.md and SQLite via flush_session().
     """
     max_chars = max_tokens * 4  # rough estimate
     parts: list[str] = []
@@ -247,37 +249,6 @@ def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
             logger.warning("[SessionWriter] Failed to load %s: %s", filename, exc)
 
     combined = "\n\n".join(parts) if parts else ""
-
-    # Load recent session logs (OpenClaw parity: today + yesterday)
-    sessions_dir = os.path.join(memory_dir, "sessions")
-    try:
-        if os.path.isdir(sessions_dir):
-            log_files = sorted(
-                [f for f in os.listdir(sessions_dir) if f.endswith(".md")],
-                reverse=True,  # lexicographic descending = most recent first
-            )
-            recent_logs: list[str] = []
-            for log_file in log_files[:2]:
-                log_path = os.path.join(sessions_dir, log_file)
-                try:
-                    with open(log_path, "r", encoding="utf-8") as f:
-                        log_content = f.read().strip()
-                    if log_content:
-                        date_label = log_file.replace(".md", "")
-                        recent_logs.append(f"#### {date_label}\n{log_content}")
-                except Exception as log_exc:
-                    logger.warning("[SessionWriter] Failed to load session log %s: %s", log_file, log_exc)
-
-            if recent_logs:
-                session_block = "### Recent Session Log\n" + "\n\n".join(recent_logs)
-                # Only append if budget remains
-                chars_used = len(combined)
-                chars_remaining = max_chars - chars_used - 4  # 4 chars for separator
-                if chars_remaining > 100:
-                    truncated_block = session_block[:chars_remaining]
-                    combined = (combined + "\n\n" + truncated_block) if combined else truncated_block
-    except Exception as exc:
-        logger.warning("[SessionWriter] Failed to load session logs: %s", exc)
 
     if not combined:
         return ""
