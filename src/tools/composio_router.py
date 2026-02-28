@@ -18,6 +18,7 @@ from ..utils.room_publisher import (
     publish_tool_executing,
     publish_tool_completed,
     publish_tool_error,
+    publish_composio_event,
 )
 try:
     from ..utils.tool_logger import log_composio_call, log_perplexity_search
@@ -1188,6 +1189,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     tool_display = _friendly_name(resolved_slug)
     ui_name = _display_name(resolved_slug)
     call_id = await publish_tool_start(ui_name, {k: str(v)[:60] for k, v in list(arguments.items())[:3]})
+    await publish_composio_event("composio.searching", tool_slug, call_id, detail=f"Resolving {tool_slug}")
 
     # ── SCHEMA LOAD ────────────────────────────────────────────────────────────
     # Load cached schema into per-call active state.
@@ -1262,6 +1264,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         logger.info(f"Composio SDK execute: slug={resolved_slug}, user_id={user_id}, args_keys={list(arguments.keys())}")
 
         await publish_tool_executing(call_id)
+        await publish_composio_event("composio.executing", resolved_slug, call_id, detail=f"Executing {resolved_slug}")
         start_ms = int(time.time() * 1000)
 
         _service_key_for_acct = (_slug_to_toolkit.get(resolved_slug) or "").lower()
@@ -1304,6 +1307,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             # Reset circuit breaker on success
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
+            await publish_composio_event("composio.completed", resolved_slug, call_id, detail=voice_result[:80], duration_ms=duration_ms)
             await publish_tool_completed(call_id, voice_result[:100])
             # Fire-and-forget logging — zero latency impact
             log_composio_call(
@@ -1358,6 +1362,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 f"[TOOL_CALL] Composio FAIL: {resolved_slug} "
                 f"status_code={status_code} log_id={log_id} error={error_str!r} ({duration_ms}ms)"
             )
+            await publish_composio_event("composio.error", resolved_slug, call_id, detail=error_str[:80])
             await publish_tool_error(call_id, error_str[:100])
             # Fire-and-forget failure logging — zero latency impact
             log_composio_call(

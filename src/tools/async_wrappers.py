@@ -91,7 +91,7 @@ async def send_email_async(
     _t0 = time.monotonic()
     await email_tool.send_email_tool(to, subject, body, cc)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, "Email sent")
+    await publish_tool_completed(call_id, "Email sent", duration_ms=_dur)
     result = f"Email sent to {to.split('@')[0].replace('.', ' ').title()}"
     _fire_native_log("send_email", {"to": to, "subject": subject}, result, _dur)
     # Capture recipient preference for fast-path email (non-blocking, best-effort)
@@ -132,7 +132,7 @@ async def search_documents_async(
     _t0 = time.monotonic()
     result = await google_drive_tool.search_documents_tool(query, max_results)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100])
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
     _fire_native_log("search_drive", {"query": query, "max_results": max_results}, result, _dur)
     return result
 
@@ -148,7 +148,7 @@ async def get_document_async(file_id: str) -> str:
     _t0 = time.monotonic()
     result = await google_drive_tool.get_document_tool(file_id)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100])
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
     _fire_native_log("get_file", {"file_id": file_id}, result, _dur)
     return result
 
@@ -168,7 +168,7 @@ async def list_drive_files_async(max_results: int = 10) -> str:
     _t0 = time.monotonic()
     result = await google_drive_tool.list_drive_files_tool(max_results)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100])
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
     _fire_native_log("list_files", {"max_results": max_results}, result, _dur)
     return result
 
@@ -190,16 +190,20 @@ async def vector_store_async(
     if action.lower() in ["search", "find", "query"]:
         call_id = await publish_tool_start("knowledgeBase", {"action": "search", "content": content[:40]})
         await publish_tool_executing(call_id)
+        _t0 = time.monotonic()
         result = await database_tool.query_database_tool(content)
-        await publish_tool_completed(call_id, result[:100] if result else "")
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
         return result
     else:
         call_id = await publish_tool_start("knowledgeBase", {"action": "store", "content": content[:40]})
         await publish_tool_executing(call_id)
         worker = get_worker()
         if not worker:
+            _t0 = time.monotonic()
             result = await vector_store_tool.store_knowledge_tool(content, category or "general", None)
-            await publish_tool_completed(call_id, "Stored")
+            _dur = int((time.monotonic() - _t0) * 1000)
+            await publish_tool_completed(call_id, "Stored", duration_ms=_dur)
             return result
         await worker.dispatch(
             tool_name="storeKnowledge",
@@ -230,7 +234,7 @@ async def database_query_async(query: str) -> str:
     _t0 = time.monotonic()
     result = await database_tool.query_database_tool(query)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100])
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
     _fire_native_log("query_database", {"query": query}, result, _dur)
     return result
 
@@ -256,14 +260,14 @@ async def vector_search_async(
 
     if not result.get("success"):
         error_msg = result.get("error", "Unknown error")
-        await publish_tool_completed(call_id, "Search failed")
+        await publish_tool_completed(call_id, "Search failed", duration_ms=_dur)
         _fire_native_log("vector_search", {"query": query}, error_msg, _dur)
         return f"I was unable to search the knowledge base. {error_msg}"
 
     # Use pre-formatted voice_response from the workflow if available
     voice_response = result.get("voice_response", "")
     if voice_response:
-        await publish_tool_completed(call_id, voice_response[:100])
+        await publish_tool_completed(call_id, voice_response[:100], duration_ms=_dur)
         _fire_native_log("vector_search", {"query": query}, voice_response, _dur)
         return voice_response
 
@@ -271,7 +275,7 @@ async def vector_search_async(
     results = result.get("results", [])
     if not results:
         msg = "I searched the knowledge base but found no matching results for that query."
-        await publish_tool_completed(call_id, msg)
+        await publish_tool_completed(call_id, msg, duration_ms=_dur)
         _fire_native_log("vector_search", {"query": query}, msg, _dur)
         return msg
 
@@ -282,7 +286,7 @@ async def vector_search_async(
             lines.append(f"{i}. {text[:200]}")
 
     formatted = f"Found {len(results)} result{'s' if len(results) != 1 else ''}: " + " | ".join(lines)
-    await publish_tool_completed(call_id, formatted[:100])
+    await publish_tool_completed(call_id, formatted[:100], duration_ms=_dur)
     _fire_native_log("vector_search", {"query": query}, formatted, _dur)
     return formatted
 
@@ -312,7 +316,7 @@ async def query_context_async(
     _t0 = time.monotonic()
     result = await agent_context_tool.query_context_tool(query_type=query_type, search_query=search_query)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100] if result else "")
+    await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
     _fire_native_log("check_context", {"query_type": query_type, "search_query": search_query or ""}, result or "", _dur)
     return result
 
@@ -336,46 +340,73 @@ async def recall_data_async(
     tool_name: Optional[str] = None,
     show_all: bool = False,
 ) -> str:
-    # Level 1: In-session short-term memory (fast path — always checked first)
-    if show_all:
-        return get_memory_summary()
+    call_id = await publish_tool_start("recall", {"query": (query or "")[:40], "show_all": show_all})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        # Level 1: In-session short-term memory (fast path — always checked first)
+        if show_all:
+            result = get_memory_summary()
+            _dur = int((time.monotonic() - _t0) * 1000)
+            await publish_tool_completed(call_id, "Memory summary", duration_ms=_dur)
+            return result
 
-    if tool_name:
-        result = recall_by_tool(tool_name)
-        if result:
-            return _format_recall(result)
+        if tool_name:
+            r = recall_by_tool(tool_name)
+            if r:
+                result = _format_recall(r)
+                _dur = int((time.monotonic() - _t0) * 1000)
+                await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+                return result
 
-    if category:
-        try:
-            cat = ToolCategory(category.lower())
-            result = recall_by_category(cat)
-            if result:
-                return _format_recall(result)
-        except ValueError:
-            pass
+        if category:
+            try:
+                cat = ToolCategory(category.lower())
+                r = recall_by_category(cat)
+                if r:
+                    result = _format_recall(r)
+                    _dur = int((time.monotonic() - _t0) * 1000)
+                    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+                    return result
+            except ValueError:
+                pass
 
-    # Level 2: Cross-session SQLite memory (only when a query is provided)
-    if query and _MEMORY_AVAILABLE and _memory_store is not None:
-        try:
-            results = _memory_store.search(query, top_k=3)
-            if results:
-                lines = ["From long-term memory:"]
-                for i, r in enumerate(results, 1):
-                    lines.append(f"{i}. [{r['category']}] {r['text_safe']}")
-                return " | ".join(lines)
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("[recall] Memory search failed: %s", exc)
+        # Level 2: Cross-session SQLite memory (only when a query is provided)
+        if query and _MEMORY_AVAILABLE and _memory_store is not None:
+            try:
+                results = _memory_store.search(query, top_k=3)
+                if results:
+                    lines = ["From long-term memory:"]
+                    for i, r in enumerate(results, 1):
+                        lines.append(f"{i}. [{r['category']}] {r['text_safe']}")
+                    result = " | ".join(lines)
+                    _dur = int((time.monotonic() - _t0) * 1000)
+                    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+                    return result
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error("[recall] Memory search failed: %s", exc)
 
-    # Level 1 fallback: most recent in-session entry
-    if not query:
-        result = recall_most_recent()
-        if result:
-            return _format_recall(result)
+        # Level 1 fallback: most recent in-session entry
+        if not query:
+            r = recall_most_recent()
+            if r:
+                result = _format_recall(r)
+                _dur = int((time.monotonic() - _t0) * 1000)
+                await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+                return result
 
-    if query:
-        return f"No memory found for: {query}"
-    return "No data in memory yet"
+        if query:
+            result = f"No memory found for: {query}"
+        else:
+            result = "No data in memory yet"
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+        return result
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 def _format_recall(result: dict) -> str:
@@ -419,9 +450,11 @@ async def recall_sessions_async(
     import asyncio as _asyncio
     call_id = await publish_tool_start("recallSessions", {"query": query[:60]})
     await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
 
     if not _MEMORY_AVAILABLE or _memory_store is None:
-        await publish_tool_error(call_id, "Memory unavailable")
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, "Memory unavailable", duration_ms=_dur)
         return "Session memory is not available right now."
 
     try:
@@ -434,11 +467,14 @@ async def recall_sessions_async(
     except Exception as _exc:
         import logging as _logging
         _logging.getLogger(__name__).error("[recallSessions] Search failed: %s", _exc)
-        await publish_tool_error(call_id, "Search failed")
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, "Search failed", duration_ms=_dur)
         return "Could not search past sessions right now."
 
+    _dur = int((time.monotonic() - _t0) * 1000)
+
     if not results:
-        await publish_tool_completed(call_id, "No past sessions found")
+        await publish_tool_completed(call_id, "No past sessions found", duration_ms=_dur)
         return "No past sessions found matching that query."
 
     # Format for voice — natural language, session ID at end for follow-up
@@ -452,7 +488,7 @@ async def recall_sessions_async(
             f"{i}. {created}: {r['summary']}{topic_str} [Session ID: {sid}]"
         )
 
-    await publish_tool_completed(call_id, f"Found {len(results)} sessions")
+    await publish_tool_completed(call_id, f"Found {len(results)} sessions", duration_ms=_dur)
     return "\n\n".join(parts)
 
 
@@ -462,7 +498,18 @@ async def recall_sessions_async(
 )
 async def memory_summary_async() -> str:
     """Memory summary."""
-    return get_memory_summary()
+    call_id = await publish_tool_start("memoryStatus", {})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        result = get_memory_summary()
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, "Memory summary", duration_ms=_dur)
+        return result
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 @llm.function_tool(
@@ -471,7 +518,18 @@ async def memory_summary_async() -> str:
 )
 async def recall_drive_data_async(operation: Optional[str] = None) -> str:
     """Recall Drive data from memory."""
-    return await google_drive_tool.recall_drive_data_tool(operation)
+    call_id = await publish_tool_start("recallDrive", {"operation": (operation or "")[:40]})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        result = await google_drive_tool.recall_drive_data_tool(operation)
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
+        return result
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 # =============================================================================
@@ -507,7 +565,7 @@ async def add_contact_async(
         email_confirmed=email_confirmed,
     )
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100] if result else "")
+    await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
     _fire_native_log("add_contact", {"name": name, "email": email or "", "gate": gate}, result or "", _dur)
     return result
 
@@ -533,7 +591,7 @@ async def get_contact_async(
         contact_id=contact_id,
     )
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100] if result else "")
+    await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
     _fire_native_log("get_contact", {"query": query or name or email or ""}, result or "", _dur)
     return result
 
@@ -549,7 +607,7 @@ async def search_contacts_async(query: str) -> str:
     _t0 = time.monotonic()
     result = await contact_tool.search_contacts_tool(query)
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100] if result else "")
+    await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
     _fire_native_log("search_contacts", {"query": query}, result or "", _dur)
     return result
 
@@ -779,26 +837,40 @@ async def plan_composio_task_async(tool_slugs: str) -> str:
     """Batch schema lookup for multiple tools at once — pure cache, zero API calls."""
     from .composio_router import ensure_slug_index, _format_cached_schema, _resolve_slug_fast
 
-    await ensure_slug_index()
+    call_id = await publish_tool_start("planComposioTask", {"tool_slugs": tool_slugs[:40]})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        await ensure_slug_index()
 
-    slugs = [s.strip().upper() for s in tool_slugs.split(",") if s.strip()]
-    if not slugs:
-        return "No slugs provided. Pass comma-separated tool slugs like: MICROSOFT_TEAMS_SEND_MESSAGE,ONE_DRIVE_LIST_FOLDER_CHILDREN"
+        slugs = [s.strip().upper() for s in tool_slugs.split(",") if s.strip()]
+        if not slugs:
+            _dur = int((time.monotonic() - _t0) * 1000)
+            result = "No slugs provided. Pass comma-separated tool slugs like: MICROSOFT_TEAMS_SEND_MESSAGE,ONE_DRIVE_LIST_FOLDER_CHILDREN"
+            await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+            return result
 
-    results = []
-    for slug in slugs[:10]:  # cap at 10 tools per plan
-        resolved, _ = _resolve_slug_fast(slug)
-        actual = resolved or slug
-        schema_text = _format_cached_schema(actual)
-        if schema_text:
-            results.append(f"=== {actual} ===\n{schema_text}")
-        else:
-            results.append(
-                f"=== {actual} ===\nNo cached schema — use getComposioToolSchema('{actual}') for live lookup."
-            )
+        results = []
+        for slug in slugs[:10]:  # cap at 10 tools per plan
+            resolved, _ = _resolve_slug_fast(slug)
+            actual = resolved or slug
+            schema_text = _format_cached_schema(actual)
+            if schema_text:
+                results.append(f"=== {actual} ===\n{schema_text}")
+            else:
+                results.append(
+                    f"=== {actual} ===\nNo cached schema — use getComposioToolSchema('{actual}') for live lookup."
+                )
 
-    header = f"PLAN SCHEMAS — {len(slugs)} tools. Build your arguments_json from these before calling composioBatchExecute:"
-    return header + "\n\n" + "\n\n".join(results)
+        header = f"PLAN SCHEMAS — {len(slugs)} tools. Build your arguments_json from these before calling composioBatchExecute:"
+        result = header + "\n\n" + "\n\n".join(results)
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, f"Plan generated for {len(slugs)} tools", duration_ms=_dur)
+        return result
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 @llm.function_tool(
@@ -816,8 +888,20 @@ async def list_composio_tools_async(service: str = "") -> str:
     """List available tool slugs from Composio catalog grouped by service."""
     from .composio_router import ensure_slug_index, get_tool_catalog
 
-    await ensure_slug_index()
-    return get_tool_catalog(service_filter=service if service else None)
+    call_id = await publish_tool_start("listComposioTools", {"service": service[:40] if service else "all"})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        await ensure_slug_index()
+        catalog = get_tool_catalog(service_filter=service if service else None)
+        tool_count = catalog.count("\n") if catalog else 0
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, f"Found {tool_count} tools", duration_ms=_dur)
+        return catalog
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 @llm.function_tool(
@@ -832,7 +916,19 @@ async def list_composio_tools_async(service: str = "") -> str:
 async def get_tool_schema_async(tool_slug: str) -> str:
     """Look up parameter schema for a Composio tool slug."""
     from .composio_router import get_tool_schema
-    return await get_tool_schema(tool_slug)
+
+    call_id = await publish_tool_start("getComposioToolSchema", {"tool_slug": tool_slug[:40]})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    try:
+        result = await get_tool_schema(tool_slug)
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_completed(call_id, tool_slug, duration_ms=_dur)
+        return result
+    except Exception as e:
+        _dur = int((time.monotonic() - _t0) * 1000)
+        await publish_tool_error(call_id, str(e)[:100], duration_ms=_dur)
+        raise
 
 
 # =============================================================================
@@ -881,9 +977,9 @@ async def composio_batch_execute_async(
         if not isinstance(t, dict) or not t.get("tool_slug"):
             return "Each tool must have a tool_slug field"
 
-    batch_call_id = f"composioBatch_{int(time.time()*1000)%100000}"
-    tool_names_preview = "+".join([t.get("tool_slug", "?")[:15] for t in tools[:3]])
-    await publish_tool_start(batch_call_id, {"tools": tool_names_preview, "count": len(tools)})
+    # batch_execute_composio_tools() publishes its own full lifecycle events internally.
+    # No publish_tool_start call here — it would create a ghost pending card that never
+    # receives tool.executing or tool.completed.
 
     # Group tools by step for ordered execution
     # Default step=1 if not specified (all parallel)
@@ -929,23 +1025,16 @@ async def composio_execute_async(
     except (json.JSONDecodeError, TypeError):
         return "Could not parse the arguments try again with valid JSON"
 
-    call_id = f"composioExecute_{tool_slug[:20]}_{int(time.time()*1000)%100000}"
-
     # publish_tool_start is NOT called here — execute_composio_tool() in composio_router.py
-    # publishes its own tool.call event early (before slug resolution). Calling it here too
-    # would send 2 tool.call events to the UI for a single tool execution.
+    # publishes its own full lifecycle (tool.call → tool.executing → tool.completed) using
+    # its own internal call_id. Duplicating events here creates orphaned ghost cards.
 
     # Synchronous execution — blocks until result, LLM can reason about it
-    try:
-        result_str = await execute_composio_tool(
-            tool_slug=tool_slug,
-            arguments=arguments,
-        )
-        await publish_tool_completed(call_id, result_str[:200])
-        return result_str
-    except Exception as e:
-        await publish_tool_error(call_id, str(e)[:200])
-        raise
+    result_str = await execute_composio_tool(
+        tool_slug=tool_slug,
+        arguments=arguments,
+    )
+    return result_str
 
 
 # =============================================================================
@@ -1031,7 +1120,7 @@ async def scrape_prospects_async(
         limit=clamped_limit,
     )
     _dur = int((time.monotonic() - _t0) * 1000)
-    await publish_tool_completed(call_id, result[:100])
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
     _fire_native_log(
         "scrape_prospects",
         {"job_title": job_title, "location": location, "limit": clamped_limit},

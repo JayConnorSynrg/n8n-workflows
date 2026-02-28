@@ -94,23 +94,25 @@ async def publish_tool_executing(call_id: str) -> None:
     })
 
 
-async def publish_tool_completed(call_id: str, result_preview: str = "") -> None:
-    """Publish tool.completed event with optional result preview."""
+async def publish_tool_completed(call_id: str, result_preview: str = "", duration_ms: Optional[int] = None) -> None:
+    """Publish tool.completed event with optional result preview and execution duration."""
     await _publish({
         "type": "tool.completed",
         "call_id": call_id,
         "result": result_preview[:200] if result_preview else "",
         "timestamp": int(time.time() * 1000),
+        **({"duration_ms": duration_ms} if duration_ms is not None else {}),
     })
 
 
-async def publish_tool_error(call_id: str, error: str = "") -> None:
-    """Publish tool.error event."""
+async def publish_tool_error(call_id: str, error: str = "", duration_ms: Optional[int] = None) -> None:
+    """Publish tool.error event with optional execution duration."""
     await _publish({
         "type": "tool.error",
         "call_id": call_id,
         "error": error[:200] if error else "Unknown error",
         "timestamp": int(time.time() * 1000),
+        **({"duration_ms": duration_ms} if duration_ms is not None else {}),
     })
 
 

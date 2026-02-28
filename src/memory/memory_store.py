@@ -144,7 +144,15 @@ def reinit_for_user(user_mem_dir: str) -> bool:
 
 
 def _create_schema(db_path: str) -> None:
-    """Create tables if they don't exist. Idempotent."""
+    """Create tables if they don't exist. Idempotent.
+
+    Schema evolution strategy for multi-worker safety:
+    - Always PRAGMA table_info BEFORE attempting ALTER TABLE.
+    - Wrap ALTER TABLE in try/except — concurrent workers may beat us to it.
+    - Re-PRAGMA after ALTER to confirm column presence before creating indexes.
+    - Entire evolution block wrapped in try/except WARNING so worker startup
+      completes even if a migration step fails non-fatally.
+    """
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -160,25 +168,41 @@ def _create_schema(db_path: str) -> None:
                 created_at  INTEGER NOT NULL
             )
         """)
-        # Schema evolution: add user_id and session_id to memories if missing.
-        # Use PRAGMA table_info to guard index creation — prevents "no such column: user_id"
-        # race on multi-worker Railway startup where losers get `database is locked` on
-        # ALTER TABLE (silently swallowed) then hit CREATE INDEX on a non-existent column.
-        existing_cols = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
-        }
-        for col_name, col_type in [("user_id", "TEXT"), ("session_id", "TEXT")]:
-            if col_name not in existing_cols:
-                try:
-                    conn.execute(f"ALTER TABLE memories ADD COLUMN {col_name} {col_type}")
-                    existing_cols.add(col_name)
-                except Exception:
-                    pass  # Lost write-lock race — another worker already added it
-        if "user_id" in existing_cols:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)")
-        if "session_id" in existing_cols:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
+
+        # ── memories schema evolution ────────────────────────────────────────
+        # PRAGMA first — only ALTER TABLE if column genuinely missing.
+        # Concurrent workers may both reach the ALTER simultaneously; the loser
+        # gets "duplicate column" (swallowed). Re-PRAGMA after ALTER to confirm
+        # presence before touching indexes, eliminating the "no such column" race.
+        try:
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+            }
+            for col_name, col_type in [("user_id", "TEXT"), ("session_id", "TEXT")]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE memories ADD COLUMN {col_name} {col_type}"
+                        )
+                    except Exception:
+                        pass  # Concurrent worker beat us — column is being added
+            # Re-check after all ALTER attempts so indexes only run when confirmed
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+            }
+            if "user_id" in existing_cols:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)"
+                )
+            if "session_id" in existing_cols:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)"
+                )
+        except Exception as _exc:
+            logger.warning("[Memory] Schema evolution (memories) partial failure: %s", _exc)
+
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 text,
@@ -222,13 +246,39 @@ def _create_schema(db_path: str) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        # Schema evolution: add embedding column and indexes to deep_store if missing
+
+        # ── deep_store schema evolution ──────────────────────────────────────
+        # Same PRAGMA-first pattern: check before ALTER, re-check before index.
+        # user_id and created_at exist in the original CREATE TABLE so their
+        # indexes are always safe; only `embedding` needs the ALTER guard.
         try:
-            conn.execute("ALTER TABLE deep_store ADD COLUMN embedding TEXT")
-        except Exception:
-            pass  # Column already exists
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_deep_store_user_id ON deep_store(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_deep_store_created_at ON deep_store(created_at)")
+            ds_existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(deep_store)").fetchall()
+            }
+            if "embedding" not in ds_existing_cols:
+                try:
+                    conn.execute("ALTER TABLE deep_store ADD COLUMN embedding TEXT")
+                except Exception:
+                    pass  # Concurrent worker beat us — column is being added
+            # Re-check after ALTER attempt before creating any dependent indexes
+            ds_existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(deep_store)").fetchall()
+            }
+            # user_id and created_at are in the base schema — always present
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_deep_store_user_id ON deep_store(user_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_deep_store_created_at ON deep_store(created_at)"
+            )
+            if "embedding" in ds_existing_cols:
+                # Placeholder for future embedding index if needed
+                pass
+        except Exception as _exc:
+            logger.warning("[Memory] Schema evolution (deep_store) partial failure: %s", _exc)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_summaries (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
