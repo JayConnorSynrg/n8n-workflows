@@ -1075,6 +1075,14 @@ async def entrypoint(ctx: JobContext):
 
     if _memory_context:
         active_prompt = active_prompt + "\n\n## Cross-Session Memory\n" + _memory_context
+        # Instruct agent to reference session list at greeting
+        _session_list_instruction = (
+            "\n\nWhen you see 'Recent Sessions' in the context above: "
+            "at the START of your first response, briefly mention what you've been working on "
+            "(e.g., 'I can see we worked on X and Y this week') "
+            "and offer to recall full details from any session if needed."
+        )
+        active_prompt = active_prompt + _session_list_instruction
 
     # Define agent with all tools (no MCP servers)
     agent = Agent(
@@ -2181,11 +2189,10 @@ async def entrypoint(ctx: JobContext):
             # Build a brief session summary from STM stats
             from .tools.short_term_memory import get_session_stats
             _stats = get_session_stats(session_id)
-            _summary = (
-                f"Voice session ended. "
-                f"Tools used: {_stats.get('total_entries', 0)} calls across "
-                f"{len(_stats.get('categories', {}))} categories."
-            )
+            _cats = list(_stats.get('categories', {}).keys())
+            _cat_str = ", ".join(_cats[:4]) if _cats else "general"
+            _n_calls = _stats.get('total_entries', 0)
+            _summary = f"Voice session. Tools: {_n_calls} calls ({_cat_str})."
             # Flush auto-captured facts to SQLite
             _pending = _mem_capture.get_pending_facts()
             _fact_texts = [f for f, _ in _pending]

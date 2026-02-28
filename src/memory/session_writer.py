@@ -17,7 +17,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -214,6 +214,77 @@ def ensure_memory_files(memory_dir: str) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────────
+# Weekly session index for compact system prompt injection
+# ────────────────────────────────────────────────────────────────────────────────
+
+def _build_weekly_session_index(sessions_dir: str, days: int = 7) -> str:
+    """
+    Scan sessions/ directory for files from the past `days` days.
+    Extract one-line descriptor per session block.
+    Returns a compact string for system prompt injection, or empty string if none.
+
+    Session file format (written by write_session_log):
+        ## Session — HH:MM UTC
+        Voice session. Tools: N calls (Category1, Category2).
+        ...
+    """
+    now = datetime.now(timezone.utc)
+    entries: list[tuple[str, Optional[str]]] = []
+
+    try:
+        if not os.path.isdir(sessions_dir):
+            return ""
+
+        # Collect files from the past `days` days
+        for offset in range(days):
+            day = now - timedelta(days=offset)
+            date_str = day.strftime("%Y-%m-%d")
+            log_path = os.path.join(sessions_dir, f"{date_str}.md")
+            if not os.path.exists(log_path):
+                continue
+
+            try:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            # Extract all session blocks from this file
+            for line in content.splitlines():
+                if line.startswith("## Session — "):
+                    # Parse time from "## Session — HH:MM UTC"
+                    time_part = line.replace("## Session — ", "").replace(" UTC", "").strip()
+                    # Format as "Feb 28 14:32"
+                    try:
+                        label = day.strftime("%b %-d") + " " + time_part
+                    except ValueError:
+                        label = date_str + " " + time_part
+                    entries.append((label, None))  # placeholder for descriptor
+                elif entries and entries[-1][1] is None and line.strip():
+                    # First non-blank line after a session header = descriptor
+                    descriptor = line.strip()
+                    # Cap at 80 chars
+                    if len(descriptor) > 80:
+                        descriptor = descriptor[:77] + "..."
+                    entries[-1] = (entries[-1][0], descriptor)
+
+    except Exception as exc:
+        logger.warning("[SessionWriter] Failed to build session index: %s", exc)
+        return ""
+
+    # Filter out any entries without a descriptor
+    valid = [(label, desc) for label, desc in entries if desc]
+    if not valid:
+        return ""
+
+    lines = ["## Recent Sessions (say 'recall session' for full details)"]
+    for label, desc in valid:
+        lines.append(f"- {label} — {desc}")
+
+    return "\n".join(lines)
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # Context loading for system prompt injection
 # ────────────────────────────────────────────────────────────────────────────────
 
@@ -247,6 +318,12 @@ def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
                     parts.append(f"### {label}\n{content}")
         except Exception as exc:
             logger.warning("[SessionWriter] Failed to load %s: %s", filename, exc)
+
+    # Append compact weekly session index (lightweight — titles only)
+    sessions_dir = os.path.join(memory_dir, "sessions")
+    session_index = _build_weekly_session_index(sessions_dir)
+    if session_index:
+        parts.append(session_index)
 
     combined = "\n\n".join(parts) if parts else ""
 
