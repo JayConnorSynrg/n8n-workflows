@@ -1629,13 +1629,13 @@ async def get_connected_services_status() -> str:
 
     parts = []
     if active_list:
-        parts.append(f"Active: {', '.join(active_list)}")
+        parts.append("Active: " + "\n".join(active_list))
     if initiated_list:
         parts.append(f"Pending auth: {', '.join(initiated_list)}")
     if failed_list:
         parts.append(f"Needs re-auth: {', '.join(failed_list)}")
 
-    return " | ".join(parts) if parts else "No external services are connected yet"
+    return "\n\n".join(parts) if parts else "No external services are connected yet"
 
 
 async def initiate_service_connection(service: str, force_reauth: bool = False) -> tuple[str, str]:
