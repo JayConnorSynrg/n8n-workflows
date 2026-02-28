@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, Literal
 import aiohttp
 from livekit.agents import llm
 
-from ..config import get_settings
+from ..utils.n8n_client import n8n_post
 from ..utils.short_term_memory import (
     store_tool_result,
     recall_by_category,
@@ -33,7 +33,6 @@ from ..utils.short_term_memory import (
 )
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 # ---------------------------------------------------------------------------
 # Composio fallback client (lazy-initialised, module-level singleton)
@@ -204,8 +203,6 @@ async def search_documents_tool(
     Returns:
         Formatted list of matching documents with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/drive-document-repo"
-
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
     payload = {
         "intent_id": intent_id,
@@ -220,27 +217,17 @@ async def search_documents_tool(
     used_fallback = False
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
+        http_status, result = await n8n_post("drive-document-repo", payload)
 
-                if response.status == 200:
-                    inner_result = result.get("result", result)
-                    data = inner_result if isinstance(inner_result, dict) else result
-                    documents = data.get("results", data.get("documents", data.get("files", [])))
-                    memory_offer = result.get("memory_offer", {})
-                else:
-                    logger.warning(f"n8n Drive search returned {response.status}, trying Composio fallback")
-                    documents = await _composio_fallback_search(query, max_results)
-                    used_fallback = True
+        if http_status == 200:
+            inner_result = result.get("result", result)
+            data = inner_result if isinstance(inner_result, dict) else result
+            documents = data.get("results", data.get("documents", data.get("files", [])))
+            memory_offer = result.get("memory_offer", {})
+        else:
+            logger.warning(f"n8n Drive search returned {http_status}, trying Composio fallback")
+            documents = await _composio_fallback_search(query, max_results)
+            used_fallback = True
 
     except aiohttp.ClientError as e:
         logger.warning(f"n8n Drive search network error, trying Composio fallback: {e}")
@@ -294,8 +281,6 @@ async def get_document_tool(
     Returns:
         Document content with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/drive-document-repo"
-
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
     payload = {
         "intent_id": intent_id,
@@ -309,26 +294,16 @@ async def get_document_tool(
     used_fallback = False
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
+        http_status, result = await n8n_post("drive-document-repo", payload)
 
-                if response.status == 200:
-                    inner_result = result.get("result", result)
-                    data = inner_result if isinstance(inner_result, dict) else result
-                    memory_offer = result.get("memory_offer", {})
-                else:
-                    logger.warning(f"n8n Drive get returned {response.status}, trying Composio fallback")
-                    data = await _composio_fallback_get(file_id)
-                    used_fallback = True
+        if http_status == 200:
+            inner_result = result.get("result", result)
+            data = inner_result if isinstance(inner_result, dict) else result
+            memory_offer = result.get("memory_offer", {})
+        else:
+            logger.warning(f"n8n Drive get returned {http_status}, trying Composio fallback")
+            data = await _composio_fallback_get(file_id)
+            used_fallback = True
 
     except aiohttp.ClientError as e:
         logger.warning(f"n8n Drive get network error, trying Composio fallback: {e}")
@@ -393,8 +368,6 @@ async def list_drive_files_tool(
     Returns:
         Formatted list of files with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/drive-document-repo"
-
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
     payload = {
         "intent_id": intent_id,
@@ -409,29 +382,19 @@ async def list_drive_files_tool(
     used_fallback = False
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
+        http_status, result = await n8n_post("drive-document-repo", payload)
 
-                if response.status == 200:
-                    inner_result = result.get("result", result)
-                    data = inner_result if isinstance(inner_result, dict) else result
-                    memory_offer = result.get("memory_offer", {})
-                    files = data.get("files", data.get("documents", []))
-                    file_count = data.get("count", len(files))
-                else:
-                    logger.warning(f"n8n Drive list returned {response.status}, trying Composio fallback")
-                    files = await _composio_fallback_list(max_results)
-                    file_count = len(files)
-                    used_fallback = True
+        if http_status == 200:
+            inner_result = result.get("result", result)
+            data = inner_result if isinstance(inner_result, dict) else result
+            memory_offer = result.get("memory_offer", {})
+            files = data.get("files", data.get("documents", []))
+            file_count = data.get("count", len(files))
+        else:
+            logger.warning(f"n8n Drive list returned {http_status}, trying Composio fallback")
+            files = await _composio_fallback_list(max_results)
+            file_count = len(files)
+            used_fallback = True
 
     except aiohttp.ClientError as e:
         logger.warning(f"n8n Drive list network error, trying Composio fallback: {e}")

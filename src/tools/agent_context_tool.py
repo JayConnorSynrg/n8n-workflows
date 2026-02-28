@@ -21,12 +21,11 @@ from typing import Any, Dict, Optional, Literal
 import aiohttp
 from livekit.agents import llm
 
-from ..config import get_settings
 from ..utils.context_cache import get_cache_manager
+from ..utils.n8n_client import n8n_post
 from ..utils.session_facts import get_fact as _get_fact
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 # Module-level session ID set by agent at session start.
 # Allows tool functions to default to the active room session
@@ -92,7 +91,6 @@ async def _fetch_from_webhook(
     limit: int = 10,
 ) -> Dict[str, Any]:
     """Fetch context from n8n webhook (backend source of truth)."""
-    webhook_url = f"{settings.n8n_webhook_base_url}/agent-context-query"
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
 
     payload = {
@@ -109,17 +107,9 @@ async def _fetch_from_webhook(
     if query_type in ("search_history", "custom_query") and search_query:
         payload["search_query"] = search_query
 
-    async with aiohttp.ClientSession() as http_session:
-        async with http_session.post(
-            webhook_url,
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-            },
-            timeout=aiohttp.ClientTimeout(total=30),  # Reduced from 60s
-        ) as response:
-            return await response.json()
+    # Reduced from 60s
+    _, result = await n8n_post("agent-context-query", payload)
+    return result
 
 
 @llm.function_tool(
@@ -347,7 +337,6 @@ async def get_session_summary_tool(
 
     # Cache miss - fetch from webhook
     try:
-        webhook_url = f"{settings.n8n_webhook_base_url}/agent-context-query"
         intent_id = f"lk_{uuid.uuid4().hex[:12]}"
 
         payload = {
@@ -359,50 +348,40 @@ async def get_session_summary_tool(
             "limit": 50,
         }
 
-        async with aiohttp.ClientSession() as http_session:
-            async with http_session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
+        http_status, result = await n8n_post("agent-context-query", payload)
 
-                if response.status == 200:
-                    # Cache the result
-                    cache_manager.set_session_context(
-                        effective_session_id,
-                        result,
-                        ttl=300.0  # 5 minutes
-                    )
+        if http_status == 200:
+            # Cache the result
+            cache_manager.set_session_context(
+                effective_session_id,
+                result,
+                ttl=300.0  # 5 minutes
+            )
 
-                    voice_response = result.get("voice_response")
-                    if voice_response:
-                        return voice_response
+            voice_response = result.get("voice_response")
+            if voice_response:
+                return voice_response
 
-                    summary = result.get("summary", result.get("message", ""))
-                    if summary:
-                        return summary
+            summary = result.get("summary", result.get("message", ""))
+            if summary:
+                return summary
 
-                    # Build summary from data
-                    data = result.get("data", [])
-                    tool_calls = result.get("tool_calls", [])
+            # Build summary from data
+            data = result.get("data", [])
+            tool_calls = result.get("tool_calls", [])
 
-                    parts = []
-                    if data:
-                        parts.append(f"{len(data)} context entries")
-                    if tool_calls:
-                        parts.append(f"{len(tool_calls)} tool calls")
+            parts = []
+            if data:
+                parts.append(f"{len(data)} context entries")
+            if tool_calls:
+                parts.append(f"{len(tool_calls)} tool calls")
 
-                    if parts:
-                        return f"Session summary: {', '.join(parts)}."
-                    return "No activity recorded for this session yet."
-                else:
-                    error_msg = result.get("error", "Unknown error")
-                    return f"Failed to get session summary: {error_msg}"
+            if parts:
+                return f"Session summary: {', '.join(parts)}."
+            return "No activity recorded for this session yet."
+        else:
+            error_msg = result.get("error", "Unknown error")
+            return f"Failed to get session summary: {error_msg}"
 
     except aiohttp.ClientError as e:
         logger.error(f"Network error getting session summary: {e}")

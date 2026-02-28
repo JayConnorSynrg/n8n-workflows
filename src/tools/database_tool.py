@@ -20,11 +20,10 @@ from typing import Optional
 import aiohttp
 from livekit.agents import llm
 
-from ..config import get_settings
+from ..utils.n8n_client import n8n_post
 from ..utils.short_term_memory import store_tool_result
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 @llm.function_tool(
@@ -49,8 +48,6 @@ async def query_database_tool(
     Returns:
         Search results formatted as text with memory offer
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/voice-query-vector-db"
-
     # Build payload matching n8n workflow expected format
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
 
@@ -61,72 +58,62 @@ async def query_database_tool(
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                # 20s timeout — sufficient for Pinecone embedding+query; 60s is too long for voice UX
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as response:
-                result = await response.json()
+        # 20s timeout — sufficient for Pinecone embedding+query; 60s is too long for voice UX
+        http_status, result = await n8n_post("voice-query-vector-db", payload, timeout=20)
 
-                if response.status == 200:
-                    # Support both response shapes:
-                    # AIO shape:    { status, voice_response, result: { documents } }
-                    # Legacy shape: { results, query, totalResults }
-                    voice_response = result.get("voice_response")
+        if http_status == 200:
+            # Support both response shapes:
+            # AIO shape:    { status, voice_response, result: { documents } }
+            # Legacy shape: { results, query, totalResults }
+            voice_response = result.get("voice_response")
 
-                    # AIO shape: result.documents
-                    _result_obj = result.get("result", {})
-                    documents = _result_obj.get("documents", [])
-                    # z02K1a54akYXMkyj shape: result.top_results
-                    # Workflow returns candidateName as top-level key (post-formatter fix)
-                    # Falls back to metadata.candidateName for raw Pinecone shape
-                    if not documents:
-                        raw_results = _result_obj.get("top_results", []) or result.get("results", [])
-                        documents = [
-                            {
-                                "title": r.get("candidateName") or (r.get("metadata") or {}).get("candidateName") or (r.get("metadata") or {}).get("name") or f"Result {i+1}",
-                                "snippet": (r.get("content") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
-                                "score": r.get("score", 0),
-                                "candidate_id": r.get("candidateId") or (r.get("metadata") or {}).get("candidateId") or r.get("id", ""),
-                            }
-                            for i, r in enumerate(raw_results)
-                        ]
+            # AIO shape: result.documents
+            _result_obj = result.get("result", {})
+            documents = _result_obj.get("documents", [])
+            # z02K1a54akYXMkyj shape: result.top_results
+            # Workflow returns candidateName as top-level key (post-formatter fix)
+            # Falls back to metadata.candidateName for raw Pinecone shape
+            if not documents:
+                raw_results = _result_obj.get("top_results", []) or result.get("results", [])
+                documents = [
+                    {
+                        "title": r.get("candidateName") or (r.get("metadata") or {}).get("candidateName") or (r.get("metadata") or {}).get("name") or f"Result {i+1}",
+                        "snippet": (r.get("content") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
+                        "score": r.get("score", 0),
+                        "candidate_id": r.get("candidateId") or (r.get("metadata") or {}).get("candidateId") or r.get("id", ""),
+                    }
+                    for i, r in enumerate(raw_results)
+                ]
 
-                    # Store to short-term memory for cross-tool use
-                    if documents:
-                        summary = f"Found {len(documents)} results for: {query[:50]}"
-                        store_tool_result(
-                            tool_name="query_database",
-                            operation="search",
-                            data=documents,
-                            summary=summary,
-                            suggested_uses=["email_report", "reference", "analysis"],
-                        )
-                        logger.info(f"Database query results stored to STM: {len(documents)} items")
+            # Store to short-term memory for cross-tool use
+            if documents:
+                summary = f"Found {len(documents)} results for: {query[:50]}"
+                store_tool_result(
+                    tool_name="query_database",
+                    operation="search",
+                    data=documents,
+                    summary=summary,
+                    suggested_uses=["email_report", "reference", "analysis"],
+                )
+                logger.info(f"Database query results stored to STM: {len(documents)} items")
 
-                    if voice_response:
-                        return voice_response + "\n\n[Memory: Results saved for follow-up use]"
+            if voice_response:
+                return voice_response + "\n\n[Memory: Results saved for follow-up use]"
 
-                    if not documents:
-                        return result.get("message", "No results found for your query.")
+            if not documents:
+                return result.get("message", "No results found for your query.")
 
-                    # Format results for voice
-                    formatted = []
-                    for i, r in enumerate(documents[:max_results], 1):
-                        title = r.get("title", f"Result {i}")
-                        snippet = r.get("snippet", r.get("text", r.get("content", "")))[:200]
-                        formatted.append(f"{i}. {title}: {snippet}")
+            # Format results for voice
+            formatted = []
+            for i, r in enumerate(documents[:max_results], 1):
+                title = r.get("title", f"Result {i}")
+                snippet = r.get("snippet", r.get("text", r.get("content", "")))[:200]
+                formatted.append(f"{i}. {title}: {snippet}")
 
-                    return "\n".join(formatted) + "\n\n[Memory: Results saved for follow-up use]"
-                else:
-                    error_msg = result.get("error", result.get("message", "Unknown error"))
-                    return f"Search failed: {error_msg}"
+            return "\n".join(formatted) + "\n\n[Memory: Results saved for follow-up use]"
+        else:
+            error_msg = result.get("error", result.get("message", "Unknown error"))
+            return f"Search failed: {error_msg}"
 
     except aiohttp.ClientError as e:
         return f"Network error querying database: {str(e)}"
@@ -156,7 +143,6 @@ async def vector_search_tool(
           results: list of {score, text, metadata}
           error: str (on failure)
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/voice-query-vector-db"
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
 
     payload = {
@@ -167,53 +153,43 @@ async def vector_search_tool(
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                if response.status != 200:
-                    return {
-                        "success": False,
-                        "error": f"Vector search returned HTTP {response.status}",
-                    }
+        http_status, data = await n8n_post("voice-query-vector-db", payload)
 
-                data = await response.json()
+        if http_status != 200:
+            return {
+                "success": False,
+                "error": f"Vector search returned HTTP {http_status}",
+            }
 
-                # Prefer pre-formatted voice_response from workflow
-                voice_response = data.get("voice_response") or ""
+        # Prefer pre-formatted voice_response from workflow
+        voice_response = data.get("voice_response") or ""
 
-                # Extract result array — flat list of {score, text, metadata} objects
-                raw_result = data.get("result", [])
-                if isinstance(raw_result, dict):
-                    # Older shape: result.documents or result.top_results
-                    raw_result = (
-                        raw_result.get("documents")
-                        or raw_result.get("top_results")
-                        or []
-                    )
+        # Extract result array — flat list of {score, text, metadata} objects
+        raw_result = data.get("result", [])
+        if isinstance(raw_result, dict):
+            # Older shape: result.documents or result.top_results
+            raw_result = (
+                raw_result.get("documents")
+                or raw_result.get("top_results")
+                or []
+            )
 
-                results = []
-                for item in raw_result:
-                    if not isinstance(item, dict):
-                        continue
-                    results.append({
-                        "score": item.get("score", 0.0),
-                        "text": item.get("text", ""),
-                        "metadata": item.get("metadata", {}),
-                    })
+        results = []
+        for item in raw_result:
+            if not isinstance(item, dict):
+                continue
+            results.append({
+                "score": item.get("score", 0.0),
+                "text": item.get("text", ""),
+                "metadata": item.get("metadata", {}),
+            })
 
-                return {
-                    "success": True,
-                    "voice_response": voice_response,
-                    "results": results,
-                    "status": data.get("status", "COMPLETED"),
-                }
+        return {
+            "success": True,
+            "voice_response": voice_response,
+            "results": results,
+            "status": data.get("status", "COMPLETED"),
+        }
 
     except aiohttp.ClientError as e:
         logger.error(f"vector_search_tool network error: {e}")

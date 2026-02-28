@@ -550,8 +550,11 @@ async def manage_connections_async(
         call_id = await publish_tool_start("manageConnections", {"action": "connect", "service": service})
         await publish_tool_executing(call_id)
 
-        # Step 1: Get auth URL from Composio
-        auth_url, display_name = await initiate_service_connection(service)
+        # Step 1: Get auth URL from Composio.
+        # force_reauth=True bypasses "already connected" early-returns — if the user
+        # explicitly asks to connect a service, they always need a fresh auth link,
+        # especially when re-authenticating after a 401 (circuit breaker was tripped).
+        auth_url, display_name = await initiate_service_connection(service, force_reauth=True)
 
         if not display_name:
             # Error case — auth_url contains the error message

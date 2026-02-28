@@ -1580,7 +1580,7 @@ async def get_connected_services_status() -> str:
     return " | ".join(parts) if parts else "No external services are connected yet"
 
 
-async def initiate_service_connection(service: str) -> tuple[str, str]:
+async def initiate_service_connection(service: str, force_reauth: bool = False) -> tuple[str, str]:
     """Initiate a new Composio connection for a service.
 
     Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array).
@@ -1676,17 +1676,18 @@ async def initiate_service_connection(service: str) -> tuple[str, str]:
             if redirect_url:
                 logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
+                _service_auth_failed.pop(service_lower, None)  # clear circuit breaker on fresh link
                 return redirect_url, display_name
             status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
-            if status in ("ACTIVE", "CONNECTED"):
+            if not force_reauth and status in ("ACTIVE", "CONNECTED"):
                 return f"{display_name} is already connected and active", ""
             # Check for already-active summary shape:
             # e.g. {"summary": "active_connections=1, message='All connections are active'"}
             data = result.get("data", {}) or {}
             summary_str = str(data.get("summary", "") or data.get("message", "") or "").lower()
-            if "active" in summary_str and "all connections" in summary_str:
+            if not force_reauth and "active" in summary_str and "all connections" in summary_str:
                 return f"{display_name} is already connected and active", ""
-            if "active_connections" in summary_str:
+            if not force_reauth and "active_connections" in summary_str:
                 return f"{display_name} is already connected and active", ""
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape

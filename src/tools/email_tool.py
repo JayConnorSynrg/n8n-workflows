@@ -16,6 +16,7 @@ import aiohttp
 from livekit.agents import llm
 
 from ..config import get_settings
+from ..utils.n8n_client import n8n_post
 
 settings = get_settings()
 
@@ -43,8 +44,6 @@ async def send_email_tool(
     Returns:
         Success message or error description
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/execute-gmail"
-
     # Build payload matching n8n workflow expected format
     intent_id = f"lk_{uuid.uuid4().hex[:12]}"
     payload = {
@@ -63,31 +62,21 @@ async def send_email_tool(
         payload["parameters"]["cc"] = cc
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                # Increased timeout for gated workflow execution
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as response:
-                result = await response.json()
+        # Increased timeout for gated workflow execution
+        http_status, result = await n8n_post("execute-gmail", payload, timeout=60)
 
-                if response.status == 200:
-                    status = result.get("status", "")
-                    if status == "COMPLETED":
-                        voice_response = result.get("voice_response", f"Email sent to {to}")
-                        return voice_response
-                    elif status == "CANCELLED":
-                        return result.get("voice_response", "Email was cancelled")
-                    else:
-                        return f"Email sent successfully to {to}"
-                else:
-                    error_msg = result.get("error", result.get("voice_response", "Unknown error"))
-                    return f"Failed to send email: {error_msg}"
+        if http_status == 200:
+            status = result.get("status", "")
+            if status == "COMPLETED":
+                voice_response = result.get("voice_response", f"Email sent to {to}")
+                return voice_response
+            elif status == "CANCELLED":
+                return result.get("voice_response", "Email was cancelled")
+            else:
+                return f"Email sent successfully to {to}"
+        else:
+            error_msg = result.get("error", result.get("voice_response", "Unknown error"))
+            return f"Failed to send email: {error_msg}"
 
     except aiohttp.ClientError as e:
         return f"Network error sending email: {str(e)}"

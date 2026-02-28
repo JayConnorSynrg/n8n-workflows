@@ -14,9 +14,7 @@ from typing import Optional, Dict, Any
 import aiohttp
 from livekit.agents import llm
 
-from ..config import get_settings
-
-settings = get_settings()
+from ..utils.n8n_client import n8n_post
 
 
 async def _call_contact_webhook(
@@ -34,8 +32,6 @@ async def _call_contact_webhook(
     Returns:
         Response dictionary from the webhook
     """
-    webhook_url = f"{settings.n8n_webhook_base_url}/manage-contacts"
-
     payload = {
         "operation": operation,
         "session_id": session_id,
@@ -43,18 +39,8 @@ async def _call_contact_webhook(
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                webhook_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                result = await response.json()
-                return result
+        _http_status, result = await n8n_post("manage-contacts", payload)
+        return result
     except aiohttp.ClientError as e:
         return {"success": False, "error": str(e), "voice_response": f"Network error: {str(e)}"}
     except Exception as e:
