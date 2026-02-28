@@ -56,7 +56,7 @@ from ..utils.short_term_memory import (
     store_tool_result,
     ToolCategory,
 )
-from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool
+from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool, prospect_scraper_tool
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async, generate_social_async
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
@@ -876,6 +876,51 @@ async def run_lead_gen_async(
 
 
 # =============================================================================
+# PROSPECT SCRAPER - ASYNC BACKGROUND (RESULTS DELIVERED VIA N8N/APIFY)
+# =============================================================================
+
+@llm.function_tool(
+    name="scrapeProspects",
+    description=(
+        "Search LinkedIn for prospects matching a job title, location, and optional company. "
+        "Results are compiled and saved automatically. "
+        "Confirm job_title and any filters with the user before running. "
+        "Limit must be between 1 and 50."
+    ),
+)
+async def scrape_prospects_async(
+    job_title: str,
+    location: str = "United States",
+    company: Optional[str] = None,
+    limit: int = 10,
+) -> str:
+    """Fire-and-forget prospect scrape — n8n/Apify handles async processing."""
+    call_id = await publish_tool_start(
+        "scrapeProspects",
+        {"job_title": job_title, "location": location, "limit": limit},
+    )
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    # Clamp limit to safe range
+    clamped_limit = max(1, min(50, limit))
+    result = await prospect_scraper_tool.scrape_prospects_tool(
+        job_title=job_title,
+        location=location,
+        company=company or "",
+        limit=clamped_limit,
+    )
+    _dur = int((time.monotonic() - _t0) * 1000)
+    await publish_tool_completed(call_id, result[:100])
+    _fire_native_log(
+        "scrape_prospects",
+        {"job_title": job_title, "location": location, "limit": clamped_limit},
+        result,
+        _dur,
+    )
+    return result
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -904,6 +949,8 @@ ASYNC_TOOLS = [
     composio_execute_async,        # SYNC: single read where LLM needs result before next step
     # Lead Generation (async background — results delivered via email)
     run_lead_gen_async,            # ASYNC: scrape + enrich leads, email results
+    # Prospect Scraper (async background — LinkedIn scrape via n8n/Apify)
+    scrape_prospects_async,        # ASYNC: LinkedIn prospect search by job title + location
     # Gamma (async background generation with proactive session notification)
     generate_presentation_async,   # ASYNC: slide decks
     generate_document_async,       # ASYNC: documents / reports
