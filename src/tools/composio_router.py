@@ -1836,46 +1836,49 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
 
         async def _rest_initiate() -> str | None:
             async with httpx.AsyncClient(timeout=15.0) as http:
-                # Step 1: resolve integration_id for this service
-                # Try multiple appName formats — Composio app names may differ from lowercase service name
+                # Step 1: resolve integration_id — fetch all integrations, filter locally
+                # (appName query param filter is unreliable across Composio API versions)
                 integration_id: str | None = None
-                _app_name_variants = [
-                    service_lower,
-                    service_lower.upper(),
-                    service_lower.replace("_", ""),
-                    service_lower.title(),
-                ]
                 for path in ("/api/v1/integrations", "/api/v2/integrations"):
                     if integration_id:
                         break
-                    for app_name in _app_name_variants:
-                        try:
-                            r = await http.get(
-                                f"{_base}{path}",
-                                params={"appName": app_name, "page": 1, "pageSize": 10},
-                                headers=_rest_headers,
+                    try:
+                        r = await http.get(
+                            f"{_base}{path}",
+                            params={"page": 1, "pageSize": 100},
+                            headers=_rest_headers,
+                        )
+                        if r.status_code == 200:
+                            body = r.json()
+                            items = body.get("items") or body.get("integrations") or []
+                            logger.debug(
+                                f"Composio REST: {path} returned {len(items)} integrations"
                             )
-                            if r.status_code == 200:
-                                body = r.json()
-                                items = body.get("items") or body.get("integrations") or []
-                                for item in items:
+                            for item in items:
+                                # Match against multiple possible app name fields
+                                item_app = (
+                                    item.get("appName")
+                                    or item.get("app_name")
+                                    or item.get("appKey")
+                                    or item.get("slug")
+                                    or item.get("name")
+                                    or ""
+                                ).lower().replace(" ", "_").replace("-", "_")
+                                if item_app == service_lower or service_lower in item_app:
                                     iid = item.get("id") or item.get("integrationId")
                                     if iid:
                                         integration_id = iid
+                                        logger.info(
+                                            f"Composio REST: resolved integration_id={iid}"
+                                            f" for {service_lower} (matched appName={item_app!r}) via {path}"
+                                        )
                                         break
-                            if integration_id:
-                                logger.info(
-                                    f"Composio REST: resolved integration_id={integration_id}"
-                                    f" for {service_lower} (appName={app_name!r}) via {path}"
-                                )
-                                break
-                            else:
-                                logger.debug(
-                                    f"Composio REST: {path} appName={app_name!r} status={r.status_code}"
-                                    f" body_keys={list(r.json().keys()) if r.status_code == 200 else r.text[:120]}"
-                                )
-                        except Exception as _e:
-                            logger.debug(f"Composio REST: {path} appName={app_name!r} exception: {_e}")
+                        else:
+                            logger.debug(
+                                f"Composio REST: {path} status={r.status_code} body={r.text[:120]}"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Composio REST: {path} exception: {_e}")
 
                 if not integration_id:
                     logger.warning(f"Composio REST: no integration_id found for {service_lower}")
