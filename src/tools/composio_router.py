@@ -1774,7 +1774,7 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
                 return redirect_url, display_name
             status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if not force_reauth and status in ("ACTIVE", "CONNECTED"):
-                return f"{display_name} is already connected and active", ""
+                return "https://app.composio.dev/", display_name
             # Check for already-active summary shape using actual dict values, not string matching.
             # String matching fires on "active_connections=0" (key always present in summary dict).
             data = result.get("data", {}) or {}
@@ -1784,9 +1784,9 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
                 active_count = summary_dict.get("active_connections", 0) if isinstance(summary_dict, dict) else 0
                 initiated_count = summary_dict.get("initiated_connections", 0) if isinstance(summary_dict, dict) else 0
                 if active_count > 0 and initiated_count == 0:
-                    return f"{display_name} is already connected and active", ""
+                    return "https://app.composio.dev/", display_name
                 if "all connections are active" in message_str:
-                    return f"{display_name} is already connected and active", ""
+                    return "https://app.composio.dev/", display_name
         meta_error = result.get("error") or "No redirect URL returned"
         # Diagnostic: log full data so we can see the actual response shape
         logger.warning(
@@ -1854,6 +1854,16 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
                             logger.debug(
                                 f"Composio REST: {path} returned {len(items)} integrations"
                             )
+                            # Normalize common alias mismatches so e.g. "microsoftteams"
+                            # matches service_lower="microsoft_teams".
+                            COMPOSIO_SERVICE_ALIASES: dict[str, list[str]] = {
+                                "microsoft_teams": ["microsoftteams", "microsoft-teams", "microsoft teams", "msteams", "teams"],
+                                "googledrive": ["google-drive", "google drive"],
+                                "googlesheets": ["google-sheets", "google sheets"],
+                                "googledocs": ["google-docs", "google docs"],
+                                "perplexityai": ["perplexity", "perplexity-ai"],
+                            }
+                            _service_aliases = COMPOSIO_SERVICE_ALIASES.get(service_lower, [])
                             for item in items:
                                 # Match against multiple possible app name fields
                                 item_app = (
@@ -1864,7 +1874,20 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
                                     or item.get("name")
                                     or ""
                                 ).lower().replace(" ", "_").replace("-", "_")
-                                if item_app == service_lower or service_lower in item_app:
+                                item_app_normalized = item_app.lower().replace("-", "_").replace(" ", "_")
+                                if (
+                                    item_app == service_lower
+                                    or service_lower in item_app
+                                    or item_app_normalized == service_lower
+                                    or any(
+                                        item_app_normalized == alias.replace("-", "_").replace(" ", "_")
+                                        for alias in _service_aliases
+                                    )
+                                    or any(
+                                        alias.replace("-", "_").replace(" ", "_") in item_app_normalized
+                                        for alias in _service_aliases
+                                    )
+                                ):
                                     iid = item.get("id") or item.get("integrationId")
                                     if iid:
                                         integration_id = iid
