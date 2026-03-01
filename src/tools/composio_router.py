@@ -1705,15 +1705,19 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
         # (SDK does not accept 'toolkit' kwarg — list() takes no filter args)
         configs_response = client.auth_configs.list()
         all_configs = _extract_items_from_response(configs_response)
-        # Filter to matching service by probing multiple field names
+        # Filter to matching service by probing multiple field names.
+        # NOTE: auth_configs.list() often returns None for appName/app_name/slug fields.
+        # The 'name' field follows format 'auth_config_{toolkit}_{timestamp}', so match
+        # via startswith('auth_config_{service_lower}') to handle the timestamp suffix.
         configs = [
             c for c in all_configs
             if (
                 getattr(c, "appName", "") or getattr(c, "app_name", "") or getattr(c, "slug", "") or ""
             ).lower().replace(" ", "_") == service_lower
-            or (
-                getattr(c, "name", "") or ""
-            ).lower().replace(" ", "_") == service_lower
+            or (getattr(c, "name", "") or "").lower().replace(" ", "_") == service_lower
+            or (getattr(c, "name", "") or "").lower().replace(" ", "_").startswith(
+                f"auth_config_{service_lower}"
+            )
         ]
         if not configs:
             raise ValueError(
@@ -1832,7 +1836,7 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
             "x-api-key": settings.composio_api_key,
             "Content-Type": "application/json",
         }
-        _base = "https://backend.composio.tech"
+        _base = "https://backend.composio.dev"
 
         async def _rest_initiate() -> str | None:
             async with httpx.AsyncClient(timeout=15.0) as http:

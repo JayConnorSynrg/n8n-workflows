@@ -722,23 +722,6 @@ async def manage_connections_async(
         if not service:
             return "Which service would you like to connect? For example OneDrive Gmail or Google Sheets"
 
-        # Fast path: if service is already connected and tools are loaded, skip re-initiation.
-        # The user most likely triggered connect by mistake or doesn't realise it's already active.
-        from .composio_router import _slugs_by_service as _sbs
-        _svc_lower = service.lower().strip().replace(" ", "_")
-        if _svc_lower in _sbs and _sbs[_svc_lower] and not service.lower().startswith("force"):
-            _display = _svc_lower.replace("_", " ").title()
-            _fp_call_id = await publish_tool_start("manageConnections", {"action": "connect", "service": service})
-            await publish_tool_executing(_fp_call_id)
-            _fp_result = (
-                f"{_display} is already connected and ready to use. "
-                f"To use {_display} tools, call listComposioTools(service='{_svc_lower}') to see what's available, "
-                f"then composioBatchExecute with the exact slug. "
-                f"If you need to reconnect with a different account, visit app.composio.dev to re-authenticate."
-            )
-            await publish_tool_completed(_fp_call_id, f"{_display} already connected")
-            return _fp_result
-
         call_id = await publish_tool_start("manageConnections", {"action": "connect", "service": service})
         await publish_tool_executing(call_id)
 
