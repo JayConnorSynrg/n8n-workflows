@@ -1734,7 +1734,7 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
             f"Composio: SDK fallback found auth_config_id={auth_config_id} for {service_lower} "
             f"(filtered from {len(all_configs)} configs)"
         )
-        return client.connected_accounts.initiate(user_id, auth_config_id)
+        return client.connected_accounts.initiate(user_id, auth_config_id, allow_multiple=True)
 
     def _extract_redirect_url_from_dict(data: dict) -> str | None:
         """Probe multiple key shapes — SDK redirect URL field name varies across versions.
