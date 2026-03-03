@@ -1069,6 +1069,67 @@ def _format_cached_schema(slug: str) -> str:
     return "\n".join(lines)
 
 
+async def _refresh_preferred_account(service_key: str) -> None:
+    """Re-query Composio for ACTIVE accounts for a specific toolkit and update the preferred selection.
+
+    Called as a background task when an auth error fires for a service that has multiple
+    connected accounts. A second ACTIVE account may have a valid token (e.g. Teams with 4
+    accounts where the preferred one has an expired token).
+    """
+    try:
+        settings = get_settings()
+        client = _get_client(settings)
+        user_id = settings.composio_user_id.strip()
+
+        accts_resp = await asyncio.to_thread(
+            lambda: client.connected_accounts.list(user_ids=[user_id])
+        )
+        all_accts = _extract_items_from_response(accts_resp)
+
+        # Filter to ACTIVE accounts for this toolkit only
+        toolkit_accts = [
+            a for a in all_accts
+            if (
+                str(getattr(a, "status", "") or "").upper() == "ACTIVE"
+                and service_key.lower() in str(
+                    getattr(getattr(a, "toolkit", None), "slug", "") or ""
+                ).lower()
+            )
+        ]
+
+        if not toolkit_accts:
+            logger.info(f"[Auth refresh] No ACTIVE accounts found for {service_key} — cannot switch")
+            return
+
+        # Sort by created_at descending — newest first (ISO 8601 sorts lexicographically)
+        def _parse_dt(a):
+            raw = getattr(a, "created_at", None) or ""
+            try:
+                from datetime import datetime
+                return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except Exception:
+                from datetime import datetime, timezone
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        toolkit_accts.sort(key=_parse_dt, reverse=True)
+        new_acct_id = getattr(toolkit_accts[0], "id", None)
+        if new_acct_id and new_acct_id != _preferred_account_by_toolkit.get(service_key):
+            old_acct_id = _preferred_account_by_toolkit.get(service_key)
+            _preferred_account_by_toolkit[service_key] = new_acct_id
+            logger.info(
+                f"[Auth refresh] Switched {service_key} preferred account: "
+                f"{old_acct_id} → {new_acct_id} "
+                f"({len(toolkit_accts)} ACTIVE account(s) available)"
+            )
+        else:
+            logger.info(
+                f"[Auth refresh] {service_key} preferred account unchanged ({new_acct_id}) — "
+                f"no alternative ACTIVE account found"
+            )
+    except Exception as e:
+        logger.warning(f"[Auth refresh] Failed to refresh preferred account for {service_key}: {e}")
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -1399,20 +1460,28 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 ]))
             )
             # 401 = token/credential issue → trip circuit breaker, require re-auth
+            # Also catches Microsoft Graph API 403 where "no authorization information present"
+            # means the Bearer token is absent/expired (NOT a scope/permission error).
             is_auth_error = (
                 status_code == 401
+                or "no authorization information present" in error_lower
+                or "no authorization information" in error_lower
                 or (status_code is None and any(s in error_lower for s in [
                     "unauthorized", "401", "token expired", "invalid token",
                     "access token", "credentials expired", "reauthenticate",
                     "re-authenticate", "authentication failed", "oauth",
                 ]))
             )
-            # 403 = permission denied → OAuth is fine, resource/scope issue, do NOT circuit break
+            # 403 = permission denied → OAuth is fine, resource/scope issue, do NOT circuit break.
+            # Guard: do NOT classify auth failures (MS Graph token-absent 403) as permission errors.
             is_permission_error = (
-                status_code == 403
-                or (status_code is None and not is_auth_error and any(s in error_lower for s in [
-                    "forbidden", "403", "access denied", "not authorized", "permission denied",
-                ]))
+                not is_auth_error
+                and (
+                    status_code == 403
+                    or (status_code is None and any(s in error_lower for s in [
+                        "forbidden", "403", "access denied", "not authorized", "permission denied",
+                    ]))
+                )
             )
             # 429 = rate limited → transient, do NOT circuit break
             is_rate_limited = (
@@ -1486,6 +1555,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
+                # When auth error fires, try to switch to another connected account for this toolkit.
+                # (A second ACTIVE account may have a valid token — e.g. Teams with 4 connected accounts.)
+                if service_key and service_key in _preferred_account_by_toolkit:
+                    try:
+                        asyncio.create_task(_refresh_preferred_account(service_key))
+                    except Exception:
+                        pass
                 return (
                     f"The {service_display} connection needs to be re-authorized. "
                     f"Tell the user their {service_display} access has expired and they need to reconnect it. "
