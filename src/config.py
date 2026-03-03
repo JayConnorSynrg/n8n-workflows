@@ -1,4 +1,5 @@
 """Configuration management with validation."""
+from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 from functools import lru_cache
@@ -56,6 +57,10 @@ class Settings(BaseSettings):
     # PostgreSQL — direct connection for conversation logging (optional)
     # Set POSTGRES_URL = postgresql://user:pass@host/db in Railway env vars
     postgres_url: str = Field(default="", alias="POSTGRES_URL")
+    # pgvector — dedicated Railway Postgres service for semantic memory (optional)
+    # Set PGVECTOR_URL = postgresql://user:pass@host/db in Railway env vars
+    # Uses a separate instance so vector ops don't contend with conversation logging
+    pgvector_url: Optional[str] = Field(default=None, alias="PGVECTOR_URL")
     composio_base_url: str = Field(
         default="https://backend.composio.dev/api",
         alias="COMPOSIO_BASE_URL"

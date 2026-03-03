@@ -1919,10 +1919,11 @@ async def entrypoint(ctx: JobContext):
             await _pg_logger.init_pool(settings.postgres_url)
             asyncio.create_task(_pg_logger.log_session_start(session_id, _user_id, ctx.room.name))
 
-        # Initialize pgvector semantic memory (same Postgres instance, HNSW indexed search)
-        if settings.postgres_url and _PGVECTOR_AVAILABLE:
+        # Initialize pgvector semantic memory store (dedicated pgvector Railway service)
+        _pgvector_url = getattr(settings, 'pgvector_url', None)
+        if _pgvector_url and _PGVECTOR_AVAILABLE:
             try:
-                await _pgvector.init_pgvector_pool(settings.postgres_url)
+                await _pgvector.init_pgvector_pool(_pgvector_url)
                 logger.info("pgvector: semantic memory store ready")
             except Exception as _pge:
                 logger.warning("pgvector: init failed, using SQLite fallback: %s", _pge)
