@@ -1916,7 +1916,7 @@ async def entrypoint(ctx: JobContext):
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
         # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
-            asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
+            await _pg_logger.init_pool(settings.postgres_url)
             asyncio.create_task(_pg_logger.log_session_start(session_id, _user_id, ctx.room.name))
 
         # Initialize pgvector semantic memory (same Postgres instance, HNSW indexed search)
@@ -2384,14 +2384,14 @@ async def entrypoint(ctx: JobContext):
 
     # Persist session facts to PostgreSQL before clearing them in memory
     if settings.postgres_url:
-        asyncio.create_task(_flush_facts_to_db(session_id, settings.postgres_url))
-        asyncio.create_task(_pg_logger.log_session_end(
+        await _flush_facts_to_db(session_id, settings.postgres_url)
+        await _pg_logger.log_session_end(
             session_id,
             _user_id,
             locals().get("_summary"),
             locals().get("_msg_count", 0),
             locals().get("_n_calls", 0),
-        ))
+        )
 
     # Close pgvector pool at session end
     if _PGVECTOR_AVAILABLE and _pgvector.is_available():
