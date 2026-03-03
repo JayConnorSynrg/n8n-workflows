@@ -16,6 +16,7 @@ Gracefully disabled: if SQLite init fails, all operations are no-ops.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -29,6 +30,14 @@ import uuid
 from typing import Any, Optional
 
 from . import embedder
+
+# pgvector semantic store (Railway Postgres) — optional, gracefully disabled
+try:
+    from ..utils import pgvector_store as _pgvector
+    _PGVECTOR_AVAILABLE = True
+except ImportError:
+    _pgvector = None  # type: ignore[assignment]
+    _PGVECTOR_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +386,19 @@ def store(
                 )
                 conn.commit()
             logger.debug("[Memory] Stored: [%s] %.60s...", category, text)
+            # Dual-write to pgvector for HNSW-indexed semantic search
+            if _PGVECTOR_AVAILABLE and _pgvector.is_available() and embedding is not None:
+                asyncio.ensure_future(
+                    _pgvector.pgvector_save(
+                        content=text,
+                        embedding=embedding if isinstance(embedding, list) else list(embedding),
+                        user_id=user_id or "_default",
+                        session_id=session_id,
+                        category=category,
+                        source="capture",
+                        importance=importance,
+                    )
+                )
             return entry_id
         except Exception as exc:
             logger.error("[Memory] Store error: %s", exc)
@@ -434,6 +456,7 @@ def search(
     query: str,
     top_k: int = DEFAULT_TOP_K,
     category: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
     Hybrid search over memories.
@@ -442,12 +465,26 @@ def search(
     sorted by descending final score.
 
     text_safe is HTML-entity escaped — safe to inject into agent context.
+
+    When pgvector is available, uses HNSW cosine search for the vector
+    component and merges with FTS5 BM25 scores by content string.
+    Falls back to SQLite brute-force cosine when pgvector is unavailable.
     """
     if not _initialized or _init_failed:
         return []
 
     try:
         query_embedding = embedder.embed(query)
+
+        # ── pgvector path (HNSW indexed) ───────────────────────────────────
+        if (
+            _PGVECTOR_AVAILABLE
+            and _pgvector.is_available()
+            and query_embedding is not None
+        ):
+            return _search_via_pgvector(query, query_embedding, top_k, category, user_id)
+
+        # ── SQLite brute-force fallback ────────────────────────────────────
         vector_results = _vector_search(query_embedding, top_k * 4, category) if query_embedding else {}
         text_results = _bm25_search(query, top_k * 4, category)
 
@@ -478,6 +515,147 @@ def search(
     except Exception as exc:
         logger.error("[Memory] Search error: %s", exc)
         return []
+
+
+def _search_via_pgvector(
+    query: str,
+    query_embedding: list,
+    top_k: int,
+    category: Optional[str],
+    user_id: Optional[str],
+) -> list[dict[str, Any]]:
+    """
+    Hybrid search using pgvector (HNSW) for vector scores and SQLite FTS5
+    for BM25 scores. Merges by content string as the common key.
+
+    pgvector results: [(content, category, similarity, source), ...]
+    BM25 results:     {sqlite_id: bm25_score, ...}
+
+    Merge strategy: run both searches, join by content text, apply weights.
+    For entries found only in pgvector (not yet in SQLite FTS), use vector
+    score only. For FTS-only entries, use text score only.
+    """
+    try:
+        # Run async pgvector search from sync context
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're inside an async context — schedule as a concurrent future
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    asyncio.run,
+                    _pgvector.pgvector_search(
+                        query_embedding=query_embedding,
+                        user_id=user_id or "_default",
+                        top_k=top_k * 3,
+                    ),
+                )
+                pg_rows = future.result(timeout=5.0)
+        else:
+            pg_rows = loop.run_until_complete(
+                _pgvector.pgvector_search(
+                    query_embedding=query_embedding,
+                    user_id=user_id or "_default",
+                    top_k=top_k * 3,
+                )
+            )
+
+        if not pg_rows:
+            # pgvector returned nothing — fall back to SQLite brute-force
+            vector_results = _vector_search(query_embedding, top_k * 4, category)
+            text_results = _bm25_search(query, top_k * 4, category)
+            all_ids: set[str] = set(vector_results) | set(text_results)
+            creation_times = _get_creation_times(list(all_ids))
+            scored_fallback: list[dict[str, Any]] = []
+            for cand_id in all_ids:
+                v_score = vector_results.get(cand_id, 0.0)
+                t_score = text_results.get(cand_id, 0.0)
+                final = VECTOR_WEIGHT * v_score + TEXT_WEIGHT * t_score
+                if cand_id in creation_times:
+                    final = _apply_temporal_decay(final, creation_times[cand_id])
+                if final < MIN_SCORE:
+                    continue
+                scored_fallback.append({"_id": cand_id, "score": final})
+            scored_fallback.sort(key=lambda x: x["score"], reverse=True)
+            top_ids = [r["_id"] for r in scored_fallback[:top_k]]
+            return _fetch_by_ids(top_ids, scored_fallback[:top_k]) if top_ids else []
+
+        # Build content→vector_score map from pgvector results
+        # content string is the merge key
+        pg_by_content: dict[str, tuple[float, str, str]] = {}
+        for content_text, cat, sim, src in pg_rows:
+            pg_by_content[content_text] = (sim, cat or "general", src)
+
+        # BM25 keyword search from SQLite FTS5 — returns {sqlite_id: bm25_score}
+        text_results_by_id = _bm25_search(query, top_k * 4, category)
+
+        # Fetch content text for BM25 hits so we can join by content string
+        bm25_content_scores: dict[str, float] = {}
+        if text_results_by_id:
+            placeholders = ",".join("?" for _ in text_results_by_id)
+            try:
+                with sqlite3.connect(_db_path) as conn:  # type: ignore[arg-type]
+                    rows = conn.execute(
+                        f"SELECT id, text FROM memories WHERE id IN ({placeholders})",  # nosec B608
+                        list(text_results_by_id.keys()),
+                    ).fetchall()
+                for row_id, text_val in rows:
+                    bm25_content_scores[text_val] = text_results_by_id[row_id]
+            except Exception as _exc:
+                logger.warning("[Memory] pgvector hybrid BM25 fetch error: %s", _exc)
+
+        # Merge by content string
+        all_content_keys: set[str] = set(pg_by_content) | set(bm25_content_scores)
+        merged: list[tuple[float, str]] = []  # [(score, content), ...]
+        for content_text in all_content_keys:
+            v_score = pg_by_content[content_text][0] if content_text in pg_by_content else 0.0
+            t_score = bm25_content_scores.get(content_text, 0.0)
+            final = VECTOR_WEIGHT * v_score + TEXT_WEIGHT * t_score
+            if final < MIN_SCORE:
+                continue
+            merged.append((final, content_text))
+
+        merged.sort(key=lambda x: x[0], reverse=True)
+        top_merged = merged[:top_k]
+
+        if not top_merged:
+            return []
+
+        # Build result dicts from pgvector metadata + escaped content
+        results = []
+        for final_score, content_text in top_merged:
+            pg_meta = pg_by_content.get(content_text)
+            cat = pg_meta[1] if pg_meta else "general"
+            results.append({
+                "id": f"pgv:{hash(content_text) & 0xFFFFFFFF}",
+                "text_safe": _escape_for_prompt(content_text),
+                "category": cat,
+                "score": round(final_score, 4),
+                "created_at": 0,
+            })
+
+        return results
+
+    except Exception as exc:
+        logger.warning("[Memory] pgvector search path failed, falling back to SQLite: %s", exc)
+        # Graceful fallback: SQLite brute-force cosine
+        vector_results = _vector_search(query_embedding, top_k * 4, category)
+        text_results = _bm25_search(query, top_k * 4, category)
+        all_ids_fb: set[str] = set(vector_results) | set(text_results)
+        creation_times_fb = _get_creation_times(list(all_ids_fb))
+        scored_fb: list[dict[str, Any]] = []
+        for cand_id in all_ids_fb:
+            v_score = vector_results.get(cand_id, 0.0)
+            t_score = text_results.get(cand_id, 0.0)
+            final = VECTOR_WEIGHT * v_score + TEXT_WEIGHT * t_score
+            if cand_id in creation_times_fb:
+                final = _apply_temporal_decay(final, creation_times_fb[cand_id])
+            if final < MIN_SCORE:
+                continue
+            scored_fb.append({"_id": cand_id, "score": final})
+        scored_fb.sort(key=lambda x: x["score"], reverse=True)
+        top_ids_fb = [r["_id"] for r in scored_fb[:top_k]]
+        return _fetch_by_ids(top_ids_fb, scored_fb[:top_k]) if top_ids_fb else []
 
 
 def _vector_search(
@@ -644,6 +822,13 @@ def deep_store_save(
         logger.warning("[DeepStore] Store not initialized — cannot save")
         return 0
 
+    # Compute embedding for pgvector dual-write (non-fatal if embedder unavailable)
+    _ds_embedding = None
+    try:
+        _ds_embedding = embedder.embed(content)
+    except Exception:
+        pass
+
     with _lock:
         try:
             with sqlite3.connect(_db_path) as conn:
@@ -657,6 +842,19 @@ def deep_store_save(
                 conn.commit()
                 row_id = cursor.lastrowid or 0
             logger.debug("[DeepStore] Saved id=%d label=%r", row_id, label)
+            # Dual-write to pgvector for HNSW-indexed semantic search
+            if _PGVECTOR_AVAILABLE and _pgvector.is_available() and _ds_embedding is not None:
+                asyncio.ensure_future(
+                    _pgvector.pgvector_save(
+                        content=content,
+                        embedding=_ds_embedding if isinstance(_ds_embedding, list) else list(_ds_embedding),
+                        user_id=user_id,
+                        session_id=session_id,
+                        label=label,
+                        source="deep_store",
+                        importance=0.9,  # Deep store entries are high importance
+                    )
+                )
             return row_id
         except Exception as exc:
             logger.error("[DeepStore] Save error: %s", exc)

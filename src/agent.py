@@ -98,6 +98,14 @@ from .utils.session_facts import (
 from .utils import pg_logger as _pg_logger
 from .utils import user_identity as _user_identity
 
+# pgvector semantic memory (Railway Postgres) — optional, gracefully disabled
+try:
+    from .utils import pgvector_store as _pgvector
+    _PGVECTOR_AVAILABLE = True
+except ImportError:
+    _pgvector = None  # type: ignore[assignment]
+    _PGVECTOR_AVAILABLE = False
+
 # Initialize logging
 logger = setup_logging(__name__)
 settings = get_settings()
@@ -1911,6 +1919,14 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(_pg_logger.init_pool(settings.postgres_url))
             asyncio.create_task(_pg_logger.log_session_start(session_id, _user_id, ctx.room.name))
 
+        # Initialize pgvector semantic memory (same Postgres instance, HNSW indexed search)
+        if settings.postgres_url and _PGVECTOR_AVAILABLE:
+            try:
+                await _pgvector.init_pgvector_pool(settings.postgres_url)
+                logger.info("pgvector: semantic memory store ready")
+            except Exception as _pge:
+                logger.warning("pgvector: init failed, using SQLite fallback: %s", _pge)
+
         await session.start(
             agent=agent,
             room=ctx.room,
@@ -2376,6 +2392,10 @@ async def entrypoint(ctx: JobContext):
             locals().get("_msg_count", 0),
             locals().get("_n_calls", 0),
         ))
+
+    # Close pgvector pool at session end
+    if _PGVECTOR_AVAILABLE and _pgvector.is_available():
+        await _pgvector.close_pgvector_pool()
 
     cleared_facts = _clear_facts(session_id)
     if cleared_facts:
