@@ -1739,7 +1739,9 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
 
     Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool (toolkits as array).
     Attempt 2: SDK direct — auth_configs.list() → connected_accounts.initiate(user_id, auth_config_id).
-    Attempt 3: Direct httpx REST API — GET /api/v1/integrations → POST /api/v1/connectedAccounts.
+    Attempt 3: Direct httpx REST API — GET /api/v1/integrations → POST /api/v3/connectedAccounts.
+               v1 returns 400 "data field Required", v2 returns 410 permanently gone.
+               v3 requires body wrapped as {"data": {"integrationId": ..., "userUuid": ...}}.
                This path bypasses the SDK entirely and hits the Composio backend directly.
 
     Returns (auth_url, display_name) on success, or (error_message, "") on failure.
@@ -1988,34 +1990,37 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
                     return None
 
                 # Step 2: initiate connected account → redirect URL
-                for path in ("/api/v1/connectedAccounts", "/api/v2/connectedAccounts"):
-                    try:
-                        r = await http.post(
-                            f"{_base}{path}",
-                            json={"integrationId": integration_id, "userUuid": user_id},
-                            headers=_rest_headers,
+                # v1 returns 400 "data field Required", v2 returns 410 permanently gone.
+                # v3 requires payload wrapped in {"data": {...}}.
+                try:
+                    r = await http.post(
+                        f"{_base}/api/v3/connectedAccounts",
+                        json={"data": {"integrationId": integration_id, "userUuid": user_id}},
+                        headers=_rest_headers,
+                    )
+                    if r.status_code in (200, 201):
+                        body = r.json()
+                        url = (
+                            body.get("redirectUrl")
+                            or body.get("redirect_url")
+                            or body.get("connectionUrl")
+                            or body.get("authUrl")
+                            or body.get("oauthUrl")
+                            or (body.get("connectedAccount") or {}).get("redirectUrl")
+                            or (body.get("data") or {}).get("redirectUrl")
+                            or (body.get("data") or {}).get("redirect_url")
                         )
-                        if r.status_code in (200, 201):
-                            body = r.json()
-                            url = (
-                                body.get("redirectUrl")
-                                or body.get("redirect_url")
-                                or body.get("connectionUrl")
-                                or body.get("authUrl")
-                                or body.get("oauthUrl")
-                                or (body.get("connectedAccount") or {}).get("redirectUrl")
-                            )
-                            if url:
-                                return url
-                            logger.warning(
-                                f"Composio REST: {path} 200 but no URL — keys={list(body.keys())}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Composio REST: {path} returned {r.status_code}: {r.text[:200]}"
-                            )
-                    except Exception as _e:
-                        logger.debug(f"Composio REST: {path} POST exception: {_e}")
+                        if url:
+                            return url
+                        logger.warning(
+                            f"Composio REST: /api/v3/connectedAccounts 200 but no URL — keys={list(body.keys())}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Composio REST: /api/v3/connectedAccounts returned {r.status_code}: {r.text[:200]}"
+                        )
+                except Exception as _e:
+                    logger.debug(f"Composio REST: /api/v3/connectedAccounts POST exception: {_e}")
                 return None
 
         redirect_url = await _rest_initiate()
