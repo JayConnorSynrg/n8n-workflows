@@ -214,6 +214,104 @@ def ensure_memory_files(memory_dir: str) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────────
+# One-time user profile seed (recovered / known data)
+# ────────────────────────────────────────────────────────────────────────────────
+
+# Sentinel string written to MEMORY.md to prevent double-seeding on restart.
+_SEED_SENTINEL = "<!-- aio-seed:jay-connor-2026-03-03 -->"
+
+# Known profile for the _default user partition.
+_DEFAULT_USER_PROFILE = """\
+# USER.md — User Profile
+
+AIO learns about the user over time. This file is read at every session start.
+
+## Identity
+- Name: Jay Connor
+- Email: jayconnor@synrgscaling.com
+- Preferred address: Jay
+- Timezone: (not yet learned)
+
+## Work Context
+<!-- Projects, roles, organizations the user works with -->
+
+## Communication Style
+<!-- How the user prefers to communicate, email tone, etc. -->
+
+## Ongoing Priorities
+<!-- What the user is currently focused on -->
+"""
+
+_DEFAULT_SEED_FACTS = [
+    "User name: Jay Connor",
+    "User email: jayconnor@synrgscaling.com",
+    "Favorite word: hippopotomonstrosesquippedaliophobia (the fear of long words)",
+]
+
+
+def seed_user_profile_if_empty(memory_dir: str) -> list[str]:
+    """
+    Write recovered profile data to USER.md and MEMORY.md if the files are
+    template-only (no real data).  Also returns the seed facts so the caller
+    can insert them into the SQLite memories table.
+
+    Idempotent — guarded by a sentinel comment in MEMORY.md so it only runs
+    once per volume lifetime even across restarts.
+
+    Returns:
+        List of fact strings that should be saved to SQLite (empty if already seeded).
+    """
+    memory_md = os.path.join(memory_dir, "MEMORY.md")
+    user_md = os.path.join(memory_dir, "USER.md")
+
+    # Guard: check if already seeded by looking for the sentinel in MEMORY.md
+    try:
+        if os.path.exists(memory_md):
+            with open(memory_md, "r", encoding="utf-8") as f:
+                existing = f.read()
+            if _SEED_SENTINEL in existing:
+                return []  # Already seeded — nothing to do
+    except Exception as exc:
+        logger.warning("[SessionWriter] Seed sentinel check failed: %s", exc)
+        return []
+
+    # Write USER.md if it is template-only (no real data yet)
+    try:
+        write_user = True
+        if os.path.exists(user_md):
+            with open(user_md, "r", encoding="utf-8") as f:
+                current = f.read()
+            write_user = _is_template_only(current)
+
+        if write_user:
+            with open(user_md, "w", encoding="utf-8") as f:
+                f.write(_DEFAULT_USER_PROFILE)
+            logger.info("[SessionWriter] Seeded USER.md with recovered profile")
+    except Exception as exc:
+        logger.error("[SessionWriter] Failed to seed USER.md: %s", exc)
+
+    # Append seed facts to MEMORY.md with sentinel
+    try:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        lines = [
+            f"\n## [{timestamp} Manual Recovery]",
+            _SEED_SENTINEL,
+        ]
+        for fact in _DEFAULT_SEED_FACTS:
+            lines.append(f"- {fact}")
+        lines.append("")
+
+        with open(memory_md, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        logger.info("[SessionWriter] Appended seed facts to MEMORY.md")
+    except Exception as exc:
+        logger.error("[SessionWriter] Failed to append seed facts to MEMORY.md: %s", exc)
+        return []
+
+    return list(_DEFAULT_SEED_FACTS)
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # Weekly session index for compact system prompt injection
 # ────────────────────────────────────────────────────────────────────────────────
 

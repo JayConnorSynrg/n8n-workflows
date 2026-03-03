@@ -900,6 +900,22 @@ async def entrypoint(ctx: JobContext):
             _session_writer.ensure_memory_files(_user_mem_dir)
         except Exception as _uid_err:
             logger.warning("[Memory] Per-user file init failed: %s", _uid_err)
+
+        # One-time seed: write recovered profile data for _default user partition
+        # if files are still template-only. Idempotent — guarded by MEMORY.md sentinel.
+        try:
+            seed_facts = _session_writer.seed_user_profile_if_empty(_user_mem_dir)
+            if seed_facts and _mem_store is not None:
+                for fact in seed_facts:
+                    _mem_store.store(
+                        text=fact,
+                        category="identity",
+                        source="seed_recovery",
+                        session_id="manual_recovery",
+                    )
+                logger.info("[Memory] Seeded %d profile facts into SQLite", len(seed_facts))
+        except Exception as _seed_err:
+            logger.warning("[Memory] Profile seed failed (non-critical): %s", _seed_err)
     # ── End per-user memory routing ──────────────────────────────────────────
 
     # ── New user detection ──────────────────────────────────────────────────
