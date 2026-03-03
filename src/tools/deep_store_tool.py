@@ -43,11 +43,15 @@ except Exception:
 @llm.function_tool(
     name="deepStore",
     description=(
-        "Permanently save important content to the user's database with no size limit. "
-        "Call this when the user says 'deep store that' 'deep store this' or any variant "
-        "indicating they want to archive the current content for later. "
-        "Provide a short descriptive label so it can be recalled precisely. "
-        "The content survives across all future sessions — it never expires."
+        "Permanently save important content, facts, or preferences to the user's personal database. "
+        "Call this when the user asks you to remember, save, note, keep, or store any information — "
+        "including personal details (name, email, preferences, favorite things), "
+        "important facts, decisions, or any content they want recalled in future sessions. "
+        "Trigger phrases: 'remember that', 'save that', 'note that', 'keep that', "
+        "'my favorite X is Y', 'I want you to know', 'store this', 'deep store that'. "
+        "Provide a short descriptive label so the content can be recalled precisely. "
+        "The content persists across all future sessions — it never expires. "
+        "IMPORTANT: Always call this tool BEFORE saying you have saved something."
     ),
 )
 async def deep_store_async(

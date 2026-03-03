@@ -1118,6 +1118,18 @@ async def entrypoint(ctx: JobContext):
     )
     active_prompt += time_context
 
+    # MEMORY SAVE ENFORCEMENT — injected before memory context so it applies globally
+    _save_enforcement = (
+        "\n\n## MEMORY SAVE RULE (NON-NEGOTIABLE)\n"
+        "NEVER say 'saved', 'stored', 'noted', 'I'll remember that', or any save confirmation "
+        "UNTIL you have received a successful response from deepStore, updateUserProfile, or addContact. "
+        "The sequence is always: call tool → receive success response → then confirm to user. "
+        "If the user says 'remember X', 'save X', 'my favorite X is Y', 'note that' — "
+        "call deepStore immediately with the content and a descriptive label. "
+        "Do not ask permission. Do not delay. Call deepStore first, then confirm."
+    )
+    active_prompt += _save_enforcement
+
     # Load cross-session memory context for this user and inject into instructions
     _memory_context = ""
     if _MEM_AVAILABLE and _session_writer is not None:
