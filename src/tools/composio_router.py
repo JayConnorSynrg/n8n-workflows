@@ -1759,13 +1759,16 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
     user_id = settings.composio_user_id.strip()
 
     def _execute_meta_tool():
-        # CRITICAL: COMPOSIO_MANAGE_CONNECTIONS requires "toolkits" (plural array).
-        # Sending "toolkit" (singular string) causes: "Validation error: Required at 'toolkits'"
+        # CRITICAL: COMPOSIO_MANAGE_CONNECTIONS schema = {toolkits, reinitiate_all, session_id}.
+        # "action" is NOT a valid parameter — omit it. When present it was silently ignored,
+        # causing the tool to return "all connections active" (no URL) for already-ACTIVE services.
+        # "reinitiate_all": True mirrors the MCP reinitiate_all flag — forces a new auth link
+        # even when the account is already ACTIVE. Maps AIO's force_reauth to the API contract.
         return client.tools.execute(
             "COMPOSIO_MANAGE_CONNECTIONS",
             {
-                "action": "initiate",
                 "toolkits": [service_lower],
+                "reinitiate_all": force_reauth,
             },
             user_id=user_id,
             dangerously_skip_version_check=True,
