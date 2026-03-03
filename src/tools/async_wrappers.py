@@ -726,6 +726,23 @@ async def manage_connections_async(
         call_id = await publish_tool_start("manageConnections", {"action": "connect", "service": service})
         await publish_tool_executing(call_id)
 
+        # Preflight: check if service already has slugs in the index.
+        # API-key services (Gamma, Notion, etc.) are connected once during setup and never
+        # require OAuth re-authentication — they have no redirect URL to generate.
+        # Calling initiate_service_connection(force_reauth=True) for these services causes
+        # all 3 initiation paths to fail with "all initiation paths failed" even though
+        # the service IS connected and working.
+        # Slug presence in _slugs_by_service is definitive evidence of an active connection.
+        from .composio_router import _slugs_by_service as _sbs
+        _svc_key = service.lower().strip().replace(" ", "_").replace("-", "_")
+        if _sbs.get(_svc_key):
+            service_title = service.strip().title()
+            await publish_tool_completed(call_id, f"{service_title} already connected")
+            return (
+                f"{service_title} is already connected (API key authentication, persistent connection). "
+                f"Proceed to use {service_title} tools directly — no OAuth link needed."
+            )
+
         # Step 1: Get auth URL from Composio.
         # force_reauth=True bypasses "already connected" early-returns — if the user
         # explicitly asks to connect a service, they always need a fresh auth link,
