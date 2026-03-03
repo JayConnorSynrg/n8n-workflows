@@ -82,6 +82,7 @@ from .tools.agent_context_tool import (
     set_current_session_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
+from .tools.user_profile_tool import set_user_mem_dir as _set_profile_mem_dir
 from .tools.gamma_tool import get_notification_queue
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
@@ -884,6 +885,7 @@ async def entrypoint(ctx: JobContext):
     )
     _user_mem_dir = _user_identity.get_user_mem_dir(_base_mem_dir, _user_id)
     logger.info(f"[UserIdentity] User={_user_id!r} mem_dir={_user_mem_dir}")
+    _set_profile_mem_dir(_user_mem_dir)
 
     # Switch SQLite memory store to this user's database
     if _MEM_AVAILABLE and _mem_store is not None:
@@ -1127,15 +1129,21 @@ async def entrypoint(ctx: JobContext):
         _new_user_section = (
             "\n\n## NEW USER IDENTIFICATION (this session only)\n"
             f"You are meeting someone whose profile you don't yet have on file.{_name_hint}\n\n"
-            "After your greeting, naturally work through this sequence:\n"
-            "1. Mention you haven't built a profile for them yet and ask if they'd like you to remember them going forward.\n"
-            "2. If yes — ask their name (if not already confirmed), role/title, and company. "
-            "Ask one question at a time, conversationally.\n"
-            "3. Use deepStore to save a user profile entry: "
-            "\"User profile: [Name], [Role] at [Company], first session [today's date]\"\n"
-            "4. Call searchContacts with their name to check if they're already saved as a contact.\n"
-            "5. If not in contacts, ask if they'd like to be added. If yes, use addContact.\n"
-            "6. Once complete, proceed normally with whatever they need.\n\n"
+            "STEP 0 — Before anything else: call recall(\"user profile identity name\") to check "
+            "if you already know this person from a previous session.\n"
+            "- If recall returns their name and details: greet them by name and SKIP the onboarding below.\n"
+            "- If recall returns nothing useful: proceed with the onboarding sequence.\n\n"
+            "Onboarding sequence (only when recall finds nothing):\n"
+            "1. After greeting, mention you haven't built a profile for them yet and ask if "
+            "they'd like you to remember them going forward.\n"
+            "2. If yes — ask their name, role/title, and company one at a time, conversationally.\n"
+            "3. Call updateUserProfile with name, role, and company — this saves them permanently "
+            "so you'll recognize them next session.\n"
+            "4. Call deepStore to save: \"User profile: [Name], [Role] at [Company], "
+            "first session [today's date]\"\n"
+            "5. Call searchContacts with their name to check if they're already a saved contact.\n"
+            "6. If not in contacts, ask if they'd like to be added. If yes, use addContact.\n"
+            "7. Once complete, proceed normally with whatever they need.\n\n"
             "Keep this natural and brief — one exchange at a time, never like a form. "
             "If they decline to be remembered, respect that and move on immediately."
         )

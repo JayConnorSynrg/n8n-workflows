@@ -338,11 +338,34 @@ def load_memory_context(memory_dir: str, max_tokens: int = 500) -> str:
 
 def _is_template_only(content: str) -> bool:
     """Return True if the file only contains the starter template (no real data)."""
-    # Heuristic: if all non-empty non-comment lines start with # or <!-- it's template-only
-    real_lines = [
-        line for line in content.splitlines()
-        if line.strip() and not line.strip().startswith("#") and not line.strip().startswith("<!--")
-    ]
+    _PLACEHOLDERS = frozenset([
+        "(not yet learned)",
+        "Add preferences as they are learned",
+        "Persistent facts about projects",
+        "Important decisions made",
+        "Projects, roles, organizations",
+        "How the user prefers to communicate",
+        "What the user is currently focused on",
+        "How AIO has learned to communicate",
+        "Recurring workflows and processes",
+        "Background knowledge that helps AIO",
+        "Add environment-specific infrastructure notes here",
+        "Add periodic monitoring tasks here",
+        "Device names, room names, SSH hosts",
+        "Check calendar every morning session",
+        "Surface pending emails on session start",
+        "Remind about follow-ups",
+    ])
+    real_lines = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("<!--"):
+            continue
+        if any(ph in stripped for ph in _PLACEHOLDERS):
+            continue
+        real_lines.append(stripped)
     return len(real_lines) == 0
 
 

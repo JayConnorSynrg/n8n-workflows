@@ -59,6 +59,7 @@ from ..utils.short_term_memory import (
 from . import email_tool, database_tool, vector_store_tool, google_drive_tool, agent_context_tool, contact_tool, prospect_scraper_tool
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async, generate_social_async
 from .deep_store_tool import deep_store_async, deep_recall_async
+from .user_profile_tool import update_user_profile_tool as _update_user_profile_tool
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
 try:
@@ -1131,6 +1132,36 @@ async def scrape_prospects_async(
 
 
 # =============================================================================
+# USER PROFILE — WRITE OPERATION (no confirmation gate — writes to local file only)
+# =============================================================================
+
+@llm.function_tool(
+    name="updateUserProfile",
+    description=(
+        "Save the user's name, role, and company to their persistent profile for future session recognition. "
+        "Call this after learning who the user is during onboarding. "
+        "This writes to USER.md so AIO will greet them by name in future sessions."
+    ),
+)
+async def update_user_profile_async(
+    name: str = "",
+    role: str = "",
+    company: str = "",
+    timezone: str = "",
+    notes: str = "",
+) -> str:
+    """Update USER.md with onboarding info — enables cross-session recognition."""
+    call_id = await publish_tool_start("updateUserProfile", {"name": name, "role": role})
+    await publish_tool_executing(call_id)
+    _t0 = time.monotonic()
+    result = await _update_user_profile_tool(name=name, role=role, company=company, timezone=timezone, notes=notes)
+    _dur = int((time.monotonic() - _t0) * 1000)
+    await publish_tool_completed(call_id, result[:100], duration_ms=_dur)
+    _fire_native_log("update_user_profile", {"name": name, "role": role, "company": company}, result, _dur)
+    return result
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -1145,6 +1176,7 @@ ASYNC_TOOLS = [
     memory_summary_async,
     deep_store_async,              # DEEP STORE: unlimited cross-session archive (no confirmation gate)
     deep_recall_async,             # DEEP RECALL: retrieve by label or text search (READ, no gate)
+    update_user_profile_async,     # USER PROFILE: write name/role/company to USER.md for cross-session recognition
     vector_store_async,
     database_query_async,
     vector_search_async,
