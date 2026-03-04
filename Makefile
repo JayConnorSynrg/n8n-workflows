@@ -6,7 +6,7 @@ RELAY_SRC      := $(CURDIR)/voice-agent-poc/relay-server
 
 .PHONY: deploy-agent sync-agent check-standalone deploy-relay sync-relay check-relay
 
-## deploy-agent: Sync agent code to standalone repo and push to Railway
+## deploy-agent: Sync agent code to standalone repo, push to GitHub, and deploy to Railway
 deploy-agent: check-standalone
 	@echo "==> Pulling latest standalone..."
 	@git -C $(STANDALONE_DIR) pull origin main
@@ -17,9 +17,11 @@ deploy-agent: check-standalone
 	@if [ -f Dockerfile ]; then cp Dockerfile $(STANDALONE_DIR)/; fi
 	@echo "==> Committing to standalone..."
 	@cd $(STANDALONE_DIR) && git add -A && \
-		git commit -m "sync: from monorepo $$(git -C $(CURDIR) rev-parse --short HEAD)" || echo "Nothing to commit"
+		PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m "sync: from monorepo $$(git -C $(CURDIR) rev-parse --short HEAD)" || echo "Nothing to commit"
 	@git -C $(STANDALONE_DIR) push origin main
-	@echo "==> Railway deploy triggered. Run: railway logs --service livekit-voice-agent -n 30"
+	@echo "==> Deploying to Railway via railway up..."
+	@cd $(STANDALONE_DIR) && railway up --detach
+	@echo "==> Railway deploy triggered. Check: cd $(STANDALONE_DIR) && railway deployment list"
 
 ## sync-agent: Sync files only (no push)
 sync-agent: check-standalone
