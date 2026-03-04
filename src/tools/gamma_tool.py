@@ -96,9 +96,9 @@ async def _poll_gamma_completion(
             logger.info(f"Gamma poll [{job_id}] attempt={attempt + 1} status={status}")
 
             if status == "completed":
-                # GAMMA_GET_GAMMA_FILE_URLS response: data.fileUrls.gamma_url (NOT data.gammaUrl)
-                file_urls = data.get("fileUrls") or {}
-                gamma_url = file_urls.get("gamma_url", "") or data.get("gammaUrl", "")
+                # GAMMA_GET_GAMMA_FILE_URLS response: flat shape {gammaUrl, gammaId, generationId, status, credits}
+                gamma_url = data.get("gammaUrl", "")
+                gamma_id = data.get("gammaId", "")
                 clear_gamma_pending(job_id)  # Release heartbeat suppression
                 message = (
                     f"Your {content_type} on {topic} is ready. "
@@ -156,30 +156,33 @@ async def _start_gamma_generation(
         client = _router._get_client(settings)
         user_id = settings.composio_user_id.strip()
 
-        result = await asyncio.to_thread(
-            lambda: client.tools.execute(
-                "GAMMA_GENERATE_GAMMA",
-                {
-                    "inputText": topic,
-                    "format": format,
-                    "numCards": slide_count,
-                    "textMode": "generate",
-                    "textOptions": {
-                        "tone": tone,
-                        "language": "en",
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: client.tools.execute(
+                    "GAMMA_GENERATE_GAMMA",
+                    {
+                        "inputText": topic,
+                        "format": format,
+                        "numCards": slide_count,
+                        "textMode": "generate",
+                        "textOptions": {
+                            "tone": tone,
+                            "language": "en",
+                        },
+                        "imageOptions": {
+                            "source": "aiGenerated",
+                            "model": "flux-1-quick",
+                            "style": "minimal, clean, professional",
+                        },
+                        "sharingOptions": {
+                            "externalAccess": "view",
+                        },
                     },
-                    "imageOptions": {
-                        "source": "aiGenerated",
-                        "model": "flux-1-quick",
-                        "style": "minimal, clean, professional",
-                    },
-                    "sharingOptions": {
-                        "externalAccess": "view",
-                    },
-                },
-                user_id=user_id,
-                dangerously_skip_version_check=True,
-            )
+                    user_id=user_id,
+                    dangerously_skip_version_check=True,
+                )
+            ),
+            timeout=90,
         )
 
         if not result.get("successful"):
@@ -201,12 +204,12 @@ async def _start_gamma_generation(
         generation_id = data.get("generationId")
         status = data.get("status", "unknown")
 
-        if status == "completed" and (data.get("fileUrls") or data.get("gammaUrl")):
+        if status == "completed" and data.get("gammaUrl"):
             # Rare: instant completion — push silent notification so _gamma_notification_monitor
             # injects gammaUrl into chat_ctx without speaking (prevents re-generation on follow-up turns)
-            # GAMMA_GET_GAMMA_FILE_URLS response: data.fileUrls.gamma_url (NOT data.gammaUrl)
-            file_urls = data.get("fileUrls") or {}
-            gamma_url = file_urls.get("gamma_url", "") or data.get("gammaUrl", "")
+            # Flat response shape: {gammaUrl, gammaId, generationId, status, credits}
+            gamma_url = data.get("gammaUrl", "")
+            gamma_id = data.get("gammaId", "")
             await _notification_queue.put({
                 "message": "",  # Silent — no voice output, just context injection
                 "gamma_url": gamma_url,

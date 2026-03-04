@@ -53,6 +53,20 @@ _failed_slugs: dict[str, tuple] = {}  # slug -> (count, timestamp)
 _CB_MAX_FAILURES = 2
 _FAILED_SLUG_TTL_SECS = 300.0  # 5 minutes — auto-expire transient circuit breaks
 
+# Slug aliases for renamed/deprecated/non-existent Composio slugs.
+# Applied at the very start of _resolve_slug_fast() before any tier matching.
+# Key = slug LLM may request; Value = actual live Composio slug.
+_SLUG_OVERRIDES: dict[str, str] = {
+    # Google Drive: FIND_FOLDER does not exist in live API
+    "GOOGLEDRIVE_FIND_FOLDER": "GOOGLEDRIVE_FIND_FILE",
+    "GOOGLEDRIVE_LIST_FILES_IN_FOLDER": "GOOGLEDRIVE_FIND_FILE",
+    # Google Drive: GET_FILE aliases
+    "GOOGLEDRIVE_GET_FILE": "GOOGLEDRIVE_GET_FILE_METADATA",
+    "GOOGLEDRIVE_GET_FILE_BY_ID": "GOOGLEDRIVE_GET_FILE_METADATA",
+    # Microsoft Teams: old slug cached in session history
+    "MICROSOFT_TEAMS_LIST_MESSAGES": "MICROSOFT_TEAMS_TEAMS_LIST_CHANNEL_MESSAGES",
+}
+
 
 def _is_slug_failed(slug: str) -> bool:
     """Check if a slug is circuit-broken; auto-expires stale entries (Change 2)."""
@@ -228,6 +242,8 @@ def _sanitize_error(exc: Exception, context: str = "") -> str:
     """
     msg = str(exc)
     if isinstance(exc, asyncio.TimeoutError):
+        return f"Composio API timed out{f' ({context})' if context else ''}"
+    if isinstance(exc, RuntimeError) and "timed out" in msg.lower():
         return f"Composio API timed out{f' ({context})' if context else ''}"
     if isinstance(exc, (ConnectionError, OSError)) or "connection" in msg.lower():
         return "Network error connecting to Composio API"
@@ -633,6 +649,12 @@ def _resolve_slug_fast(raw_slug: str) -> tuple[str | None, int]:
         return raw_slug, _TIER_EXACT  # No index, pass through
 
     upper = raw_slug.upper().strip()
+
+    # Pre-tier: apply known slug aliases for renamed/deprecated/non-existent slugs
+    if upper in _SLUG_OVERRIDES:
+        aliased = _SLUG_OVERRIDES[upper]
+        logger.info(f"Composio: Slug alias applied: {upper} → {aliased}")
+        upper = aliased
 
     # Tier 1: Exact match
     if upper in _canonical_slugs:
