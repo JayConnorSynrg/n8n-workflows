@@ -38,9 +38,12 @@ async def init_pgvector_pool(postgres_url: str) -> bool:
     """
     Initialize asyncpg pool and ensure pgvector schema exists.
     Returns True if successful, False on any error (non-fatal).
-    Called once at agent startup.
+    Idempotent — no-op if pool is already initialized (singleton across all sessions).
     """
     global _pool
+    if _pool is not None:
+        logger.debug("pgvector: pool already initialized, skipping re-init")
+        return True
     try:
         _pool = await asyncpg.create_pool(postgres_url, min_size=1, max_size=3)
         await _ensure_schema()
