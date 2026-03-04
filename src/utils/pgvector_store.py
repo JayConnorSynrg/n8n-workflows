@@ -37,7 +37,8 @@ def _vec_to_pg(embedding: list) -> str:
 async def init_pgvector_pool(postgres_url: str) -> bool:
     """
     Initialize asyncpg pool and ensure pgvector schema exists.
-    Returns True if successful, False on any error (non-fatal).
+    Returns True if successful, False only if pool creation itself fails.
+    Schema errors (concurrent race conditions) are logged but do not invalidate the pool.
     Idempotent — no-op if pool is already initialized (singleton across all sessions).
     """
     global _pool
@@ -46,48 +47,74 @@ async def init_pgvector_pool(postgres_url: str) -> bool:
         return True
     try:
         _pool = await asyncpg.create_pool(postgres_url, min_size=1, max_size=3)
-        await _ensure_schema()
-        logger.info("pgvector: pool initialized, schema ready")
-        return True
     except Exception as e:
-        logger.warning("pgvector: init failed (will use SQLite fallback): %s", e)
+        logger.warning("pgvector: pool creation failed (will use SQLite fallback): %s", e)
         _pool = None
         return False
+    # Pool created — schema errors (e.g. concurrent worker race) do not invalidate the pool
+    try:
+        await _ensure_schema()
+        logger.info("pgvector: pool initialized, schema ready")
+    except Exception as e:
+        logger.warning(
+            "pgvector: schema init error (pool still active, schema may already exist): %s", e
+        )
+    return True
 
 
 async def _ensure_schema() -> None:
-    """Idempotent schema creation — safe to call on every startup."""
+    """Idempotent schema creation — safe for concurrent callers across worker processes."""
     async with _pool.acquire() as conn:
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS aio_memories (
-                id          BIGSERIAL PRIMARY KEY,
-                user_id     TEXT        NOT NULL DEFAULT '_default',
-                session_id  TEXT,
-                content     TEXT        NOT NULL,
-                label       TEXT,
-                category    TEXT,
-                source      TEXT        NOT NULL DEFAULT 'capture',
-                importance  REAL        NOT NULL DEFAULT 0.5,
-                embedding   vector(384) NOT NULL,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                metadata    JSONB
-            )
-        """)
-        # HNSW index for cosine similarity (m=16, ef=64 — balanced perf/recall)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS aio_memories_hnsw
-            ON aio_memories USING hnsw (embedding vector_cosine_ops)
-            WITH (m = 16, ef_construction = 64)
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS aio_memories_user_idx
-            ON aio_memories (user_id)
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS aio_memories_user_source_idx
-            ON aio_memories (user_id, source)
-        """)
+        # CREATE EXTENSION — IF NOT EXISTS is not concurrent-safe in PG; catch the race
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception as e:
+            if "already exists" in str(e) or "duplicate" in str(e).lower():
+                pass  # Another worker created it simultaneously — this is fine
+            else:
+                raise
+
+        # CREATE TABLE — concurrent-safe
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS aio_memories (
+                    id          BIGSERIAL PRIMARY KEY,
+                    user_id     TEXT        NOT NULL DEFAULT '_default',
+                    session_id  TEXT,
+                    content     TEXT        NOT NULL,
+                    label       TEXT,
+                    category    TEXT,
+                    source      TEXT        NOT NULL DEFAULT 'capture',
+                    importance  REAL        NOT NULL DEFAULT 0.5,
+                    embedding   vector(384) NOT NULL,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    metadata    JSONB
+                )
+            """)
+        except Exception as e:
+            if "already exists" in str(e) or "duplicate" in str(e).lower():
+                pass
+            else:
+                raise
+
+        # CREATE INDEXES — each wrapped individually; concurrent workers may race on these too
+        for idx_sql in [
+            (
+                "CREATE INDEX IF NOT EXISTS aio_memories_hnsw "
+                "ON aio_memories USING hnsw (embedding vector_cosine_ops) "
+                "WITH (m = 16, ef_construction = 64)"
+            ),
+            "CREATE INDEX IF NOT EXISTS aio_memories_user_idx ON aio_memories (user_id)",
+            "CREATE INDEX IF NOT EXISTS aio_memories_user_source_idx ON aio_memories (user_id, source)",
+            "CREATE INDEX IF NOT EXISTS aio_memories_created_idx ON aio_memories (created_at DESC)",
+        ]:
+            try:
+                await conn.execute(idx_sql)
+            except Exception as e:
+                if "already exists" in str(e) or "duplicate" in str(e).lower():
+                    pass
+                else:
+                    raise
 
 
 def is_available() -> bool:
