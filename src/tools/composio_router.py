@@ -37,6 +37,12 @@ except Exception:  # nosec B110 — tool_logger is optional; never block tool ex
     def log_perplexity_search(*_a, **_kw):  # type: ignore[misc]
         pass
 
+try:
+    from ..utils.pg_logger import log_tool_error as _log_tool_error
+except Exception:
+    async def _log_tool_error(**_kw) -> None:  # type: ignore[misc]
+        pass
+
 logger = logging.getLogger(__name__)
 
 # Cached Composio client (initialized on first use)
@@ -1399,6 +1405,11 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     })
     if slug_key in _COMPOSIO_META_SLUGS:
         logger.warning(f"Composio: Blocked meta-tool call to {slug_key} — use composioBatchExecute instead")
+        asyncio.create_task(_log_tool_error(
+            slug=slug_key, resolved_slug=None, service=None,
+            error_type="META_TOOL", cb_state="CLOSED",
+            worker_id=_WORKER_ID, session_id=None,
+        ))
         return (
             f"Use composioBatchExecute or composioExecute for tool execution. "
             f"Do not call {slug_key} directly — it is not an action tool."
@@ -1406,7 +1417,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
 
     # Circuit breaker: check if this slug has failed too many times (Change 2: TTL-aware check)
     if _is_slug_failed(slug_key):
-        logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_get_slug_failure_count(slug_key)} failures)")
+        _cb_count = _get_slug_failure_count(slug_key)
+        logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_cb_count} failures)")
+        asyncio.create_task(_log_tool_error(
+            slug=slug_key, resolved_slug=None, service=None,
+            error_type="CB_TRIPPED", retry_count=_cb_count, cb_state="OPEN",
+            worker_id=_WORKER_ID, session_id=None,
+        ))
         return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
 
     # Auth circuit breaker: check if this service's OAuth is known to be expired
@@ -1415,6 +1432,11 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     if service_key and _service_auth_failed.get(service_key):
         service_display = service_key.replace("_", " ").title()
         logger.warning(f"Composio: Auth circuit breaker OPEN for service={service_key} (token expired)")
+        asyncio.create_task(_log_tool_error(
+            slug=slug_key, resolved_slug=None, service=service_key,
+            error_type="CB_TRIPPED", cb_state="OPEN",
+            worker_id=_WORKER_ID, session_id=None,
+        ))
         return (
             f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
             f"Do not retry {service_display} tools."
@@ -1511,6 +1533,11 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                 f"Composio: Slug unresolvable: {tool_slug} "
                 f"(failure {new_count}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
             )
+            asyncio.create_task(_log_tool_error(
+                slug=tool_slug, resolved_slug=None, service=None,
+                error_type="SLUG_NOT_FOUND", retry_count=new_count,
+                worker_id=_WORKER_ID, session_id=None,
+            ))
             return (
                 f"Tool {tool_slug} not found. Did you mean: {alt_text}? "
                 f"Check the catalog in your instructions for available slugs."
@@ -1886,6 +1913,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                     f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
+                asyncio.create_task(_log_tool_error(
+                    slug=tool_slug, resolved_slug=resolved_slug, service=service_key,
+                    error_type="AUTH_401", tier_resolved=tier,
+                    worker_id=_WORKER_ID,
+                    duration_ms=duration_ms,
+                    raw_error=error_str[:500],
+                    session_id=None, user_id=user_id,
+                ))
                 return (
                     f"The {service_display} connection needs to be re-authorized. "
                     f"Tell the user their {service_display} access has expired and they need to reconnect it. "
@@ -1903,6 +1938,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                     f"[TOOL_CALL] Composio PERMISSION (403): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
+                asyncio.create_task(_log_tool_error(
+                    slug=tool_slug, resolved_slug=resolved_slug, service=service_key,
+                    error_type="PERMISSION_403", tier_resolved=tier,
+                    worker_id=_WORKER_ID,
+                    duration_ms=duration_ms,
+                    raw_error=error_str[:500],
+                    session_id=None, user_id=user_id,
+                ))
                 return (
                     f"I don't have permission to access that {tool_display} resource. "
                     f"Your {service_display} connection is still active — this is a permissions issue on that specific resource. "
@@ -1921,6 +1964,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                 # Server/infra error (5xx) — transient, increment but don't max out circuit breaker
                 _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
                 logger.warning(f"[TOOL_CALL] Composio SERVER ERROR {status_code}: {resolved_slug} log_id={log_id}")
+                asyncio.create_task(_log_tool_error(
+                    slug=tool_slug, resolved_slug=resolved_slug, service=service_key,
+                    error_type="SERVER_5XX", tier_resolved=tier,
+                    worker_id=_WORKER_ID,
+                    duration_ms=duration_ms,
+                    raw_error=error_str[:500],
+                    session_id=None, user_id=user_id,
+                ))
                 return (
                     f"The {tool_display} service returned a temporary error. "
                     f"You may retry once."
@@ -1934,6 +1985,18 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     except Exception as exc:
         logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={_sanitize_error(exc, resolved_slug)}")
         _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
+        asyncio.create_task(_log_tool_error(
+            slug=tool_slug,
+            resolved_slug=resolved_slug if 'resolved_slug' in dir() else None,
+            service=service_key if 'service_key' in dir() else None,
+            error_type="UNKNOWN",
+            tier_resolved=tier if 'tier' in dir() else None,
+            worker_id=_WORKER_ID,
+            duration_ms=duration_ms if 'duration_ms' in dir() else None,
+            raw_error=str(exc)[:500],
+            session_id=None,
+            user_id=user_id if 'user_id' in dir() else None,
+        ))
         await publish_tool_error(call_id, _sanitize_error(exc, resolved_slug)[:100])
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 

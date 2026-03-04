@@ -122,6 +122,50 @@ async def log_session_end(
         logger.debug(f"log_session_end error: {e}")
 
 
+async def log_tool_error(
+    *,
+    slug: str,
+    resolved_slug: Optional[str] = None,
+    service: Optional[str] = None,
+    error_type: str,           # TIMEOUT, AUTH_401, PERMISSION_403, RATE_LIMIT, SLUG_NOT_FOUND, CB_TRIPPED, PARAM_ERROR, NETWORK, SERVER_5XX, META_TOOL, UNKNOWN
+    tier_resolved: Optional[int] = None,
+    retry_count: int = 0,
+    cb_state: Optional[str] = None,  # OPEN, CLOSED, HALF_OPEN
+    worker_id: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+    raw_error: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> None:
+    """Fire-and-forget: log a structured tool error to tool_error_log table."""
+    if not _pg_available or _pool is None:
+        return
+    try:
+        async with _pool.acquire(timeout=5) as conn:
+            await conn.execute(
+                """
+                INSERT INTO tool_error_log
+                    (slug, resolved_slug, service, error_type, tier_resolved, retry_count,
+                     cb_state, worker_id, duration_ms, raw_error, session_id, user_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                """,
+                slug,
+                resolved_slug,
+                service,
+                error_type,
+                tier_resolved,
+                retry_count,
+                cb_state,
+                worker_id,
+                duration_ms,
+                raw_error,
+                session_id,
+                user_id,
+            )
+    except Exception as e:
+        logger.debug(f"[PgLogger] tool_error_log insert failed (non-critical): {e}")
+
+
 async def close_pool() -> None:
     """Close the connection pool. Call once on worker shutdown."""
     global _pool, _pg_available

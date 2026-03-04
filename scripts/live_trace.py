@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import os
 import re
 import signal
 import subprocess
@@ -400,36 +401,25 @@ def classify_line(line: str) -> Optional[tuple[str, dict]]:
 # Railway subprocess streaming
 # ---------------------------------------------------------------------------
 
-def build_railway_cmd(service: str, snapshot: bool) -> list[str]:
+def build_railway_cmd(service: str, snapshot: bool, lines: int = 100) -> list[str]:
     if snapshot:
-        return ["railway", "logs", "--service", service, "-n", "100"]
-    return ["railway", "logs", "--service", service, "-f"]
+        return ["railway", "logs", "--service", service, "--lines", str(lines)]
+    # Default: no --lines flag → Railway streams live logs continuously
+    return ["railway", "logs", "--service", service]
 
 
-def stream_logs(
-    service: str,
-    snapshot: bool,
-    min_severity: str,
-    context_lines: int,
-) -> None:
-    cmd = build_railway_cmd(service, snapshot)
-    mode = "SNAPSHOT" if snapshot else "FOLLOW"
-    min_rank = SEVERITY_RANK.get(min_severity.upper(), 0)
-
-    print(bold(f"[live_trace] Starting Railway log stream"))
-    print(f"  Service     : {service}")
-    print(f"  Mode        : {mode}")
-    print(f"  Min severity: {min_severity.upper()}")
-    print(f"  Context     : {context_lines} lines")
-    print(f"  Command     : {' '.join(cmd)}")
-    print(dim("Press Ctrl-C to stop and print final stats."))
-    print()
-    sys.stdout.flush()
-
-    stats = Stats()
-    dedupe = DedupeWindow()
-    reporter = IncidentReporter(context_lines=context_lines)
-
+def _run_one_stream(
+    cmd: list[str],
+    stats: "Stats",
+    dedupe: "DedupeWindow",
+    reporter: "IncidentReporter",
+    min_rank: int,
+) -> bool:
+    """
+    Run one Railway subprocess, process lines until EOF or KeyboardInterrupt.
+    Returns True if interrupted by user (Ctrl-C), False if stream ended naturally.
+    """
+    global _shutdown_requested
     try:
         proc = subprocess.Popen(
             cmd,
@@ -446,8 +436,11 @@ def stream_logs(
         )
         sys.exit(1)
 
+    user_interrupted = False
     try:
         for raw_line in proc.stdout:  # type: ignore[union-attr]
+            if _shutdown_requested:
+                break
             line = raw_line.rstrip()
             if not line:
                 continue
@@ -473,7 +466,7 @@ def stream_logs(
                 stats.print_summary()
 
     except KeyboardInterrupt:
-        pass
+        user_interrupted = True
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -481,6 +474,57 @@ def stream_logs(
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+    return user_interrupted
+
+
+def stream_logs(
+    service: str,
+    snapshot: bool,
+    min_severity: str,
+    context_lines: int,
+) -> None:
+    cmd = build_railway_cmd(service, snapshot)
+    mode = "SNAPSHOT" if snapshot else "FOLLOW (auto-reconnect)"
+    min_rank = SEVERITY_RANK.get(min_severity.upper(), 0)
+
+    print(bold("[live_trace] Starting Railway log stream"))
+    print(f"  Service     : {service}")
+    print(f"  Mode        : {mode}")
+    print(f"  Min severity: {min_severity.upper()}")
+    print(f"  Context     : {context_lines} lines")
+    print(f"  Command     : {' '.join(cmd)}")
+    print(dim("Press Ctrl-C to stop and print final stats."))
+    print()
+    sys.stdout.flush()
+
+    stats = Stats()
+    dedupe = DedupeWindow()
+    reporter = IncidentReporter(context_lines=context_lines)
+
+    if snapshot:
+        # Single-shot — run once and exit
+        _run_one_stream(cmd, stats, dedupe, reporter, min_rank)
+    else:
+        # Follow mode — reconnect whenever Railway closes the stream
+        reconnect_count = 0
+        while not _shutdown_requested:
+            try:
+                interrupted = _run_one_stream(cmd, stats, dedupe, reporter, min_rank)
+            except KeyboardInterrupt:
+                interrupted = True
+
+            if interrupted or _shutdown_requested:
+                break
+
+            reconnect_count += 1
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(dim(f"[{ts}] Stream ended (connection closed). Reconnecting in 5s... (#{reconnect_count})"))
+            sys.stdout.flush()
+            try:
+                time.sleep(5)
+            except KeyboardInterrupt:
+                break
 
     stats.print_summary(header="FINAL STATS")
 
@@ -515,6 +559,71 @@ def _handle_sigterm(signum: int, frame) -> None:  # noqa: ANN001
 
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
+# ---------------------------------------------------------------------------
+# DB summary mode
+# ---------------------------------------------------------------------------
+
+def print_db_error_summary(hours: int = 24) -> None:
+    """Query tool_error_log for structured error breakdown."""
+    import asyncio
+
+    async def _query():
+        try:
+            import asyncpg  # type: ignore
+        except ImportError:
+            print("[ERROR] asyncpg not installed — run: pip install asyncpg")
+            return
+
+        url = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_PUBLIC_URL")
+        if not url:
+            print("[ERROR] No POSTGRES_URL or DATABASE_PUBLIC_URL env var set")
+            return
+
+        try:
+            conn = await asyncpg.connect(url)
+        except Exception as e:
+            print(f"[ERROR] Could not connect to PostgreSQL: {e}")
+            return
+
+        try:
+            rows = await conn.fetch("""
+                SELECT slug, service, error_type,
+                       COUNT(*) as count,
+                       MAX(created_at) as last_seen,
+                       ROUND(AVG(duration_ms)) as avg_ms
+                FROM tool_error_log
+                WHERE created_at > NOW() - ($1 * INTERVAL '1 hour')
+                GROUP BY slug, service, error_type
+                ORDER BY count DESC, last_seen DESC
+                LIMIT 50
+            """, hours)
+        except Exception as e:
+            print(f"[ERROR] Query failed (tool_error_log may not exist yet): {e}")
+            await conn.close()
+            return
+
+        if not rows:
+            print(f"\n  No tool errors in the last {hours}h\n")
+            await conn.close()
+            return
+
+        print(f"\n{'='*70}")
+        print(f"  TOOL ERROR SUMMARY — last {hours}h ({len(rows)} distinct failure modes)")
+        print(f"{'='*70}")
+        print(f"  {'SLUG':<40} {'SERVICE':<15} {'TYPE':<15} {'COUNT':>5} {'AVG_MS':>7}")
+        print(f"  {'-'*40} {'-'*15} {'-'*15} {'-'*5} {'-'*7}")
+        for row in rows:
+            slug = (row['slug'] or 'UNKNOWN')[:40]
+            svc = (row['service'] or 'unknown')[:15]
+            etype = (row['error_type'] or 'UNKNOWN')[:15]
+            avg_ms = row['avg_ms'] or 0
+            print(f"  {slug:<40} {svc:<15} {etype:<15} {row['count']:>5} {avg_ms:>7}")
+        print(f"{'='*70}\n")
+        await conn.close()
+
+    asyncio.run(_query())
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +677,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print all 8 patterns in table format and exit",
     )
+    parser.add_argument(
+        "--db-summary",
+        action="store_true",
+        help="Query tool_error_log table for error breakdown (requires POSTGRES_URL or DATABASE_PUBLIC_URL)",
+    )
+    parser.add_argument(
+        "--db-hours",
+        type=int,
+        default=24,
+        metavar="N",
+        help="Hours window for --db-summary (default: 24)",
+    )
     return parser
 
 
@@ -577,6 +698,10 @@ def main() -> None:
 
     if args.dump_patterns:
         dump_patterns()
+        sys.exit(0)
+
+    if args.db_summary:
+        print_db_error_summary(hours=args.db_hours)
         sys.exit(0)
 
     stream_logs(
