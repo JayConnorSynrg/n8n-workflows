@@ -178,6 +178,109 @@ async def migrate_sqlite_to_pgvector(
     return total
 
 
+async def backfill_conversation_log(
+    postgres_url: str,
+    pgvector_pool,
+    batch_size: int = 50,
+) -> int:
+    """
+    Backfill conversation_log (raw text) into pgvector with embeddings.
+    Only embeds role IN ('user', 'assistant') with content > 20 chars.
+    Idempotent — sentinel source='_conv_backfill_complete' guards re-runs.
+    Returns count of rows inserted.
+    """
+    # Check sentinel
+    async with pgvector_pool.acquire() as conn:
+        done = await conn.fetchrow(
+            "SELECT id FROM aio_memories WHERE source = '_conv_backfill_complete' LIMIT 1"
+        )
+        if done:
+            logger.debug("pgvector backfill: conversation_log already backfilled, skipping")
+            return 0
+
+    logger.info("pgvector backfill: starting conversation_log -> pgvector")
+
+    # Connect to conversation_log Postgres (separate pool — may differ from pgvector DB)
+    import asyncpg as _asyncpg
+    conv_pool = await _asyncpg.create_pool(postgres_url, min_size=1, max_size=2)
+
+    try:
+        rows = await conv_pool.fetch(
+            """
+            SELECT session_id, role, content, user_id, created_at
+            FROM conversation_log
+            WHERE role IN ('user', 'assistant')
+              AND LENGTH(content) > 20
+            ORDER BY created_at ASC
+            """
+        )
+    finally:
+        await conv_pool.close()
+
+    if not rows:
+        logger.info("pgvector backfill: conversation_log has 0 qualifying rows")
+        # Write sentinel so we don't rescan on every startup
+        try:
+            dummy_vec = "[" + ",".join(["0.0"] * 384) + "]"
+            async with pgvector_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO aio_memories (user_id, content, embedding, source) "
+                    "VALUES ('_system', '_conv_backfill_complete', $1::vector, '_conv_backfill_complete')",
+                    dummy_vec,
+                )
+        except Exception as _se:
+            logger.warning(f"pgvector backfill: sentinel write failed: {_se}")
+        return 0
+
+    logger.info(f"pgvector backfill: {len(rows)} conversation turns to embed")
+
+    # Import embedder — lazy singleton, loads fastembed ONNX model on first call
+    from ..memory.embedder import embed as _embed
+
+    total = 0
+    for i in range(0, len(rows), batch_size):
+        batch_rows = rows[i : i + batch_size]
+        batch_records = []
+        for r in batch_rows:
+            try:
+                # embed() returns list[float] or None (already .tolist()'d inside embedder)
+                emb = _embed(r["content"])
+                if emb is None or len(emb) != 384:
+                    continue
+                batch_records.append({
+                    "content": r["content"],
+                    "source": "conversation_backfill",
+                    "importance": 0.6 if r["role"] == "user" else 0.5,
+                    "embedding": emb,
+                    "user_id": r["user_id"] or "_default",
+                    "session_id": r["session_id"],
+                    "category": "conversation",
+                    "label": None,
+                })
+            except Exception as _e:
+                logger.debug(f"pgvector backfill: embed error: {_e}")
+                continue
+
+        inserted = await _bulk_insert(pgvector_pool, batch_records)
+        total += inserted
+        logger.info(f"pgvector backfill: {total}/{len(rows)} rows embedded")
+
+    # Write sentinel
+    try:
+        dummy_vec = "[" + ",".join(["0.0"] * 384) + "]"
+        async with pgvector_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO aio_memories (user_id, content, embedding, source) "
+                "VALUES ('_system', '_conv_backfill_complete', $1::vector, '_conv_backfill_complete')",
+                dummy_vec,
+            )
+    except Exception as _e:
+        logger.warning(f"pgvector backfill: sentinel write failed: {_e}")
+
+    logger.info(f"pgvector backfill: complete — {total} conversation turns embedded")
+    return total
+
+
 async def _bulk_insert(pool, rows: list) -> int:
     """Batch-insert rows into aio_memories. Returns count of rows attempted (not verified)."""
     if not rows:
