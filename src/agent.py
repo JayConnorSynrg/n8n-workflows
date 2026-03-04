@@ -2350,96 +2350,126 @@ async def entrypoint(ctx: JobContext):
         # This happens when the linked participant leaves
         logger.info("Session linked to client, waiting for session close...")
 
-    # Keep agent alive until room closes
-    # The room closes when all participants leave or it times out
-    while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
-        await asyncio.sleep(1.0)
+    # Keep agent alive until room closes.
+    # CRITICAL: Wrap the keep-alive loop AND all cleanup in try/finally so that
+    # asyncio.CancelledError (raised by LiveKit worker framework on room disconnect)
+    # does not bypass the cleanup block. Without this, sessions and session_facts_log
+    # tables are always empty because lines after the loop are never reached.
+    _session_summary: str = ""
+    _session_n_calls: int = 0
+    _session_msg_count: int = 0
+    try:
+        # The room closes when all participants leave or it times out
+        while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
+            await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        logger.info("[SessionCleanup] Entrypoint cancelled by LiveKit framework — running cleanup")
+        # Re-raise after cleanup block executes (in finally)
+        raise
+    finally:
+        # Clean up session greeting registry entry for this room
+        _greeted_rooms.pop(ctx.room.name, None)
 
-    # Clean up session greeting registry entry for this room
-    _greeted_rooms.pop(ctx.room.name, None)
+        # Clean up session memory when session ends
+        session_id = ctx.room.name or "livekit-agent"
 
-    # Clean up session memory when session ends
-    session_id = ctx.room.name or "livekit-agent"
+        # Flush session to persistent memory (8s timeout — must not block disconnect)
+        if _MEM_AVAILABLE and _session_writer is not None and _mem_capture is not None:
+            try:
+                # Build a meaningful session summary using captured facts as objectives
+                from .tools.short_term_memory import get_session_stats
+                _stats = get_session_stats(session_id)
+                # Compute pending facts FIRST so they can be used in the title
+                _pending = _mem_capture.get_pending_facts()
+                _fact_texts = [f for f, _ in _pending]
 
-    # Flush session to persistent memory (8s timeout — must not block disconnect)
-    if _MEM_AVAILABLE and _session_writer is not None and _mem_capture is not None:
-        try:
-            # Build a meaningful session summary using captured facts as objectives
-            from .tools.short_term_memory import get_session_stats
-            _stats = get_session_stats(session_id)
-            # Compute pending facts FIRST so they can be used in the title
-            _pending = _mem_capture.get_pending_facts()
-            _fact_texts = [f for f, _ in _pending]
+                _cats = list(_stats.get('categories', {}).keys())
+                _cat_str = ", ".join(_cats[:4]) if _cats else "general"
+                _session_n_calls = _stats.get('total_entries', 0)
 
-            _cats = list(_stats.get('categories', {}).keys())
-            _cat_str = ", ".join(_cats[:4]) if _cats else "general"
-            _n_calls = _stats.get('total_entries', 0)
+                if _fact_texts:
+                    # Use first 2 captured facts as the session objectives descriptor
+                    _objectives = "; ".join([f.rstrip(".").strip() for f in _fact_texts[:2]])
+                    if len(_objectives) > 120:
+                        _objectives = _objectives[:117] + "..."
+                    _session_summary = f"{_objectives}. ({_session_n_calls} tool calls, {_cat_str})"
+                else:
+                    _session_summary = f"Voice session. {_session_n_calls} tool calls ({_cat_str})."
+                # Write session log to user's sessions/ dir (with 8s timeout)
+                await asyncio.wait_for(
+                    _session_writer.flush_session(_user_mem_dir, _session_summary, _fact_texts),
+                    timeout=8.0,
+                )
+                # Flush facts to store
+                if _mem_store is not None and _pending:
+                    await _mem_capture.flush_to_store(_mem_store)
+            except asyncio.TimeoutError:
+                logger.warning("[Memory] Session flush timed out — session log skipped")
+            except asyncio.CancelledError:
+                logger.warning("[Memory] Session flush cancelled — session log skipped")
+            except Exception as _e:
+                logger.error("[Memory] Session flush failed: %s", _e)
+            finally:
+                _mem_capture.reset_session()
 
-            if _fact_texts:
-                # Use first 2 captured facts as the session objectives descriptor
-                _objectives = "; ".join([f.rstrip(".").strip() for f in _fact_texts[:2]])
-                if len(_objectives) > 120:
-                    _objectives = _objectives[:117] + "..."
-                _summary = f"{_objectives}. ({_n_calls} tool calls, {_cat_str})"
-            else:
-                _summary = f"Voice session. {_n_calls} tool calls ({_cat_str})."
-            # Write session log to user's sessions/ dir (with 8s timeout)
-            await asyncio.wait_for(
-                _session_writer.flush_session(_user_mem_dir, _summary, _fact_texts),
-                timeout=8.0,
-            )
-            # Flush facts to store
-            if _mem_store is not None and _pending:
-                await _mem_capture.flush_to_store(_mem_store)
-        except asyncio.TimeoutError:
-            logger.warning("[Memory] Session flush timed out — session log skipped")
-        except Exception as _e:
-            logger.error("[Memory] Session flush failed: %s", _e)
-        finally:
-            _mem_capture.reset_session()
+        # Save session summary to SQLite for cross-session semantic recall (recallSessions tool)
+        if _MEM_AVAILABLE and _mem_store is not None:
+            try:
+                _tool_summary = _session_summary
+                _tool_topics = list(_stats.get("categories", {}).keys()) if "_stats" in locals() else []
+                _session_msg_count = len(ctx.chat_ctx.messages) if hasattr(ctx, "chat_ctx") else 0
+                if _tool_summary:
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            _mem_store.save_session_summary,
+                            session_id,
+                            _tool_summary,
+                            _tool_topics,
+                            _session_msg_count,
+                            _user_id,
+                        )
+                    )
+                    logger.info("[SessionSummary] Queued save for session_id=%r", session_id)
+            except Exception as _ss_exc:
+                logger.warning("[SessionSummary] Failed to queue summary save: %s", _ss_exc)
 
-    # Save session summary to SQLite for cross-session semantic recall (recallSessions tool)
-    if _MEM_AVAILABLE and _mem_store is not None:
-        try:
-            _tool_summary = locals().get("_summary", "")
-            _tool_topics = list(_stats.get("categories", {}).keys()) if "_stats" in locals() else []
-            _msg_count = len(ctx.chat_ctx.messages) if hasattr(ctx, "chat_ctx") else 0
-            if _tool_summary:
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        _mem_store.save_session_summary,
+        cleared_count = clear_session_memory(session_id)
+        logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+
+        # Persist session facts and session lifecycle rows to PostgreSQL.
+        # Uses asyncio.shield() so CancelledError from the outer coroutine does not
+        # abort these awaits mid-write — we need them to complete even during cancellation.
+        if settings.postgres_url:
+            try:
+                await asyncio.shield(
+                    _flush_facts_to_db(session_id, settings.postgres_url, user_id=_user_id or "_default")
+                )
+            except asyncio.CancelledError:
+                pass  # shield absorbs cancel — flush was still dispatched
+            except Exception as _pge:
+                logger.warning("[SessionCleanup] flush_facts_to_db failed: %s", _pge)
+            try:
+                await asyncio.shield(
+                    _pg_logger.log_session_end(
                         session_id,
-                        _tool_summary,
-                        _tool_topics,
-                        _msg_count,
                         _user_id,
+                        _session_summary or None,
+                        _session_msg_count,
+                        _session_n_calls,
                     )
                 )
-                logger.info("[SessionSummary] Queued save for session_id=%r", session_id)
-        except Exception as _ss_exc:
-            logger.warning("[SessionSummary] Failed to queue summary save: %s", _ss_exc)
+            except asyncio.CancelledError:
+                pass  # shield absorbs cancel — log_session_end was still dispatched
+            except Exception as _pge:
+                logger.warning("[SessionCleanup] log_session_end failed: %s", _pge)
 
-    cleared_count = clear_session_memory(session_id)
-    logger.info(f"Cleared {cleared_count} session memory entries for {session_id}")
+        # pgvector pool is a worker-lifetime singleton — not closed per session
 
-    # Persist session facts to PostgreSQL before clearing them in memory
-    if settings.postgres_url:
-        await _flush_facts_to_db(session_id, settings.postgres_url, user_id=_user_id or "_default")
-        await _pg_logger.log_session_end(
-            session_id,
-            _user_id,
-            locals().get("_summary"),
-            locals().get("_msg_count", 0),
-            locals().get("_n_calls", 0),
-        )
+        cleared_facts = _clear_facts(session_id)
+        if cleared_facts:
+            logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
 
-    # pgvector pool is a worker-lifetime singleton — not closed per session
-
-    cleared_facts = _clear_facts(session_id)
-    if cleared_facts:
-        logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
-
-    logger.info("Agent session ended")
+        logger.info("Agent session ended")
 
 
 def main():

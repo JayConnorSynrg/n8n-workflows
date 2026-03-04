@@ -12,6 +12,11 @@ Architecture:
 import asyncio
 import logging
 import time
+import os as _os
+
+# Stable identity for this Railway replica — used to tag PG circuit breaker writes
+# so ops can trace which worker tripped a service's auth breaker.
+_WORKER_ID = _os.environ.get("RAILWAY_REPLICA_ID", _os.getenv("HOSTNAME", "local"))
 
 from ..utils.room_publisher import (
     publish_tool_start,
@@ -43,8 +48,43 @@ _SLUG_CACHE_TTL = 300  # 5 minutes
 
 # Circuit breaker: track slugs that failed resolution or execution.
 # After _CB_MAX_FAILURES attempts, short-circuit with "tool does not exist".
-_failed_slugs: dict[str, int] = {}  # slug -> failure count
+# Change 2: dict maps slug -> (failure_count, first_failure_timestamp) for TTL auto-expiry.
+_failed_slugs: dict[str, tuple] = {}  # slug -> (count, timestamp)
 _CB_MAX_FAILURES = 2
+_FAILED_SLUG_TTL_SECS = 300.0  # 5 minutes — auto-expire transient circuit breaks
+
+
+def _is_slug_failed(slug: str) -> bool:
+    """Check if a slug is circuit-broken; auto-expires stale entries (Change 2)."""
+    if slug not in _failed_slugs:
+        return False
+    count, ts = _failed_slugs[slug]
+    if time.time() - ts > _FAILED_SLUG_TTL_SECS:
+        del _failed_slugs[slug]
+        return False
+    return count >= _CB_MAX_FAILURES
+
+
+def _record_slug_failure(slug: str) -> int:
+    """Increment failure counter for a slug. Returns new count (Change 2)."""
+    if slug in _failed_slugs:
+        count, ts = _failed_slugs[slug]
+        _failed_slugs[slug] = (count + 1, ts)
+        return count + 1
+    else:
+        _failed_slugs[slug] = (1, time.time())
+        return 1
+
+
+def _get_slug_failure_count(slug: str) -> int:
+    """Return current failure count for a slug (0 if not tracked or TTL expired)."""
+    if slug not in _failed_slugs:
+        return 0
+    count, ts = _failed_slugs[slug]
+    if time.time() - ts > _FAILED_SLUG_TTL_SECS:
+        del _failed_slugs[slug]
+        return 0
+    return count
 
 # Auth failure tracker: services where OAuth token is confirmed expired.
 # Key = toolkit name (e.g. "microsoft_teams"), value = re-auth URL or True.
@@ -97,6 +137,19 @@ _SERVICE_PREFIXES: list[tuple[str, str]] = []
 
 # Retry delays (seconds) for transient 429/5xx errors — 2 attempts before giving up
 _RETRY_DELAYS = (1.0, 2.0)
+
+# Slug index build timestamp — used for smart TTL to skip unnecessary rebuilds.
+_slug_index_built_at: float = 0.0
+_SLUG_INDEX_MIN_AGE_SECS = 1800.0  # 30 minutes — skip rebuild if index is fresh
+
+# Staleness flag — set when a newly-discovered service is absent from the slug map.
+# Checked in ensure_slug_index() to trigger a rebuild on the next call.
+_needs_index_rebuild: bool = False
+
+# Account expiry cache — populated when a 401 fires so subsequent calls can detect
+# near-expiry accounts proactively before hitting the API.
+# Format: account_id -> epoch float (time.time() when 401 was received)
+_account_expiry: dict[str, float] = {}
 
 # Tier constants for resolution confidence
 _TIER_EXACT = 1
@@ -165,6 +218,31 @@ def is_slug_cached(slug: str) -> bool:
     if ts and (time.time() - ts) < _SLUG_CACHE_TTL:
         return True
     return False
+
+
+def _sanitize_error(exc: Exception, context: str = "") -> str:
+    """Map exceptions to user-friendly messages without leaking internals.
+
+    Prevents raw SDK tracebacks, internal URLs, or long error strings from
+    being surfaced to the LLM or voice output.
+    """
+    msg = str(exc)
+    if isinstance(exc, asyncio.TimeoutError):
+        return f"Composio API timed out{f' ({context})' if context else ''}"
+    if isinstance(exc, (ConnectionError, OSError)) or "connection" in msg.lower():
+        return "Network error connecting to Composio API"
+    if "401" in msg or "unauthorized" in msg.lower():
+        return f"Composio auth expired{f' for {context}' if context else ''} — use manageConnections to reconnect"
+    if "403" in msg or "forbidden" in msg.lower():
+        return f"Permission denied{f' for {context}' if context else ''}"
+    if "rate limit" in msg.lower() or "429" in msg:
+        return "Composio rate limit reached — please wait a moment"
+    if "timeout" in msg.lower():
+        return f"Request timed out{f' ({context})' if context else ''}"
+    # Trim long exception messages to prevent leaking large payloads
+    if len(msg) > 200:
+        msg = msg[:200] + "..."
+    return msg if msg else f"Unknown error{f' ({context})' if context else ''}"
 
 
 def _extract_items_from_response(response) -> list:
@@ -366,7 +444,7 @@ def _build_slug_index(client, user_id: str = "") -> None:
     4. Auto-generate prefix map from loaded slugs (zero hardcoded lists)
     5. No config file or env var — 100% driven by Composio state
     """
-    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params, _slug_schemas
+    global _canonical_slugs, _slug_index_built, _slug_to_toolkit, _slugs_by_service, _SERVICE_PREFIXES, _slug_required_params, _slug_schemas, _slug_index_built_at, _needs_index_rebuild
 
     if _slug_index_built:
         return
@@ -452,6 +530,8 @@ def _build_slug_index(client, user_id: str = "") -> None:
                 _SERVICE_ALIASES[short] = toolkit
 
     _slug_index_built = True
+    _slug_index_built_at = time.time()  # Change 8: record build time for smart TTL
+    _needs_index_rebuild = False  # Change 4: clear staleness flag after fresh build
 
     logger.info(
         f"Composio: Slug index built — {len(_canonical_slugs)} tools "
@@ -920,8 +1000,21 @@ def prewarm_slug_index() -> str:
 
 
 async def ensure_slug_index() -> None:
-    """Build slug index if not already built. Safe to call multiple times."""
-    if _slug_index_built:
+    """Build slug index if not already built. Safe to call multiple times.
+
+    Change 8: Skips rebuild if the index is fresh (< 30 min old) and no staleness
+    flag is set, preventing unnecessary API hammering on busy instances.
+    Change 4: Rebuilds if _needs_index_rebuild is True (new service discovered).
+    """
+    # Change 8: index is fresh and no forced rebuild needed — skip
+    if (
+        _slug_index_built
+        and _slug_index_built_at > 0
+        and time.time() - _slug_index_built_at < _SLUG_INDEX_MIN_AGE_SECS
+        and not _needs_index_rebuild
+    ):
+        return
+    if _slug_index_built and not _needs_index_rebuild:
         return
     from ..config import get_settings
     settings = get_settings()
@@ -929,7 +1022,13 @@ async def ensure_slug_index() -> None:
         return
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
-    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Composio: ensure_slug_index timed out after 30s — index may be incomplete")
 
 
 async def refresh_slug_index() -> str:
@@ -941,8 +1040,10 @@ async def refresh_slug_index() -> str:
 
     Returns the updated tool catalog string.
     """
-    global _slug_index_built, _slug_required_params, _slug_schemas
+    global _slug_index_built, _slug_required_params, _slug_schemas, _slug_index_built_at, _needs_index_rebuild
     _slug_index_built = False
+    _slug_index_built_at = 0.0  # Change 8: reset TTL so next ensure_slug_index forces rebuild
+    _needs_index_rebuild = False  # Change 4: explicit refresh satisfies staleness flag
     _failed_slugs.clear()
     _service_auth_failed.clear()  # Re-auth completed — clear auth circuit breakers
     _initiated_connections.clear()
@@ -957,7 +1058,13 @@ async def refresh_slug_index() -> str:
 
     client = _get_client(settings)
     user_id = settings.composio_user_id.strip()
-    await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Composio: refresh_slug_index timed out after 30s — partial index may be used")
 
     logger.info("Composio: Slug index refreshed (mid-session rebuild)")
     return get_tool_catalog()
@@ -1007,7 +1114,10 @@ async def get_tool_schema(tool_slug: str) -> str:
                 pass
         return None
 
-    tool_obj = await asyncio.to_thread(_fetch_schema)
+    try:
+        tool_obj = await asyncio.wait_for(asyncio.to_thread(_fetch_schema), timeout=30)
+    except asyncio.TimeoutError:
+        return f"Composio API timed out after 30s fetching schema for {tool_slug}"
 
     if not tool_obj:
         return f"Could not find schema for {tool_slug}. Check the slug is correct against the catalog in your instructions."
@@ -1081,9 +1191,14 @@ async def _refresh_preferred_account(service_key: str) -> None:
         client = _get_client(settings)
         user_id = settings.composio_user_id.strip()
 
-        accts_resp = await asyncio.to_thread(
-            lambda: client.connected_accounts.list(user_ids=[user_id])
-        )
+        try:
+            accts_resp = await asyncio.wait_for(
+                asyncio.to_thread(lambda: client.connected_accounts.list(user_ids=[user_id])),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[Auth refresh] connected_accounts.list timed out after 30s for {service_key}")
+            return
         all_accts = _extract_items_from_response(accts_resp)
 
         # Filter to ACTIVE accounts for this toolkit only
@@ -1130,7 +1245,105 @@ async def _refresh_preferred_account(service_key: str) -> None:
         logger.warning(f"[Auth refresh] Failed to refresh preferred account for {service_key}: {e}")
 
 
-async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
+async def _pg_mark_service_failed(service: str, reason: str) -> None:
+    """Write service circuit breaker failure to PostgreSQL (cross-worker visibility).
+
+    Fire-and-forget — never raises. Uses a single short-lived connection because
+    these are low-frequency admin ops (one write per 401 event, not per tool call).
+    """
+    from ..config import get_settings
+    try:
+        postgres_url = get_settings().postgres_url or _os.environ.get("POSTGRES_URL", "")
+    except Exception:
+        postgres_url = _os.environ.get("POSTGRES_URL", "")
+    if not postgres_url:
+        return
+    try:
+        import asyncpg  # type: ignore[import]
+        conn = await asyncio.wait_for(asyncpg.connect(postgres_url), timeout=3)
+        try:
+            await conn.execute(
+                """INSERT INTO service_circuit_breaker
+                       (service, is_failed, failure_reason, failed_at, worker_id, updated_at)
+                   VALUES ($1, TRUE, $2, NOW(), $3, NOW())
+                   ON CONFLICT (service) DO UPDATE
+                       SET is_failed = TRUE,
+                           failure_reason = $2,
+                           failed_at = NOW(),
+                           worker_id = $3,
+                           updated_at = NOW()""",
+                service, reason[:500], _WORKER_ID,
+            )
+        finally:
+            await conn.close()
+    except Exception:
+        pass  # Never block tool execution on PG write failure
+
+
+async def _pg_clear_service_cb(service: str) -> None:
+    """Clear service circuit breaker in PostgreSQL after successful reconnect."""
+    from ..config import get_settings
+    try:
+        postgres_url = get_settings().postgres_url or _os.environ.get("POSTGRES_URL", "")
+    except Exception:
+        postgres_url = _os.environ.get("POSTGRES_URL", "")
+    if not postgres_url:
+        return
+    try:
+        import asyncpg  # type: ignore[import]
+        conn = await asyncio.wait_for(asyncpg.connect(postgres_url), timeout=3)
+        try:
+            await conn.execute(
+                "UPDATE service_circuit_breaker SET is_failed=FALSE, updated_at=NOW(), worker_id=$2 WHERE service=$1",
+                service, _WORKER_ID,
+            )
+        finally:
+            await conn.close()
+    except Exception:
+        pass
+
+
+async def _pg_check_service_failed(service: str) -> bool:
+    """Check if any worker has marked this service as failed in PostgreSQL.
+
+    Returns True only when a record exists, is_failed=TRUE, and the failure
+    is younger than 5 minutes. Auto-expires stale rows in-place.
+    """
+    from ..config import get_settings
+    try:
+        postgres_url = get_settings().postgres_url or _os.environ.get("POSTGRES_URL", "")
+    except Exception:
+        postgres_url = _os.environ.get("POSTGRES_URL", "")
+    if not postgres_url:
+        return False
+    try:
+        import asyncpg  # type: ignore[import]
+        import datetime
+        conn = await asyncio.wait_for(asyncpg.connect(postgres_url), timeout=3)
+        try:
+            row = await conn.fetchrow(
+                "SELECT is_failed, failed_at FROM service_circuit_breaker WHERE service=$1",
+                service,
+            )
+            if row and row["is_failed"]:
+                age = (
+                    datetime.datetime.now(datetime.timezone.utc) - row["failed_at"]
+                ).total_seconds()
+                if age < 300:
+                    return True
+                # TTL expired — clear stale breaker so the next real call can proceed
+                await conn.execute(
+                    "UPDATE service_circuit_breaker SET is_failed=FALSE WHERE service=$1",
+                    service,
+                )
+        finally:
+            await conn.close()
+    except Exception:
+        pass
+    return False
+
+
+async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool = False) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
     Runs the synchronous SDK call in a thread executor to avoid blocking
@@ -1143,6 +1356,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     Args:
         tool_slug: Tool identifier (e.g. MICROSOFT_TEAMS_SEND_MESSAGE)
         arguments: Dict of arguments matching the tool's schema
+        _is_retry: Internal flag — True on the one auto-retry after 401 account rotation.
+                   Prevents infinite retry loops. Do not set this externally.
 
     Returns:
         Voice-friendly result string
@@ -1167,9 +1382,9 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             f"Do not call {slug_key} directly — it is not an action tool."
         )
 
-    # Circuit breaker: check if this slug has failed too many times
-    if _failed_slugs.get(slug_key, 0) >= _CB_MAX_FAILURES:
-        logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_failed_slugs[slug_key]} failures)")
+    # Circuit breaker: check if this slug has failed too many times (Change 2: TTL-aware check)
+    if _is_slug_failed(slug_key):
+        logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_get_slug_failure_count(slug_key)} failures)")
         return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
 
     # Auth circuit breaker: check if this service's OAuth is known to be expired
@@ -1182,6 +1397,21 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
             f"Do not retry {service_display} tools."
         )
+
+    # Cross-worker circuit breaker check: another worker may have tripped the breaker
+    # for this service after a 401. Only runs when local state is clear (fast-path above
+    # already short-circuited if this worker knows the service is failed).
+    if service_key and not _service_auth_failed.get(service_key):
+        if await _pg_check_service_failed(service_key):
+            _service_auth_failed[service_key] = True  # sync local state to avoid repeat PG reads
+            service_display = service_key.replace("_", " ").title()
+            logger.warning(
+                f"Composio: Auth circuit breaker OPEN (cross-worker) for service={service_key}"
+            )
+            return (
+                f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
+                f"Do not retry {service_display} tools."
+            )
 
     # INITIATED expiry check: auth link sent but service still not ACTIVE after 8 min
     if service_key and service_key in _initiated_connections:
@@ -1206,7 +1436,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     # Build slug index on first call (discovers connected accounts + loads tool slugs)
     if not _slug_index_built:
         user_id = settings.composio_user_id.strip()
-        await asyncio.to_thread(lambda: _build_slug_index(client, user_id))
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Composio: _build_slug_index timed out after 30s in execute_composio_tool")
 
     # Two-stage slug resolution:
     # Stage 1: Fast local resolution with confidence tier
@@ -1217,7 +1453,14 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     if tier >= _TIER_WORDS and fast_match is not None:
         # Tier 4-6: fuzzy match — verify/override via SDK search
         logger.info(f"Composio: Tier {tier} match for {tool_slug} → {fast_match}, verifying via SDK search")
-        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        try:
+            sdk_match = await asyncio.wait_for(
+                asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug)),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio: SDK search timed out for {tool_slug} — using tier {tier} match")
+            sdk_match = None
         if sdk_match:
             resolved_slug = sdk_match
             logger.info(f"Composio: SDK search overrode tier {tier}: {tool_slug} → {sdk_match}")
@@ -1226,18 +1469,25 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
     elif fast_match is None:
         # No local match at all — SDK search as last resort
         logger.info(f"Composio: No local match for {tool_slug}, trying SDK search")
-        sdk_match = await asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug))
+        try:
+            sdk_match = await asyncio.wait_for(
+                asyncio.to_thread(lambda: _sdk_search_slug(client, tool_slug)),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio: SDK search timed out for {tool_slug}")
+            sdk_match = None
         if sdk_match:
             resolved_slug = sdk_match
             logger.info(f"Composio: SDK search found: {tool_slug} → {sdk_match}")
         else:
-            # Complete failure — return error with alternatives
-            _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+            # Complete failure — record via helper (Change 2: TTL-aware)
+            new_count = _record_slug_failure(slug_key)
             alternatives = _get_alternative_slugs(tool_slug)
             alt_text = " or ".join(alternatives[:3]) if alternatives else "none found"
             logger.warning(
                 f"Composio: Slug unresolvable: {tool_slug} "
-                f"(failure {_failed_slugs[slug_key]}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
+                f"(failure {new_count}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
             )
             return (
                 f"Tool {tool_slug} not found. Did you mean: {alt_text}? "
@@ -1275,7 +1525,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                     return None
                 return None
 
-            raw_tool = await asyncio.to_thread(_fetch_raw_for_schema)
+            raw_tool = await asyncio.wait_for(asyncio.to_thread(_fetch_raw_for_schema), timeout=30)
             if raw_tool is not None:
                 try:
                     input_schema = raw_tool.input_parameters
@@ -1331,17 +1581,42 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
         _service_key_for_acct = (_slug_to_toolkit.get(resolved_slug) or "").lower()
         _acct_id = _preferred_account_by_toolkit.get(_service_key_for_acct) or None
 
+        # Change 6: proactive near-expiry check before the call
+        if _acct_id and time.time() > _account_expiry.get(_acct_id, float("inf")) - 60:
+            logger.warning(
+                f"[Composio] Account {_acct_id} for {_service_key_for_acct} is near/past expiry — "
+                f"attempting proactive rotation"
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(lambda: None),  # placeholder — rotation happens in _refresh_preferred_account
+                    timeout=10,
+                )
+                await asyncio.wait_for(
+                    _refresh_preferred_account(_service_key_for_acct),
+                    timeout=10,
+                )
+                _acct_id = _preferred_account_by_toolkit.get(_service_key_for_acct) or _acct_id
+            except (asyncio.TimeoutError, Exception) as _rot_err:
+                logger.debug(f"[Composio] Proactive rotation failed: {_rot_err}")
+
         result = None
         for _attempt in range(len(_RETRY_DELAYS) + 1):
-            result = await asyncio.to_thread(
-                lambda: client.tools.execute(
-                    resolved_slug,
-                    arguments,
-                    user_id=user_id,
-                    connected_account_id=_acct_id,
-                    dangerously_skip_version_check=True,
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        lambda: client.tools.execute(
+                            resolved_slug,
+                            arguments,
+                            user_id=user_id,
+                            connected_account_id=_acct_id,
+                            dangerously_skip_version_check=True,
+                        )
+                    ),
+                    timeout=30,
                 )
-            )
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"Composio API timed out after 30s for {resolved_slug}")
             if result.get("successful"):
                 break
             # Check if this is a retryable transient error (429 or 5xx)
@@ -1365,7 +1640,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
             data = result.get("data", {})
             logger.info(f"[TOOL_CALL] Composio OK: {resolved_slug} data_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__} ({duration_ms}ms)")
             cache_slug(resolved_slug)
-            # Reset circuit breaker on success
+            # Reset circuit breaker on success (Change 2: use pop on dict)
             _failed_slugs.pop(slug_key, None)
             voice_result = _extract_voice_result(data, resolved_slug, tool_display)
             await publish_composio_event("composio.completed", resolved_slug, call_id, detail=voice_result[:80], duration_ms=duration_ms)
@@ -1514,6 +1789,11 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 # OAuth token expired (401) — attempt token refresh before circuit-breaking.
                 service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
                 service_display = service_key.replace("_", " ").title()
+
+                # Change 6: mark this account as expired in the expiry cache
+                if _acct_id:
+                    _account_expiry[_acct_id] = time.time()
+
                 _refresh_ok = False
                 try:
                     def _try_refresh():
@@ -1524,44 +1804,66 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                                 client.connected_accounts.refresh(acct.id)
                                 return True
                         return False
-                    _refresh_ok = await asyncio.to_thread(_try_refresh)
+                    _refresh_ok = await asyncio.wait_for(asyncio.to_thread(_try_refresh), timeout=30)
                     if _refresh_ok:
                         logger.info(f"Composio: Token refresh attempted for {service_key} — retrying tool once")
-                except Exception as _re:
+                except (asyncio.TimeoutError, Exception) as _re:
                     logger.debug(f"Composio: Token refresh attempt failed for {service_key}: {_re}")
 
                 if _refresh_ok:
                     # Retry once with a freshly refreshed token
                     try:
-                        _retry = await asyncio.to_thread(
-                            lambda: client.tools.execute(
-                                resolved_slug, arguments,
-                                user_id=user_id,
-                                connected_account_id=_acct_id,
-                                dangerously_skip_version_check=True,
-                            )
+                        _retry = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                lambda: client.tools.execute(
+                                    resolved_slug, arguments,
+                                    user_id=user_id,
+                                    connected_account_id=_acct_id,
+                                    dangerously_skip_version_check=True,
+                                )
+                            ),
+                            timeout=30,
                         )
                         if _retry.get("successful"):
                             _vr = _extract_voice_result(_retry.get("data", {}), resolved_slug, tool_display)
                             await publish_tool_completed(call_id, _vr[:100])
                             return _vr
-                    except Exception:  # nosec B110 — intentional fallthrough to circuit-break on retry failure
+                    except (asyncio.TimeoutError, Exception):  # nosec B110 — fallthrough to circuit-break
                         pass
+
+                # Change 7: rotate to the next best account and retry ONCE (only on first attempt).
+                # Do not rotate on _is_retry — prevents infinite rotation loop.
+                if not _is_retry and service_key and service_key in _preferred_account_by_toolkit:
+                    logger.warning(
+                        f"[Composio] 401 on {resolved_slug}, rotating account for {service_key}"
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            _refresh_preferred_account(service_key),
+                            timeout=10,
+                        )
+                    except (asyncio.TimeoutError, Exception) as _rot_err:
+                        logger.debug(f"[Composio] Account rotation failed for {service_key}: {_rot_err}")
+                    new_acct = _preferred_account_by_toolkit.get(service_key)
+                    if new_acct and new_acct != _acct_id:
+                        logger.info(
+                            f"[Composio] Rotated to account {new_acct} for {service_key} — retrying once"
+                        )
+                        return await execute_composio_tool(tool_slug, arguments, _is_retry=True)
 
                 # Refresh failed or retry still failed — circuit-break the service
                 _service_auth_failed[service_key] = True
-                _failed_slugs[slug_key] = _CB_MAX_FAILURES  # trip circuit breaker
+                asyncio.create_task(  # propagate failure to all workers via PG
+                    _pg_mark_service_failed(service_key, error_str[:200])
+                )
+                _failed_slugs[slug_key] = (
+                    _CB_MAX_FAILURES,
+                    _failed_slugs.get(slug_key, (0, time.time()))[1],
+                )  # trip circuit breaker (Change 2: preserve original timestamp)
                 logger.warning(
                     f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
                 )
-                # When auth error fires, try to switch to another connected account for this toolkit.
-                # (A second ACTIVE account may have a valid token — e.g. Teams with 4 connected accounts.)
-                if service_key and service_key in _preferred_account_by_toolkit:
-                    try:
-                        asyncio.create_task(_refresh_preferred_account(service_key))
-                    except Exception:
-                        pass
                 return (
                     f"The {service_display} connection needs to be re-authorized. "
                     f"Tell the user their {service_display} access has expired and they need to reconnect it. "
@@ -1574,7 +1876,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
                 # Do NOT circuit break — other tools on this service still work.
                 service_key = _slug_to_toolkit.get(resolved_slug, resolved_slug)
                 service_display = service_key.replace("_", " ").title()
-                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
                 logger.warning(
                     f"[TOOL_CALL] Composio PERMISSION (403): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
@@ -1595,7 +1897,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
             elif is_server_error:
                 # Server/infra error (5xx) — transient, increment but don't max out circuit breaker
-                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
                 logger.warning(f"[TOOL_CALL] Composio SERVER ERROR {status_code}: {resolved_slug} log_id={log_id}")
                 return (
                     f"The {tool_display} service returned a temporary error. "
@@ -1604,13 +1906,13 @@ async def execute_composio_tool(tool_slug: str, arguments: dict) -> str:
 
             else:
                 # Unknown error — suppress retries but don't claim auth issue
-                _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
+                _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
                 return f"I was not able to complete {tool_display} — the service returned an error. Do not retry this tool."
 
     except Exception as exc:
-        logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={exc}")
-        _failed_slugs[slug_key] = _failed_slugs.get(slug_key, 0) + 1
-        await publish_tool_error(call_id, str(exc)[:100])
+        logger.error(f"[TOOL_CALL] Composio ERROR: {resolved_slug} exception={_sanitize_error(exc, resolved_slug)}")
+        _record_slug_failure(slug_key)  # Change 2: TTL-aware counter
+        await publish_tool_error(call_id, _sanitize_error(exc, resolved_slug)[:100])
         return f"I was not able to run {tool_display} due to a connection error do not retry this tool"
 
     finally:
@@ -1644,8 +1946,13 @@ async def get_connected_services_status() -> str:
             def _fetch():
                 return client.connected_accounts.list(user_ids=[user_id])
 
-            response = await asyncio.to_thread(_fetch)
-            for account in _extract_items_from_response(response):
+            try:
+                response = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("Composio: get_connected_services_status timed out after 30s")
+                response = None
+
+            for account in (_extract_items_from_response(response) if response is not None else []):
                 toolkit_obj = getattr(account, "toolkit", None)
                 slug = getattr(toolkit_obj, "slug", None) if toolkit_obj else None
                 status = getattr(account, "status", None)
@@ -1666,8 +1973,29 @@ async def get_connected_services_status() -> str:
                     # Side-effect: keep auth failure state in sync with live data
                     if status in ("EXPIRED", "FAILED", "INACTIVE"):
                         _service_auth_failed[service_key] = True
+                        asyncio.create_task(  # mirror failure state to PG
+                            _pg_mark_service_failed(service_key, f"status={status}")
+                        )
                     elif status == "ACTIVE":
                         _service_auth_failed.pop(service_key, None)
+                        asyncio.create_task(  # clear PG breaker so other workers stop blocking
+                            _pg_clear_service_cb(service_key)
+                        )
+
+            # Change 4: detect newly-connected services not yet in slug index
+            global _needs_index_rebuild
+            for svc in live_statuses:
+                if (
+                    live_statuses[svc] == "ACTIVE"
+                    and svc not in {"composio", "composio_search", "other"}
+                    and svc not in _slugs_by_service
+                ):
+                    logger.warning(
+                        f"Composio: Service {svc!r} is ACTIVE but absent from slug index — "
+                        f"marking index for rebuild on next ensure_slug_index() call"
+                    )
+                    _needs_index_rebuild = True
+                    break
         except Exception as exc:
             logger.warning(f"Composio: Could not fetch live connection statuses: {exc}")
 
@@ -1849,13 +2177,16 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
 
     # --- Attempt 1: COMPOSIO_MANAGE_CONNECTIONS meta-tool ---
     try:
-        result = await asyncio.to_thread(_execute_meta_tool)
+        result = await asyncio.wait_for(asyncio.to_thread(_execute_meta_tool), timeout=30)
         if result.get("successful"):
             redirect_url = _extract_redirect_url_from_dict(result.get("data", {}))
             if redirect_url:
                 logger.info(f"Composio: Connection initiated via meta-tool for {service_lower}")
                 _initiated_connections[service_lower] = time.time()
                 _service_auth_failed.pop(service_lower, None)  # clear circuit breaker on fresh link
+                asyncio.create_task(  # clear PG breaker so other workers stop blocking
+                    _pg_clear_service_cb(service_lower)
+                )
                 return redirect_url, display_name
             status = (result.get("data", {}).get("response_data", {}) or {}).get("status", "")
             if not force_reauth and status in ("ACTIVE", "CONNECTED"):
@@ -1886,7 +2217,7 @@ async def initiate_service_connection(service: str, force_reauth: bool = False) 
 
     # --- Attempt 2: Direct SDK connected_accounts.initiate() ---
     try:
-        sdk_result = await asyncio.to_thread(_execute_sdk_direct)
+        sdk_result = await asyncio.wait_for(asyncio.to_thread(_execute_sdk_direct), timeout=30)
         # SDK returns an object; probe attributes for the redirect URL
         redirect_url = None
         for attr in ("redirect_url", "redirectUrl", "connectionUrl", "authUrl", "connection_url"):
@@ -2061,10 +2392,22 @@ async def batch_execute_composio_tools(tools: list) -> str:
     await publish_tool_executing(batch_call_id)
     start_ms = int(time.time() * 1000)
 
+    # Change 5: wrap each task with a per-task timeout so a single slow tool
+    # cannot block the entire batch indefinitely.
+    async def _with_batch_timeout(coro, slug: str):
+        try:
+            return await asyncio.wait_for(coro, timeout=45)
+        except asyncio.TimeoutError:
+            logger.warning(f"Composio batch: {slug} timed out after 45s")
+            return f"Tool {_friendly_name(slug)} timed out after 45s"
+
     tasks = [
-        execute_composio_tool(
-            tool_slug=t.get("tool_slug", ""),
-            arguments=t.get("arguments", {}),
+        _with_batch_timeout(
+            execute_composio_tool(
+                tool_slug=t.get("tool_slug", ""),
+                arguments=t.get("arguments", {}),
+            ),
+            t.get("tool_slug", "unknown"),
         )
         for t in tools
         if t.get("tool_slug")
