@@ -345,7 +345,7 @@ class SessionCache {
       const botId = this.sessionId.replace('_session', '');
 
       const response = await fetch(
-        `${SUPABASE_URL}/rest/v1/bot_state?bot_id=eq.${botId}&limit=1`,
+        `${SUPABASE_URL}/rest/v1/bot_state?bot_id=eq.${encodeURIComponent(botId)}&limit=1`,
         {
           headers: {
             'apikey': SUPABASE_ANON_KEY,
@@ -1321,17 +1321,16 @@ async function queryConversationHistory({ query_type, limit = 10, function_filte
  */
 async function queryUserAnalytics({ metric_type, time_range = 'week' }, connectionId) {
   try {
-    // Calculate time range
-    let intervalClause;
-    switch (time_range) {
-      case 'today': intervalClause = "NOW() - INTERVAL '1 day'"; break;
-      case 'week': intervalClause = "NOW() - INTERVAL '7 days'"; break;
-      case 'month': intervalClause = "NOW() - INTERVAL '30 days'"; break;
-      case 'all_time': intervalClause = "'1970-01-01'::timestamp"; break;
-      default: intervalClause = "NOW() - INTERVAL '7 days'";
-    }
+    // Map time_range to a safe interval string for parameterized query
+    const intervalMap = {
+      'today': '1 day',
+      'week': '7 days',
+      'month': '30 days',
+      'all_time': '36500 days'
+    };
+    const intervalStr = intervalMap[time_range] || '7 days';
 
-    let query, voiceResponse;
+    let query, queryParams, voiceResponse;
 
     switch (metric_type) {
       case 'session_summary':
@@ -1341,7 +1340,8 @@ async function queryUserAnalytics({ metric_type, time_range = 'week' }, connecti
                    COALESCE(AVG(session_duration_seconds), 0)::int as avg_duration_seconds,
                    COALESCE(SUM(tools_called), 0) as total_tools_called
                  FROM user_session_analytics
-                 WHERE started_at > ${intervalClause}`;
+                 WHERE started_at > NOW() - $1::interval`;
+        queryParams = [intervalStr];
         break;
 
       case 'tool_usage':
@@ -1349,9 +1349,10 @@ async function queryUserAnalytics({ metric_type, time_range = 'week' }, connecti
                    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
                    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 1) as success_rate
                  FROM tool_executions
-                 WHERE created_at > ${intervalClause}
+                 WHERE created_at > NOW() - $1::interval
                  GROUP BY function_name
                  ORDER BY call_count DESC`;
+        queryParams = [intervalStr];
         break;
 
       case 'training_progress':
@@ -1361,9 +1362,10 @@ async function queryUserAnalytics({ metric_type, time_range = 'week' }, connecti
                    ROUND(100.0 * SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as accuracy_pct,
                    ROUND(AVG(confidence_score)::numeric, 2) as avg_confidence
                  FROM training_metrics
-                 WHERE created_at > ${intervalClause} AND is_correct IS NOT NULL
+                 WHERE created_at > NOW() - $1::interval AND is_correct IS NOT NULL
                  GROUP BY topic
                  ORDER BY accuracy_pct DESC`;
+        queryParams = [intervalStr];
         break;
 
       case 'engagement_score':
@@ -1375,7 +1377,8 @@ async function queryUserAnalytics({ metric_type, time_range = 'week' }, connecti
                    COALESCE(SUM(documentation_queries), 0) as doc_queries,
                    ROUND(AVG(audio_quality_score)::numeric, 2) as avg_audio_quality
                  FROM user_session_analytics
-                 WHERE started_at > ${intervalClause}`;
+                 WHERE started_at > NOW() - $1::interval`;
+        queryParams = [intervalStr];
         break;
 
       default:
@@ -1386,7 +1389,7 @@ async function queryUserAnalytics({ metric_type, time_range = 'week' }, connecti
         };
     }
 
-    const result = await dbPool.query(query);
+    const result = await dbPool.query(query, queryParams);
 
     // Format voice-friendly response
     voiceResponse = formatAnalyticsForVoice(result.rows, metric_type, time_range);
@@ -1758,10 +1761,26 @@ const httpServer = http.createServer((req, res) => {
   }
 });
 
+// Shared-secret token for WebSocket connections (opt-in — backwards compatible)
+const RELAY_WS_SECRET = process.env.RELAY_WS_SECRET || null;
+
 // Attach WebSocket server to HTTP server (handles upgrade requests)
 const wss = new WebSocketServer({
   server: httpServer,
-  perMessageDeflate: false // Disable compression for lower latency
+  perMessageDeflate: false, // Disable compression for lower latency
+  verifyClient: ({ req }, done) => {
+    if (!RELAY_WS_SECRET) {
+      // Secret not configured — allow all connections (backwards compatible)
+      return done(true);
+    }
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const token = url.searchParams.get('token');
+    if (token !== RELAY_WS_SECRET) {
+      log('WARN', `WebSocket connection rejected — invalid or missing token from ${req.socket.remoteAddress}`);
+      return done(false, 401, 'Unauthorized');
+    }
+    done(true);
+  }
 });
 
 // Start HTTP server (handles both HTTP health checks and WebSocket upgrades)
