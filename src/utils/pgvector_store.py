@@ -178,42 +178,43 @@ async def pgvector_search(
     user_id: str = "_default",
     top_k: int = 15,
     source_filter: Optional[str] = None,
-) -> List[Tuple[str, str, float, str]]:
+    category: Optional[str] = None,
+) -> List[Tuple[str, str, float, str, object]]:
     """
     Semantic search using HNSW cosine similarity.
-    Returns list of (content, category, similarity_score, source).
+    Returns list of (content, category, similarity_score, source, created_at).
     similarity_score is in [0, 1] — higher = more similar.
+    created_at is a datetime object (TIMESTAMPTZ from Postgres).
     """
     if not _pool:
         return []
     try:
         vec_str = _vec_to_pg(query_embedding)
+        # Build WHERE clause dynamically based on optional filters
+        conditions = ["user_id = $2"]
+        params: list = [vec_str, user_id]
         if source_filter:
-            rows = await _pool.fetch(
-                """
-                SELECT content, category, source,
-                       1 - (embedding <=> $1::vector) AS similarity
-                FROM aio_memories
-                WHERE user_id = $2 AND source = $3
-                ORDER BY embedding <=> $1::vector
-                LIMIT $4
-                """,
-                vec_str, user_id, source_filter, top_k,
-            )
-        else:
-            rows = await _pool.fetch(
-                """
-                SELECT content, category, source,
-                       1 - (embedding <=> $1::vector) AS similarity
-                FROM aio_memories
-                WHERE user_id = $2
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-                """,
-                vec_str, user_id, top_k,
-            )
+            params.append(source_filter)
+            conditions.append(f"source = ${len(params)}")
+        if category is not None:
+            params.append(category)
+            conditions.append(f"category = ${len(params)}")
+        params.append(top_k)
+        limit_placeholder = f"${len(params)}"
+        where_clause = " AND ".join(conditions)
+        rows = await _pool.fetch(
+            f"""
+            SELECT content, category, source, created_at,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM aio_memories
+            WHERE {where_clause}
+            ORDER BY embedding <=> $1::vector
+            LIMIT {limit_placeholder}
+            """,  # nosec B608 — where_clause built from fixed strings + parameterised values only
+            *params,
+        )
         return [
-            (r["content"], r["category"] or "general", float(r["similarity"]), r["source"])
+            (r["content"], r["category"] or "general", float(r["similarity"]), r["source"], r["created_at"])
             for r in rows
         ]
     except Exception as e:

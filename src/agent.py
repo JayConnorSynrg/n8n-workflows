@@ -80,6 +80,7 @@ from .tools.agent_context_tool import (
     warm_session_cache,
     invalidate_session_cache,
     set_current_session_id,
+    set_current_user_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS
 from .tools.user_profile_tool import set_user_mem_dir as _set_profile_mem_dir
@@ -1960,6 +1961,9 @@ async def entrypoint(ctx: JobContext):
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
         set_current_session_id(session_id)
+        set_current_user_id(_user_id)
+        if _MEM_AVAILABLE and _mem_capture is not None:
+            _mem_capture.set_user_id(_user_id)
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
         # Initialize pg_logger pool once per session (idempotent — checks if already initialized)
         if settings.postgres_url:
@@ -2432,7 +2436,7 @@ async def entrypoint(ctx: JobContext):
 
     # Persist session facts to PostgreSQL before clearing them in memory
     if settings.postgres_url:
-        await _flush_facts_to_db(session_id, settings.postgres_url)
+        await _flush_facts_to_db(session_id, settings.postgres_url, user_id=_user_id or "_default")
         await _pg_logger.log_session_end(
             session_id,
             _user_id,

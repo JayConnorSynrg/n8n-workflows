@@ -71,6 +71,19 @@ _CATEGORY_PATTERNS = [
 # Module-level list — reset each session via reset_session()
 _pending_facts: list[tuple[str, str]] = []  # (text, category)
 
+# Module-level user_id — set per session via set_user_id(), consumed by flush_to_store()
+_user_id: Optional[str] = None
+
+
+def set_user_id(user_id: Optional[str]) -> None:
+    """Set the active user ID for this session's captured facts.
+
+    Call this at session start after _user_id is resolved in agent.py,
+    so that flush_to_store() can partition memories to the correct user.
+    """
+    global _user_id
+    _user_id = user_id
+
 
 def reset_session() -> None:
     """Clear the pending facts queue. Call at session start."""
@@ -146,7 +159,7 @@ async def flush_to_store(memory_store_module) -> list[str]:
 
     stored: list[str] = []
     for fact_text, cat in _pending_facts:
-        result = memory_store_module.store(fact_text, category=cat, source="auto")
+        result = memory_store_module.store(fact_text, category=cat, source="auto", user_id=_user_id)
         if result:
             stored.append(fact_text)
             logger.info("[Capture] Stored fact: [%s] %.60s...", cat, fact_text)

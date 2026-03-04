@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 # rather than falling back to the generic "livekit-agent" string.
 _current_session_id: Optional[str] = None
 
+# Module-level user ID set by agent at session start alongside session_id.
+# Consumed by deep_store_tool and any other tool that needs to partition
+# data by user without threading user_id through every call.
+_current_user_id: Optional[str] = None
+
 
 def set_current_session_id(session_id: str) -> None:
     """Set the active session ID for this module.
@@ -43,6 +48,18 @@ def set_current_session_id(session_id: str) -> None:
     global _current_session_id
     _current_session_id = session_id
     logger.debug(f"agent_context_tool: active session_id set to {session_id!r}")
+
+
+def set_current_user_id(user_id: Optional[str]) -> None:
+    """Set the active user ID for this module.
+
+    Called by the agent entrypoint immediately after set_current_session_id()
+    so that tools relying on _current_user_id (e.g. deep_store_tool) receive
+    the correct per-user partition key without requiring callers to pass it.
+    """
+    global _current_user_id
+    _current_user_id = user_id
+    logger.debug(f"agent_context_tool: active user_id set to {user_id!r}")
 
 
 QueryType = Literal[

@@ -386,19 +386,24 @@ def store(
                 )
                 conn.commit()
             logger.debug("[Memory] Stored: [%s] %.60s...", category, text)
-            # Dual-write to pgvector for HNSW-indexed semantic search
+            # Dual-write to pgvector for HNSW-indexed semantic search.
+            # _is_near_duplicate() reads from SQLite (last 100 rows). Since the
+            # SQLite INSERT above has already committed by this point, the guard
+            # includes the just-inserted row — intentional; deduplicates from
+            # the full combined history before firing the async pgvector write.
             if _PGVECTOR_AVAILABLE and _pgvector.is_available() and embedding is not None:
-                asyncio.ensure_future(
-                    _pgvector.pgvector_save(
-                        content=text,
-                        embedding=embedding if isinstance(embedding, list) else list(embedding),
-                        user_id=user_id or "_default",
-                        session_id=session_id,
-                        category=category,
-                        source="capture",
-                        importance=importance,
+                if not _is_near_duplicate(embedding):
+                    asyncio.ensure_future(
+                        _pgvector.pgvector_save(
+                            content=text,
+                            embedding=embedding if isinstance(embedding, list) else list(embedding),
+                            user_id=user_id or "_default",
+                            session_id=session_id,
+                            category=category,
+                            source="capture",
+                            importance=importance,
+                        )
                     )
-                )
             return entry_id
         except Exception as exc:
             logger.error("[Memory] Store error: %s", exc)
@@ -548,6 +553,7 @@ def _search_via_pgvector(
                         query_embedding=query_embedding,
                         user_id=user_id or "_default",
                         top_k=top_k * 3,
+                        category=category,
                     ),
                 )
                 pg_rows = future.result(timeout=5.0)
@@ -557,6 +563,7 @@ def _search_via_pgvector(
                     query_embedding=query_embedding,
                     user_id=user_id or "_default",
                     top_k=top_k * 3,
+                    category=category,
                 )
             )
 
@@ -582,9 +589,10 @@ def _search_via_pgvector(
 
         # Build content→vector_score map from pgvector results
         # content string is the merge key
-        pg_by_content: dict[str, tuple[float, str, str]] = {}
-        for content_text, cat, sim, src in pg_rows:
-            pg_by_content[content_text] = (sim, cat or "general", src)
+        # Row shape: (content, category, similarity, source, created_at)
+        pg_by_content: dict[str, tuple[float, str, str, object]] = {}
+        for content_text, cat, sim, src, row_created_at in pg_rows:
+            pg_by_content[content_text] = (sim, cat or "general", src, row_created_at)
 
         # BM25 keyword search from SQLite FTS5 — returns {sqlite_id: bm25_score}
         text_results_by_id = _bm25_search(query, top_k * 4, category)
@@ -626,12 +634,20 @@ def _search_via_pgvector(
         for final_score, content_text in top_merged:
             pg_meta = pg_by_content.get(content_text)
             cat = pg_meta[1] if pg_meta else "general"
+            raw_created_at = pg_meta[3] if pg_meta else None
+            if raw_created_at is not None:
+                try:
+                    created_at_epoch = int(raw_created_at.timestamp())
+                except (AttributeError, TypeError, ValueError):
+                    created_at_epoch = 0
+            else:
+                created_at_epoch = 0
             results.append({
                 "id": f"pgv:{hash(content_text) & 0xFFFFFFFF}",
                 "text_safe": _escape_for_prompt(content_text),
                 "category": cat,
                 "score": round(final_score, 4),
-                "created_at": 0,
+                "created_at": created_at_epoch,
             })
 
         return results

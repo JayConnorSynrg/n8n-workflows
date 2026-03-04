@@ -71,11 +71,17 @@ async def deep_store_async(
         if _AGENT_CONTEXT_AVAILABLE and _agent_context_tool is not None
         else None
     ) or ""
+    _uid = (
+        _agent_context_tool._current_user_id
+        if _AGENT_CONTEXT_AVAILABLE and _agent_context_tool is not None
+        else None
+    ) or "_default"
     entry_id = await asyncio.to_thread(
         _memory_store.deep_store_save,
         content,
         label or "unlabeled",
         _sid,
+        _uid,
     )
 
     if entry_id:

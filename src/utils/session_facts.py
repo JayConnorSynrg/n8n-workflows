@@ -67,12 +67,24 @@ def clear_facts(session_id: str) -> int:
     return count
 
 
-async def flush_facts_to_db(session_id: str, postgres_url: Optional[str]) -> None:
+async def flush_facts_to_db(
+    session_id: str,
+    postgres_url: Optional[str],
+    user_id: str = "_default",
+) -> None:
     """Persist all in-memory facts for a session to the session_facts_log table.
 
     Uses a single asyncpg connection (no pool) — this is a one-shot flush at
     session end.  Silently skips if postgres_url is not set, there are no facts,
     or any DB error occurs.  Never raises.
+
+    TODO(batch): Replace the per-fact loop with a single unnest-based batch:
+        INSERT INTO session_facts_log (session_id, user_id, key, value, created_at)
+        SELECT $1, $2, unnest($3::text[]), unnest($4::text[]), NOW()
+        ON CONFLICT (session_id, key) DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
+    The ON CONFLICT clause prevents executemany() from being straightforward here
+    because each row needs individual conflict handling unless the whole batch can
+    use the same DO UPDATE SET clause (which it can — all rows share the same target).
     """
     if not postgres_url:
         return
@@ -84,17 +96,18 @@ async def flush_facts_to_db(session_id: str, postgres_url: Optional[str]) -> Non
 
     try:
         import asyncpg  # type: ignore
-        conn = await asyncpg.connect(postgres_url, command_timeout=8)
+        conn = await asyncpg.connect(postgres_url, command_timeout=8, ssl='require')
         try:
             for key, value in facts.items():
                 await conn.execute(
                     """
-                    INSERT INTO session_facts_log (session_id, key, value, created_at)
-                    VALUES ($1, $2, $3, NOW())
+                    INSERT INTO session_facts_log (session_id, user_id, key, value, created_at)
+                    VALUES ($1, $2, $3, $4, NOW())
                     ON CONFLICT (session_id, key)
                     DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
                     """,
                     session_id,
+                    user_id,
                     key,
                     str(value),
                 )

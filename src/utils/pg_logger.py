@@ -24,6 +24,8 @@ _pg_available = False
 async def init_pool(postgres_url: str) -> None:
     """Initialize asyncpg connection pool. Call once in prewarm()."""
     global _pool, _pg_available
+    if _pool is not None:
+        return
     if not postgres_url:
         logger.info("[PgLogger] POSTGRES_URL not set — conversation logging disabled")
         return
@@ -34,6 +36,7 @@ async def init_pool(postgres_url: str) -> None:
             min_size=1,
             max_size=3,
             command_timeout=5,
+            ssl='require',
         )
         _pg_available = True
         logger.info("[PgLogger] Connection pool initialized — conversation logging active")
