@@ -913,7 +913,7 @@ def prewarm(proc: JobProcess):
                     _loop.close()
             _t = _threading.Thread(target=_pgvector_startup, daemon=True)
             _t.start()
-            _t.join(timeout=120)
+            _t.join(timeout=8)  # Short join — allow IPC handshake to complete; backfill continues as daemon
 
 
 async def entrypoint(ctx: JobContext):
