@@ -896,18 +896,6 @@ def prewarm(proc: JobProcess):
                                 logger.info(f"pgvector migration: {_migrated} historical memories migrated")
                         except Exception as _me:
                             logger.warning(f"pgvector migration: {_me}")
-                        # Backfill raw conversation_log text -> pgvector embeddings
-                        try:
-                            from .utils.pgvector_migration import backfill_conversation_log as _backfill
-                            _postgres_url = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL", "")
-                            if _postgres_url:
-                                _bf_count = _loop.run_until_complete(
-                                    _backfill(_postgres_url, _pgvector._pool)
-                                )
-                                if _bf_count > 0:
-                                    logger.info(f"pgvector backfill: {_bf_count} conversation turns embedded from history")
-                        except Exception as _bfe:
-                            logger.warning(f"pgvector backfill error: {_bfe}")
                 except Exception as _e:
                     logger.warning(f"pgvector: startup test FAILED: {_e}")
                 finally:

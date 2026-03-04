@@ -1001,6 +1001,21 @@ def save_session_summary(
                 "[SessionSummary] Saved session_id=%r user=%r msgs=%d",
                 session_id, user_id, message_count,
             )
+            # Dual-write to pgvector for unified semantic search across all memory types
+            if _PGVECTOR_AVAILABLE and _pgvector.is_available() and embedding is not None:
+                asyncio.ensure_future(
+                    _pgvector.pgvector_save(
+                        content=summary,
+                        embedding=embedding if isinstance(embedding, list) else list(embedding),
+                        user_id=user_id,
+                        session_id=session_id,
+                        source="session_summary",
+                        label=f"Session {session_id[:8]}",
+                        category="session",
+                        importance=0.7,
+                        metadata={"topics": topics or [], "message_count": message_count},
+                    )
+                )
             return True
         except Exception as exc:
             logger.error("[SessionSummary] Save error: %s", exc)

@@ -447,7 +447,7 @@ async def recall_sessions_async(
     query: str,
     limit: int = 3,
 ) -> str:
-    """Semantic search over past session summaries stored in SQLite."""
+    """Semantic search over past session summaries — pgvector HNSW first, SQLite fallback."""
     import asyncio as _asyncio
     call_id = await publish_tool_start("recallSessions", {"query": query[:60]})
     await publish_tool_executing(call_id)
@@ -459,12 +459,46 @@ async def recall_sessions_async(
         return "Session memory is not available right now."
 
     try:
-        results = await _asyncio.to_thread(
-            _memory_store.search_session_summaries,
-            query,
-            "_default",
-            limit,
-        )
+        results = []
+
+        # Try pgvector HNSW first (unified index, faster at scale)
+        try:
+            from ..utils import pgvector_store as _pv
+            from ..memory import embedder as _embedder
+            if _pv.is_available():
+                _q_emb = await _asyncio.to_thread(_embedder.embed, query)
+                if _q_emb is not None:
+                    _pv_rows = await _pv.pgvector_search(
+                        query_embedding=_q_emb if isinstance(_q_emb, list) else list(_q_emb),
+                        user_id="_default",
+                        top_k=limit,
+                        source_filter="session_summary",
+                    )
+                    for _content, _cat, _score, _src, _created_at in _pv_rows:
+                        _created_str = (
+                            _created_at.isoformat()
+                            if hasattr(_created_at, "isoformat")
+                            else str(_created_at or "")
+                        )
+                        results.append({
+                            "session_id": "",
+                            "summary": _content,
+                            "topics": [],
+                            "message_count": 0,
+                            "score": round(_score, 4),
+                            "created_at": _created_str,
+                        })
+        except Exception:
+            results = []  # fall through to SQLite
+
+        # SQLite fallback when pgvector unavailable or returned nothing
+        if not results and _memory_store is not None:
+            results = await _asyncio.to_thread(
+                _memory_store.search_session_summaries,
+                query,
+                "_default",
+                limit,
+            )
     except Exception as _exc:
         import logging as _logging
         _logging.getLogger(__name__).error("[recallSessions] Search failed: %s", _exc)
