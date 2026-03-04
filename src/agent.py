@@ -880,6 +880,21 @@ def prewarm(proc: JobProcess):
                 try:
                     ok = _loop.run_until_complete(_pgvector.init_pgvector_pool(_pv_url))
                     logger.info(f"pgvector: startup test {'PASSED — HNSW store ready' if ok else 'FAILED — using SQLite fallback'}")
+                    # One-time SQLite -> pgvector migration (idempotent, sentinel-guarded)
+                    if ok:
+                        try:
+                            from .utils.pgvector_migration import migrate_sqlite_to_pgvector as _migrate
+                            _sqlite_path = os.path.join(
+                                os.environ.get("AIO_MEMORY_DIR", "/app/data/memory"),
+                                "users", "_default", "aio-voice-memory.sqlite",
+                            )
+                            _migrated = _loop.run_until_complete(
+                                _migrate(_sqlite_path, _pgvector._pool)
+                            )
+                            if _migrated > 0:
+                                logger.info(f"pgvector migration: {_migrated} historical memories migrated")
+                        except Exception as _me:
+                            logger.warning(f"pgvector migration: {_me}")
                 except Exception as _e:
                     logger.warning(f"pgvector: startup test FAILED: {_e}")
                 finally:
