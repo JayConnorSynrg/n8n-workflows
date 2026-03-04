@@ -868,6 +868,26 @@ def prewarm(proc: JobProcess):
         except Exception as _e:
             logger.warning("[Memory] Store prewarm failed (non-critical): %s", _e)
 
+    # pgvector startup connectivity test — runs at worker boot, not per-session
+    if _PGVECTOR_AVAILABLE:
+        _pv_url = getattr(settings, 'pgvector_url', None)
+        if _pv_url:
+            import threading as _threading
+            def _pgvector_startup():
+                import asyncio as _asyncio
+                _loop = _asyncio.new_event_loop()
+                _asyncio.set_event_loop(_loop)
+                try:
+                    ok = _loop.run_until_complete(_pgvector.init_pgvector_pool(_pv_url))
+                    logger.info(f"pgvector: startup test {'PASSED — HNSW store ready' if ok else 'FAILED — using SQLite fallback'}")
+                except Exception as _e:
+                    logger.warning(f"pgvector: startup test FAILED: {_e}")
+                finally:
+                    _loop.close()
+            _t = _threading.Thread(target=_pgvector_startup, daemon=True)
+            _t.start()
+            _t.join(timeout=20)
+
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the voice agent."""
