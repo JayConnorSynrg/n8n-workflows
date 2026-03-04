@@ -495,7 +495,13 @@ def _build_slug_index(client, user_id: str = "") -> None:
 
     for toolkit in active_toolkits:
         try:
-            tools = client.tools.get_raw_composio_tools(toolkits=[toolkit], limit=100)
+            try:
+                tools = client.tools.get_raw_composio_tools(
+                    toolkits=[toolkit], limit=100, toolkit_versions="latest"
+                )
+            except TypeError:
+                # toolkit_versions not supported in this SDK version (rc2)
+                tools = client.tools.get_raw_composio_tools(toolkits=[toolkit], limit=100)
             slugs = [t.slug for t in tools]
             all_slugs.extend(slugs)
             by_service[toolkit] = slugs
@@ -1134,7 +1140,13 @@ async def get_tool_schema(tool_slug: str) -> str:
         toolkit = _slug_to_toolkit.get(slug_upper, "")
         if toolkit:
             try:
-                tools = client.tools.get_raw_composio_tools(toolkits=[toolkit], limit=100)
+                try:
+                    tools = client.tools.get_raw_composio_tools(
+                        toolkits=[toolkit], limit=100, toolkit_versions="latest"
+                    )
+                except TypeError:
+                    # toolkit_versions not supported in this SDK version (rc2)
+                    tools = client.tools.get_raw_composio_tools(toolkits=[toolkit], limit=100)
                 for tool in tools:
                     if tool.slug == slug_upper:
                         return tool

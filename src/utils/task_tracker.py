@@ -316,13 +316,20 @@ class TaskTracker:
 
             return False
 
-    def get_continuation_prompt(self) -> str:
+    def get_continuation_prompt(self, last_tool_result: str = "") -> str:
         """Build the continuation instructions for the LLM.
 
         Increments the continuation counter and starts the cooldown window.
         Clears _agent_gave_interim_response so Case 3 cannot re-fire until
         the agent speaks a new interim phrase (prevents rapid-fire when
         generate_reply resolves in ~1.5s without producing speech).
+
+        Args:
+            last_tool_result: Optional snippet of the last tool's output.
+                Injected into the prompt so the LLM has result context when
+                chat_ctx has been trimmed by the heartbeat's periodic trim.
+                Defaults to "" (no injection) — all existing call sites are
+                unaffected.
         """
         with self._lock:
             self._continuation_count += 1
@@ -341,8 +348,10 @@ class TaskTracker:
                 f"You have made {tool_count} tool call(s) so far but the objective is NOT complete. "
                 f"Pick the most relevant available tool and call it right now to make progress. "
                 f"Do not give up. Do not speak until you have called a tool and received a result. "
-                f"[Internal heartbeat continuation {count}/{max_c}]"
             )
+            if last_tool_result:
+                prompt += f"\n\nContext from last tool: {last_tool_result[:250]}"
+            prompt += f"[Internal heartbeat continuation {count}/{max_c}]"
             logger.info(
                 f"[Heartbeat] Continuation prompt {count}/{max_c} for objective: '{objective[:50]}...'"
                 if len(objective) > 50 else

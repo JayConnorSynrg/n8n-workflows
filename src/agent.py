@@ -93,6 +93,8 @@ from .utils.short_term_memory import clear_session as clear_session_memory
 from .utils.task_tracker import TaskTracker
 from .utils.session_facts import (
     store_fact as _store_fact,
+    get_fact as _get_fact,
+    get_all_facts as _get_all_facts,
     clear_facts as _clear_facts,
     flush_facts_to_db as _flush_facts_to_db,
 )
@@ -845,6 +847,96 @@ Always use the EXACT full slug as listed below never shorten or guess
 {COMPOSIO_CATALOG}"""
 
 
+def _inject_per_turn_context(turn_ctx, new_message, session_id: str, user_mem_dir: str) -> None:
+    """Inject compact per-turn context into the LLM call — survives chat_ctx trimming.
+
+    Called from the on_user_turn_completed session event (GAPS 1 + 4).
+    Injects Gamma session facts and last-tool-result into the turn's chat context
+    so every LLM inference has fresh in-session state regardless of trim cycles.
+    """
+    parts = []
+
+    # 1. Gamma session facts (from in-memory session_facts — always fresh)
+    try:
+        gamma_url = _get_fact(session_id, "gammaUrl")
+        gamma_id = _get_fact(session_id, "gammaGenerationId")
+        gamma_topic = _get_fact(session_id, "gammaLastTopic")
+        if gamma_url or gamma_id:
+            fact_parts = []
+            if gamma_url:
+                fact_parts.append(f"URL={gamma_url}")
+            if gamma_id:
+                fact_parts.append(f"generationId={gamma_id}")
+            if gamma_topic:
+                fact_parts.append(f"topic={gamma_topic}")
+            parts.append(f"[Last Gamma] {', '.join(fact_parts)}")
+    except Exception:
+        pass
+
+    # 2. Last tool result context (survives stall recovery)
+    try:
+        last_result = _get_fact(session_id, "last_tool_result")
+        if last_result:
+            parts.append(f"[Last tool result] {last_result[:200]}")
+    except Exception:
+        pass
+
+    # 3. AGENTS.md routing rules from user memory dir (compact, up to 300 chars)
+    try:
+        if user_mem_dir:
+            agents_md_path = os.path.join(user_mem_dir, "AGENTS.md")
+            if os.path.exists(agents_md_path):
+                agents_content = open(agents_md_path, encoding="utf-8").read().strip()
+                if agents_content and len(agents_content) > 50:
+                    parts.append(f"[Routing rules]\n{agents_content[:300]}")
+    except Exception:
+        pass
+
+    if parts:
+        context_block = "\n".join(parts)
+        try:
+            turn_ctx.add_message(role="assistant", content=f"[Session context]\n{context_block}")
+        except Exception:
+            pass
+
+
+async def _immediate_flush_critical_facts(session_id: str, user_id: str, postgres_url: str) -> None:
+    """Flush only critical session facts to Postgres immediately after significant tool completions.
+
+    Called as a fire-and-forget task from on_function_tools_executed (GAP 6).
+    Uses a single short-lived asyncpg connection with a 5s timeout — never blocks the event loop.
+    """
+    if not session_id or not postgres_url:
+        return
+    try:
+        critical_keys = {"gammaUrl", "gammaGenerationId", "gammaLastTopic", "last_tool_result"}
+        all_facts = _get_all_facts(session_id)
+        critical_facts = {k: v for k, v in all_facts.items() if k in critical_keys and v}
+        if not critical_facts:
+            return
+        import asyncpg  # type: ignore
+        conn = await asyncio.wait_for(asyncpg.connect(postgres_url, ssl="require"), timeout=5)
+        try:
+            for key, value in critical_facts.items():
+                await conn.execute(
+                    """
+                    INSERT INTO session_facts_log (session_id, user_id, key, value, created_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                    ON CONFLICT (session_id, key)
+                    DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
+                    """,
+                    session_id,
+                    user_id or "_default",
+                    key,
+                    str(value),
+                )
+        finally:
+            await conn.close()
+        logger.debug(f"[FactFlush] Flushed {len(critical_facts)} critical facts to PG")
+    except Exception as _e:
+        logger.debug(f"[FactFlush] Immediate flush failed (non-critical): {_e}")
+
+
 def prewarm(proc: JobProcess):
     """Prewarm VAD model and initialize cache during server initialization."""
     logger.info("Prewarming VAD model...")
@@ -1106,6 +1198,33 @@ async def entrypoint(ctx: JobContext):
         logger.info("Using VAD-only turn detection (faster startup)")
 
     session = AgentSession(**session_kwargs)
+
+    # CHANGE 2: Per-turn context injection (GAP 1 + 4)
+    # on_user_turn_completed fires after STT, before LLM inference — canonical RAG injection point.
+    # Agent is an inline Agent() instance (not a subclass), so we use the session event API.
+    # session_id is assigned later at line ~1970; the closure captures it by name from the
+    # enclosing scope — by the time any turn fires, session_id will be set.
+    # Mutable container so on_user_turn_completed closure can read session_id
+    # after it is assigned later in entrypoint (closures capture by reference in Python,
+    # but a plain assignment to session_id rebinds the name — using a list avoids that).
+    _session_id_ref: list = [None]
+
+    @session.on("user_turn_completed")
+    def on_user_turn_completed(ev):
+        """Inject per-turn context: Gamma session facts, last tool result, AGENTS.md routing."""
+        try:
+            turn_ctx = getattr(ev, "turn_ctx", None) or getattr(ev, "chat_ctx", None)
+            new_message = getattr(ev, "new_message", None) or getattr(ev, "message", None)
+            if turn_ctx is not None:
+                _sid = _session_id_ref[0] or ctx.room.name or "livekit-agent"
+                _inject_per_turn_context(
+                    turn_ctx,
+                    new_message,
+                    session_id=_sid,
+                    user_mem_dir=_user_mem_dir,
+                )
+        except Exception as _e:
+            logger.debug(f"on_user_turn_completed: context injection failed: {_e}")
 
     def _detect_aio_wake_word(text: str) -> bool:
         """Detect AIO wake word variants in transcript text."""
@@ -1485,6 +1604,30 @@ async def entrypoint(ctx: JobContext):
         # to determine whether a multi-step task was in progress
         _task_tracker.record_tool_call_completed()
 
+        # CHANGE 4 (GAP 7): Background tools handle their own completion notification via
+        # _gamma_notification_monitor / handle_tool_result — suppress the automatic LLM
+        # reply that LiveKit would otherwise generate from the tool result.
+        # cancel_tool_reply() confirmed in LiveKit Agents v1.3.12 — wrapped in try/except
+        # so AttributeError on older builds is silently swallowed and never breaks tool flow.
+        _BACKGROUND_TOOLS = frozenset({
+            "generatePresentation", "generateDocument", "generateWebpage", "generateSocial",
+            "composioBatchExecute", "runLeadGen", "scrapeProspects",
+        })
+        try:
+            # Try .zipped() first (LiveKit >= 1.3.x FunctionToolsExecuted event API)
+            _tool_names_bg = {call.name for call, _ in ev.zipped()}
+            if _tool_names_bg & _BACKGROUND_TOOLS:
+                ev.cancel_tool_reply()
+                logger.debug(
+                    f"[ToolGate] Suppressed LLM reply for background tools: "
+                    f"{_tool_names_bg & _BACKGROUND_TOOLS}"
+                )
+        except AttributeError:
+            # cancel_tool_reply or .zipped() not available in this SDK build — skip silently
+            pass
+        except Exception as _bg_e:
+            logger.debug(f"[ToolGate] cancel_tool_reply check failed: {_bg_e}")
+
         # Load tool call result into session facts so the LLM is aware of what
         # already ran. Prevents re-calling gamma tools (or any tool) on heartbeat
         # continuation turns where the LLM would otherwise have no call history.
@@ -1508,6 +1651,48 @@ async def entrypoint(ctx: JobContext):
                     logger.info(f"[GammaTracker] Stored {tool_name} call in session facts")
         except Exception as e:
             logger.debug(f"on_function_tools_executed: session fact storage skipped: {e}")
+
+        # CHANGE 3 (GAP 2): Store the first successful tool result under the canonical
+        # "last_tool_result" key so per-turn context injection (on_user_turn_completed)
+        # and heartbeat continuations can surface it to the LLM without re-fetching.
+        try:
+            # Prefer .zipped() which gives (FunctionCallInfo, FunctionCallOutput) pairs
+            for _call, _output in ev.zipped():
+                if _output is not None and not getattr(_output, "is_error", False):
+                    _result_text = str(_output.output)[:300] if getattr(_output, "output", None) else ""
+                    if _result_text:
+                        _store_fact(session_id, "last_tool_result", _result_text)
+                        break  # Store only the first successful result
+        except AttributeError:
+            # .zipped() not available — fall back to flat event attributes already stored
+            # as last_tool_output above; map that to last_tool_result for key consistency
+            try:
+                _existing = _get_fact(session_id, "last_tool_output")
+                if _existing:
+                    _store_fact(session_id, "last_tool_result", _existing)
+            except Exception:
+                pass
+        except Exception as _e:
+            logger.debug(f"on_function_tools_executed: last_result store failed: {_e}")
+
+        # CHANGE 5 (GAP 6): Immediately persist critical facts to Postgres after significant
+        # tool completions — don't wait for session end.  Fire-and-forget via create_task.
+        try:
+            _critical_fact_keys = ("gammaUrl", "gammaGenerationId", "gammaLastTopic", "last_tool_result")
+            _has_critical = any(
+                _get_fact(session_id, k)
+                for k in _critical_fact_keys
+            )
+            if _has_critical and settings.postgres_url:
+                asyncio.create_task(
+                    _immediate_flush_critical_facts(
+                        session_id,
+                        _user_id,
+                        settings.postgres_url,
+                    )
+                )
+        except Exception as _flush_e:
+            logger.debug(f"[FactFlush] Critical fact flush check failed: {_flush_e}")
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev):
@@ -1968,6 +2153,7 @@ async def entrypoint(ctx: JobContext):
         # Pre-warm context cache in background while session starts
         # This fetches session context before user speaks, reducing first-query latency
         session_id = ctx.room.name or "livekit-agent"
+        _session_id_ref[0] = session_id  # Update ref so on_user_turn_completed closure sees it
         set_current_session_id(session_id)
         set_current_user_id(_user_id)
         if _MEM_AVAILABLE and _mem_capture is not None:
@@ -2272,7 +2458,12 @@ async def entrypoint(ctx: JobContext):
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
 
-                prompt = task_tracker_ref.get_continuation_prompt()
+                _last_result = ""
+                try:
+                    _last_result = _get_fact(_session_id_ref[0] or "", "last_tool_result") or ""
+                except Exception:
+                    pass
+                prompt = task_tracker_ref.get_continuation_prompt(last_tool_result=_last_result)
                 logger.info(f"[Heartbeat] Stalled task detected — injecting continuation")
 
                 try:
