@@ -62,28 +62,42 @@ async def query_database_tool(
         http_status, result = await n8n_post("voice-query-vector-db", payload, timeout=20)
 
         if http_status == 200:
-            # Support both response shapes:
-            # AIO shape:    { status, voice_response, result: { documents } }
-            # Legacy shape: { results, query, totalResults }
+            # Support all response shapes from z02K1a54akYXMkyj and legacy workflows:
+            # z02K1a54akYXMkyj shape: { success, voice_response, result: [...], results_count }
+            #   result is a LIST of {text, candidateName, candidateId, score, id, metadata}
+            # AIO shape:    { status, voice_response, result: { documents: [...] } }
+            # Legacy shape: { results: [...], query, totalResults }
             voice_response = result.get("voice_response")
 
-            # AIO shape: result.documents
-            _result_obj = result.get("result", {})
-            documents = _result_obj.get("documents", [])
-            # z02K1a54akYXMkyj shape: result.top_results
-            # Workflow returns candidateName as top-level key (post-formatter fix)
-            # Falls back to metadata.candidateName for raw Pinecone shape
-            if not documents:
-                raw_results = _result_obj.get("top_results", []) or result.get("results", [])
+            # Normalise result field — may be a list (z02K1a54akYXMkyj) or a dict (AIO shape)
+            _result_raw = result.get("result", {})
+            if isinstance(_result_raw, list):
+                # z02K1a54akYXMkyj: result is a flat list of match objects
+                raw_results = _result_raw
                 documents = [
                     {
                         "title": r.get("candidateName") or (r.get("metadata") or {}).get("candidateName") or (r.get("metadata") or {}).get("name") or f"Result {i+1}",
-                        "snippet": (r.get("content") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
+                        "snippet": (r.get("text") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
                         "score": r.get("score", 0),
                         "candidate_id": r.get("candidateId") or (r.get("metadata") or {}).get("candidateId") or r.get("id", ""),
                     }
                     for i, r in enumerate(raw_results)
                 ]
+            else:
+                # AIO dict shape: result.documents or result.top_results
+                _result_obj = _result_raw  # dict
+                documents = _result_obj.get("documents", [])
+                if not documents:
+                    raw_results = _result_obj.get("top_results", []) or result.get("results", [])
+                    documents = [
+                        {
+                            "title": r.get("candidateName") or (r.get("metadata") or {}).get("candidateName") or (r.get("metadata") or {}).get("name") or f"Result {i+1}",
+                            "snippet": (r.get("content") or (r.get("metadata") or {}).get("text_excerpt") or "")[:300],
+                            "score": r.get("score", 0),
+                            "candidate_id": r.get("candidateId") or (r.get("metadata") or {}).get("candidateId") or r.get("id", ""),
+                        }
+                        for i, r in enumerate(raw_results)
+                    ]
 
             # Store to short-term memory for cross-tool use
             if documents:
