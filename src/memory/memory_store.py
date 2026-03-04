@@ -589,9 +589,9 @@ def _search_via_pgvector(
 
         # Build content→vector_score map from pgvector results
         # content string is the merge key
-        # Row shape: (content, category, similarity, source, created_at)
+        # Row shape: (content, category, similarity, source, created_at, session_id)
         pg_by_content: dict[str, tuple[float, str, str, object]] = {}
-        for content_text, cat, sim, src, row_created_at in pg_rows:
+        for content_text, cat, sim, src, row_created_at, _row_sid in pg_rows:
             pg_by_content[content_text] = (sim, cat or "general", src, row_created_at)
 
         # BM25 keyword search from SQLite FTS5 — returns {sqlite_id: bm25_score}

@@ -179,10 +179,10 @@ async def pgvector_search(
     top_k: int = 15,
     source_filter: Optional[str] = None,
     category: Optional[str] = None,
-) -> List[Tuple[str, str, float, str, object]]:
+) -> List[Tuple[str, str, float, str, object, Optional[str]]]:
     """
     Semantic search using HNSW cosine similarity.
-    Returns list of (content, category, similarity_score, source, created_at).
+    Returns list of (content, category, similarity_score, source, created_at, session_id).
     similarity_score is in [0, 1] — higher = more similar.
     created_at is a datetime object (TIMESTAMPTZ from Postgres).
     """
@@ -204,7 +204,7 @@ async def pgvector_search(
         where_clause = " AND ".join(conditions)
         rows = await _pool.fetch(
             f"""
-            SELECT content, category, source, created_at,
+            SELECT content, category, source, created_at, session_id,
                    1 - (embedding <=> $1::vector) AS similarity
             FROM aio_memories
             WHERE {where_clause}
@@ -214,7 +214,7 @@ async def pgvector_search(
             *params,
         )
         return [
-            (r["content"], r["category"] or "general", float(r["similarity"]), r["source"], r["created_at"])
+            (r["content"], r["category"] or "general", float(r["similarity"]), r["source"], r["created_at"], r.get("session_id"))
             for r in rows
         ]
     except Exception as e:

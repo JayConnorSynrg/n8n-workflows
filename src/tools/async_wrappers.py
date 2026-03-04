@@ -474,14 +474,14 @@ async def recall_sessions_async(
                         top_k=limit,
                         source_filter="session_summary",
                     )
-                    for _content, _cat, _score, _src, _created_at in _pv_rows:
+                    for _content, _cat, _score, _src, _created_at, _sid in _pv_rows:
                         _created_str = (
                             _created_at.isoformat()
                             if hasattr(_created_at, "isoformat")
                             else str(_created_at or "")
                         )
                         results.append({
-                            "session_id": "",
+                            "session_id": _sid or "",
                             "summary": _content,
                             "topics": [],
                             "message_count": 0,
