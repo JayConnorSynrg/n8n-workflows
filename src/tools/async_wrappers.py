@@ -304,18 +304,20 @@ async def vector_search_async(
         "or wants to recall anything from this session. "
         "Use query_type='session_context' (default) for full history. "
         "Use query_type='search_history' with search_query to find a specific topic. "
+        "Pass session_id from recallSessions results to retrieve a PAST session transcript. "
         "Never claim you cannot access session history without calling this tool first."
     ),
 )
 async def query_context_async(
     query_type: str = "session_context",
     search_query: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Query session context - runs synchronously for immediate results."""
     call_id = await publish_tool_start("checkContext", {"query_type": query_type})
     await publish_tool_executing(call_id)
     _t0 = time.monotonic()
-    result = await agent_context_tool.query_context_tool(query_type=query_type, search_query=search_query)
+    result = await agent_context_tool.query_context_tool(query_type=query_type, search_query=search_query, session_id=session_id)
     _dur = int((time.monotonic() - _t0) * 1000)
     await publish_tool_completed(call_id, result[:100] if result else "", duration_ms=_dur)
     _fire_native_log("check_context", {"query_type": query_type, "search_query": search_query or ""}, result or "", _dur)
