@@ -166,6 +166,11 @@ async def log_tool_error(
         logger.debug(f"[PgLogger] tool_error_log insert failed (non-critical): {e}")
 
 
+async def _get_pool():
+    """Return the active asyncpg pool, or None if not initialized."""
+    return _pool if _pg_available else None
+
+
 async def close_pool() -> None:
     """Close the connection pool. Call once on worker shutdown."""
     global _pool, _pg_available

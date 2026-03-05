@@ -1152,6 +1152,16 @@ async def entrypoint(ctx: JobContext):
     except Exception:  # nosec B110
         pass
 
+    # Surface slug drift to logs during session startup (non-blocking — drift report may be None
+    # if detection hasn't completed yet since it runs async after the first index build)
+    try:
+        from .tools.composio_router import get_slug_drift_report as _get_slug_drift_report
+        _drift_report = _get_slug_drift_report()
+        if _drift_report:
+            logger.warning(f"AIO Session startup: SLUG_DRIFT active — {_drift_report}. Some tool calls may fail.")
+    except Exception:  # nosec B110
+        pass
+
     # Use prewarmed VAD or load fresh if not available
     if "vad" in ctx.proc.userdata:
         vad = ctx.proc.userdata["vad"]

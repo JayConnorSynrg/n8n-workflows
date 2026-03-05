@@ -43,6 +43,11 @@ except Exception:
     async def _log_tool_error(**_kw) -> None:  # type: ignore[misc]
         pass
 
+try:
+    from ..utils.pg_logger import _get_pool as _pg_get_pool
+except Exception:
+    _pg_get_pool = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 # Cached Composio client (initialized on first use)
@@ -170,6 +175,9 @@ _needs_index_rebuild: bool = False
 # near-expiry accounts proactively before hitting the API.
 # Format: account_id -> epoch float (time.time() when 401 was received)
 _account_expiry: dict[str, float] = {}
+
+# Slug drift detection — populated after index build if toolkit loss detected
+_slug_drift_report: str | None = None
 
 # Tier constants for resolution confidence
 _TIER_EXACT = 1
@@ -567,6 +575,134 @@ def _build_slug_index(client, user_id: str = "") -> None:
         f"Services: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}. "
         f"Prefixes: {len(_SERVICE_PREFIXES)} auto-detected"
     )
+
+
+# ---------------------------------------------------------------------------
+# Slug drift detection — baseline persistence + alerting
+# ---------------------------------------------------------------------------
+
+async def _load_slug_baseline() -> dict | None:
+    """Load previously persisted slug baseline from session_context table."""
+    try:
+        if _pg_get_pool is None:
+            return None
+        pool = await _pg_get_pool()
+        if not pool:
+            return None
+        import json
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT context_value FROM session_context WHERE context_key = 'composio_slug_baseline'",
+            )
+            if row and row["context_value"]:
+                return json.loads(row["context_value"])
+    except Exception as exc:
+        logger.debug(f"Composio: baseline load failed: {exc!r}")
+    return None
+
+
+async def _persist_slug_baseline(total_count: int, by_service: dict) -> None:
+    """Persist current slug baseline to session_context (permanent row, no expiry)."""
+    try:
+        if _pg_get_pool is None:
+            return
+        pool = await _pg_get_pool()
+        if not pool:
+            return
+        import json
+        payload = json.dumps({"count": total_count, "toolkits": {k: len(v) for k, v in by_service.items()}})
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO session_context (context_key, context_value, expires_at, created_at)
+                VALUES ('composio_slug_baseline', $1, NULL, NOW())
+                ON CONFLICT (context_key) DO UPDATE
+                    SET context_value = $1, created_at = NOW()
+                """,
+                payload,
+            )
+    except Exception as exc:
+        logger.debug(f"Composio: baseline persist failed: {exc!r}")
+
+
+def _suggest_closest_slug(slug: str) -> str | None:
+    """Return the closest matching slug from canonical index for SLUG_NOT_FOUND hints."""
+    if not _canonical_slugs:
+        return None
+    slug_upper = slug.upper()
+    # Exact prefix match (first 8 chars)
+    prefix = slug_upper[:8]
+    candidates = [s for s in _canonical_slugs if s.startswith(prefix)]
+    if candidates:
+        return candidates[0]
+    # Match on the action part (last underscore segment)
+    parts = slug_upper.rsplit("_", 1)
+    if len(parts) == 2:
+        action = parts[-1]
+        candidates = [s for s in _canonical_slugs if s.endswith(action)]
+        if candidates:
+            return candidates[0]
+    # Substring match on the middle section
+    inner = "_".join(slug_upper.split("_")[1:-1]) if len(slug_upper.split("_")) > 2 else ""
+    if inner:
+        candidates = [s for s in _canonical_slugs if inner in s]
+        if candidates:
+            return candidates[0]
+    return None
+
+
+async def _detect_and_report_drift(total_count: int, by_service: dict) -> None:
+    """Compare current slug index against stored baseline. Log warnings. Surface to session."""
+    global _slug_drift_report
+
+    try:
+        prev = await _load_slug_baseline()
+        current_toolkit_counts = {k: len(v) for k, v in by_service.items()}
+
+        if prev:
+            prev_count = prev.get("count", 0)
+            prev_toolkits: dict = prev.get("toolkits", {})
+
+            dropped = {k: v for k, v in prev_toolkits.items() if k not in current_toolkit_counts}
+            added = {k: v for k, v in current_toolkit_counts.items() if k not in prev_toolkits}
+            delta = total_count - prev_count
+            pct_change = abs(delta) / max(prev_count, 1) * 100
+
+            if dropped or (pct_change > 5 and delta < 0):
+                report_parts = []
+                if dropped:
+                    names = ", ".join(dropped.keys())
+                    dropped_tools = sum(dropped.values())
+                    report_parts.append(f"disconnected: {names} (-{dropped_tools} tools)")
+                if pct_change > 5 and delta < 0:
+                    report_parts.append(f"total dropped {abs(delta)} tools ({pct_change:.0f}%): {prev_count}→{total_count}")
+                _slug_drift_report = " | ".join(report_parts)
+                logger.warning(
+                    f"Composio: SLUG_DRIFT — {_slug_drift_report}. "
+                    f"Current: {', '.join(f'{k}({len(v)})' for k, v in sorted(by_service.items()))}. "
+                    f"Tool calls targeting disconnected services will fail with SLUG_NOT_FOUND. "
+                    f"Reconnect via manageConnections tool."
+                )
+            elif added:
+                new_names = ", ".join(added.keys())
+                added_tools = sum(added.values())
+                _slug_drift_report = None
+                logger.info(f"Composio: New toolkits connected since last session: {new_names} (+{added_tools} tools)")
+            else:
+                _slug_drift_report = None
+                logger.debug(f"Composio: Slug baseline stable ({total_count} tools, no drift)")
+        else:
+            logger.info(f"Composio: Establishing first slug baseline ({total_count} tools, {len(by_service)} toolkits)")
+            _slug_drift_report = None
+
+        await _persist_slug_baseline(total_count, by_service)
+    except Exception as exc:
+        logger.debug(f"Composio: drift detection failed (non-critical): {exc!r}")
+
+
+def get_slug_drift_report() -> str | None:
+    """Return slug drift report if toolkit disconnection was detected at startup. None if stable."""
+    return _slug_drift_report
 
 
 def get_tool_catalog(service_filter: str | None = None) -> str:
@@ -1061,6 +1197,12 @@ async def ensure_slug_index() -> None:
             asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
             timeout=30,
         )
+        # Schedule drift detection after index build (non-blocking)
+        if _slug_index_built:
+            asyncio.create_task(
+                _detect_and_report_drift(len(_canonical_slugs), _slugs_by_service),
+                name="slug_drift_detection",
+            )
     except asyncio.TimeoutError:
         logger.warning("Composio: ensure_slug_index timed out after 30s — index may be incomplete")
 
@@ -1074,7 +1216,7 @@ async def refresh_slug_index() -> str:
 
     Returns the updated tool catalog string.
     """
-    global _slug_index_built, _slug_required_params, _slug_schemas, _slug_index_built_at, _needs_index_rebuild
+    global _slug_index_built, _slug_required_params, _slug_schemas, _slug_index_built_at, _needs_index_rebuild, _slug_drift_report
     _slug_index_built = False
     _slug_index_built_at = 0.0  # Change 8: reset TTL so next ensure_slug_index forces rebuild
     _needs_index_rebuild = False  # Change 4: explicit refresh satisfies staleness flag
@@ -1084,6 +1226,7 @@ async def refresh_slug_index() -> str:
     _slug_required_params = {}
     _slug_schemas = {}
     _active_call_schemas.clear()  # Defensive: discard any stale per-call states from before refresh
+    _slug_drift_report = None  # Clear on explicit refresh — will re-evaluate after rebuild
 
     from ..config import get_settings
     settings = get_settings()
@@ -1097,6 +1240,12 @@ async def refresh_slug_index() -> str:
             asyncio.to_thread(lambda: _build_slug_index(client, user_id)),
             timeout=30,
         )
+        # Schedule drift detection after index rebuild (non-blocking)
+        if _slug_index_built:
+            asyncio.create_task(
+                _detect_and_report_drift(len(_canonical_slugs), _slugs_by_service),
+                name="slug_drift_detection_refresh",
+            )
     except asyncio.TimeoutError:
         logger.warning("Composio: refresh_slug_index timed out after 30s — partial index may be used")
 
@@ -1541,9 +1690,12 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
             new_count = _record_slug_failure(slug_key)
             alternatives = _get_alternative_slugs(tool_slug)
             alt_text = " or ".join(alternatives[:3]) if alternatives else "none found"
+            suggestion = _suggest_closest_slug(tool_slug)
+            suggestion_hint = f" Closest match: {suggestion!r}." if suggestion else ""
             logger.warning(
-                f"Composio: Slug unresolvable: {tool_slug} "
-                f"(failure {new_count}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
+                f"Composio: SLUG_NOT_FOUND slug={tool_slug!r} after 6-tier resolution.{suggestion_hint}"
+                f" Available toolkits: {sorted(_slugs_by_service.keys())}"
+                f" (failure {new_count}/{_CB_MAX_FAILURES}, alternatives: {alternatives[:5]})"
             )
             asyncio.create_task(_log_tool_error(
                 slug=tool_slug, resolved_slug=None, service=None,
