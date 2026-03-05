@@ -900,6 +900,44 @@ def _inject_per_turn_context(turn_ctx, new_message, session_id: str, user_mem_di
             pass
 
 
+async def _session_already_greeted(room_name: str, postgres_url: str) -> bool:
+    """Check conversation_log to determine if this room has prior conversation history.
+
+    Handles the container restart re-dispatch scenario: LiveKit dispatches the same
+    active room to a new container where _greeted_rooms is empty. Without this check,
+    the agent would greet again even though the user was mid-session.
+
+    Returns True  → session has prior messages; greeting must be suppressed.
+    Returns False → new session; greeting should proceed.
+    Falls back to False on any error (fail-open: same behavior as before this fix).
+
+    Uses a short-lived asyncpg connection (not the pg_logger pool) so it works even
+    if the pool is not yet initialized at this point in entrypoint().
+    """
+    if not room_name or not postgres_url:
+        return False
+    try:
+        import asyncpg  # type: ignore
+        conn = await asyncio.wait_for(
+            asyncpg.connect(postgres_url, ssl="require"), timeout=3.0
+        )
+        try:
+            count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM conversation_log
+                WHERE session_id = $1
+                  AND created_at > NOW() - INTERVAL '2 hours'
+                """,
+                room_name,
+            )
+            return (count or 0) > 0
+        finally:
+            await conn.close()
+    except Exception as _e:
+        logger.debug("[Greeting] DB check failed (will greet): %s", _e)
+        return False
+
+
 async def _immediate_flush_critical_facts(session_id: str, user_id: str, postgres_url: str) -> None:
     """Flush only critical session facts to Postgres immediately after significant tool completions.
 
@@ -2232,20 +2270,41 @@ async def entrypoint(ctx: JobContext):
 
     # Generate AIO opening greeting (no punctuation - voice output)
     # Interruptions disabled to allow client AEC (Acoustic Echo Cancellation) calibration
+    #
+    # Two-layer guard:
+    #   1. _greeted_rooms dict — fast in-process guard (same container reconnects).
+    #   2. conversation_log DB check — handles container restart re-dispatch where
+    #      _greeted_rooms is empty in the new process but the session has prior history.
     if not _greeted_rooms.get(ctx.room.name):
-        try:
-            await session.say(
-                "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
-                allow_interruptions=False
-            )
-            _greeted_rooms[ctx.room.name] = True
-            logger.info("AIO greeting sent successfully")
-        except Exception as e:
-            logger.error(f"CRITICAL: session.say() failed: {e}")
+        # Guard against container restart re-dispatch: check if this room has prior
+        # conversation history in the DB. If so, suppress the greeting — the user was
+        # already mid-session and the container restart is transparent to them.
+        _should_greet = True
+        if settings.postgres_url:
+            _already_greeted_db = await _session_already_greeted(ctx.room.name, settings.postgres_url)
+            if _already_greeted_db:
+                _should_greet = False
+                _greeted_rooms[ctx.room.name] = True  # prevent future in-process re-greet
+                logger.info(
+                    "[Greeting] Suppressed — container restart recovery for room %s "
+                    "(session has prior conversation history)",
+                    ctx.room.name,
+                )
+
+        if _should_greet:
             try:
-                await _publish_error(str(e)[:200], code="agent_error", severity="high")
-            except Exception:  # nosec B110 - error publishing must not block error handling
-                pass
+                await session.say(
+                    "Hi I am AIO welcome to your ecosystem infinite possibilities at our fingertips where should we start",
+                    allow_interruptions=False
+                )
+                _greeted_rooms[ctx.room.name] = True
+                logger.info("AIO greeting sent successfully")
+            except Exception as e:
+                logger.error(f"CRITICAL: session.say() failed: {e}")
+                try:
+                    await _publish_error(str(e)[:200], code="agent_error", severity="high")
+                except Exception:  # nosec B110 - error publishing must not block error handling
+                    pass
     else:
         logger.info("[Session] Reconnect detected — skipping greeting for room: %s", ctx.room.name)
 
