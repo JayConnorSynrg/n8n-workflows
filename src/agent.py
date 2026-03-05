@@ -2578,6 +2578,157 @@ async def entrypoint(ctx: JobContext):
     _composio_health_task = asyncio.create_task(_composio_health_monitor())
     logger.info("[ComposioHealth] Periodic Composio connection health monitor started")
 
+    async def _dlq_consumer(
+        postgres_url: str,
+        session_id: str,
+        user_id: str,
+        poll_interval_secs: float = 60.0,
+        stop_event: asyncio.Event | None = None,
+    ) -> None:
+        """Background DLQ consumer: retries failed tool calls from tool_dlq.
+
+        Polls PostgreSQL every 60s for rows belonging to the current session that:
+        - have retry_after <= NOW()
+        - have attempt < max_attempts
+        - are not yet resolved
+
+        On success: marks resolved_at = NOW()
+        On failure: increments attempt, sets retry_after = NOW() + 120s * 2^attempt (capped at 3600s)
+        Stops when stop_event is set or session ends.
+        """
+        if not postgres_url:
+            return
+        logger.info(f"[DLQ] Consumer started for session {session_id}")
+        import asyncpg
+
+        while True:
+            # Wait for poll interval (or stop signal)
+            try:
+                if stop_event is not None:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(stop_event.wait()),
+                            timeout=poll_interval_secs,
+                        )
+                        logger.info("[DLQ] Consumer stopping — stop event set")
+                        return
+                    except asyncio.TimeoutError:
+                        pass  # normal poll cycle
+                else:
+                    await asyncio.sleep(poll_interval_secs)
+            except asyncio.CancelledError:
+                logger.info("[DLQ] Consumer cancelled")
+                return
+
+            # Poll for retryable rows
+            try:
+                conn = await asyncio.wait_for(
+                    asyncpg.connect(postgres_url, ssl="require"), timeout=5.0
+                )
+                try:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, slug, arguments, error_type, attempt, max_attempts
+                        FROM tool_dlq
+                        WHERE session_id = $1
+                          AND retry_after <= NOW()
+                          AND attempt < max_attempts
+                          AND resolved_at IS NULL
+                        ORDER BY created_at
+                        LIMIT 5
+                        """,
+                        session_id,
+                    )
+                finally:
+                    await conn.close()
+            except Exception as poll_err:
+                logger.debug(f"[DLQ] Poll failed (non-critical): {poll_err}")
+                continue
+
+            if not rows:
+                continue
+
+            logger.info(f"[DLQ] Found {len(rows)} retryable rows for session {session_id}")
+
+            for row in rows:
+                dlq_id = row["id"]
+                slug = row["slug"]
+                arguments = dict(row["arguments"] or {})
+                attempt = row["attempt"]
+                max_attempts = row["max_attempts"]
+
+                logger.info(f"[DLQ] Retrying slug={slug} attempt={attempt+1}/{max_attempts} dlq_id={dlq_id}")
+
+                success = False
+                try:
+                    from .tools.composio_router import execute_composio_tool  # type: ignore
+                    result = await asyncio.wait_for(
+                        execute_composio_tool(slug, arguments, user_id=user_id),
+                        timeout=60.0,
+                    )
+                    # Consider it success if result doesn't look like an error string
+                    success = bool(result and not result.lower().startswith(("error", "failed", "timeout")))
+                except Exception as retry_err:
+                    logger.warning(f"[DLQ] Retry failed for slug={slug} dlq_id={dlq_id}: {retry_err}")
+
+                # Update the row
+                try:
+                    conn = await asyncio.wait_for(
+                        asyncpg.connect(postgres_url, ssl="require"), timeout=5.0
+                    )
+                    try:
+                        if success:
+                            await conn.execute(
+                                "UPDATE tool_dlq SET resolved_at = NOW() WHERE id = $1",
+                                dlq_id,
+                            )
+                            logger.info(f"[DLQ] Resolved dlq_id={dlq_id} slug={slug}")
+                        else:
+                            new_attempt = attempt + 1
+                            # Exponential backoff: 120s * 2^attempt, capped at 3600s
+                            delay = min(120 * (2 ** attempt), 3600)
+                            if new_attempt >= max_attempts:
+                                # Mark as exhausted (resolved with max attempts hit)
+                                await conn.execute(
+                                    """
+                                    UPDATE tool_dlq
+                                    SET attempt = $1, resolved_at = NOW()
+                                    WHERE id = $2
+                                    """,
+                                    new_attempt, dlq_id,
+                                )
+                                logger.warning(f"[DLQ] Exhausted dlq_id={dlq_id} slug={slug} after {new_attempt} attempts")
+                            else:
+                                await conn.execute(
+                                    """
+                                    UPDATE tool_dlq
+                                    SET attempt = $1,
+                                        retry_after = NOW() + ($2 || ' seconds')::interval
+                                    WHERE id = $3
+                                    """,
+                                    new_attempt, str(delay), dlq_id,
+                                )
+                    finally:
+                        await conn.close()
+                except Exception as update_err:
+                    logger.debug(f"[DLQ] Row update failed (non-critical): {update_err}")
+
+    # Start DLQ consumer for this session
+    _postgres_url = settings.postgres_url or os.environ.get("POSTGRES_URL", "")
+    _dlq_stop_event = asyncio.Event()
+    if _postgres_url:
+        asyncio.create_task(
+            _dlq_consumer(
+                postgres_url=_postgres_url,
+                session_id=session_id,
+                user_id=_user_id or "_default",
+                poll_interval_secs=60.0,
+                stop_event=_dlq_stop_event,
+            ),
+            name=f"dlq_consumer_{session_id}",
+        )
+        logger.info(f"[DLQ] Consumer task started for session {session_id}")
+
     # CRITICAL: Keep the agent alive until the room closes
     # Without this, the entrypoint returns and the agent disconnects!
     # If we started without a client, wait for one to connect
@@ -2637,6 +2788,10 @@ async def entrypoint(ctx: JobContext):
         # Re-raise after cleanup block executes (in finally)
         raise
     finally:
+        # Signal DLQ consumer to stop (if it was started)
+        if "_dlq_stop_event" in dir():
+            _dlq_stop_event.set()
+
         # Clean up session greeting registry entry for this room
         _greeted_rooms.pop(ctx.room.name, None)
 
