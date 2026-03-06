@@ -90,7 +90,7 @@ class TaskTracker:
     )
 
     def __init__(self, stall_threshold_seconds: float = 8.0,
-                 max_continuations_per_objective: int = 3,
+                 max_continuations_per_objective: int = 5,
                  min_continuation_gap_seconds: float = 8.0):
         self._lock = threading.Lock()
 
@@ -239,6 +239,18 @@ class TaskTracker:
             self._tool_completed_since_last_response = False
             self._agent_gave_interim_response = False
             logger.debug("[Heartbeat] Objective marked complete")
+
+    def is_max_continuations_reached(self) -> bool:
+        """Returns True when continuation limit is exhausted for the current objective.
+
+        Distinct from should_inject_continuation() returning False — this signals
+        that the agent has genuinely hit the ceiling and needs to announce it, rather
+        than silently freezing. Only meaningful when has_active_objective is True.
+        """
+        with self._lock:
+            if self._objective_completed or self._current_objective is None:
+                return False
+            return self._continuation_count >= self._max_continuations
 
     # ── Heartbeat decision methods ────────────────────────────────────────────
 

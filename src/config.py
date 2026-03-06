@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # Agent Settings
     agent_name: str = Field(default="Voice Assistant", alias="AGENT_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    max_tool_steps: int = Field(default=12, alias="MAX_TOOL_STEPS")  # 12 steps — enough for complex multi-tool flows, prevents the runaway loops seen at 20
+    max_tool_steps: int = Field(default=20, alias="MAX_TOOL_STEPS")  # 20 steps — raised to support complex multi-tool flows
 
     # Composio Integration (SDK-only execution via composioBatchExecute/composioExecute)
     composio_api_key: str = Field(default="", alias="COMPOSIO_API_KEY")

@@ -71,6 +71,9 @@ _SLUG_OVERRIDES: dict[str, str] = {
     # Google Drive: FIND_FOLDER does not exist in live API
     "GOOGLEDRIVE_FIND_FOLDER": "GOOGLEDRIVE_FIND_FILE",
     "GOOGLEDRIVE_LIST_FILES_IN_FOLDER": "GOOGLEDRIVE_FIND_FILE",
+    # Google Drive: LLM-invented folder/file list slugs
+    "GOOGLEDRIVE_LIST_FOLDERS": "GOOGLEDRIVE_FIND_FILE",
+    "GOOGLEDRIVE_SEARCH_FILES": "GOOGLEDRIVE_FIND_FILE",
     # Google Drive: GET_FILE aliases
     "GOOGLEDRIVE_GET_FILE": "GOOGLEDRIVE_GET_FILE_METADATA",
     "GOOGLEDRIVE_GET_FILE_BY_ID": "GOOGLEDRIVE_GET_FILE_METADATA",
@@ -1652,6 +1655,9 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
         except asyncio.TimeoutError:
             logger.warning("Composio: _build_slug_index timed out after 30s in execute_composio_tool")
 
+    # Capture original slug before any override remapping (needed for param transforms below)
+    original_slug = slug_key
+
     # Two-stage slug resolution:
     # Stage 1: Fast local resolution with confidence tier
     fast_match, tier = _resolve_slug_fast(tool_slug)
@@ -1712,6 +1718,18 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
 
     if resolved_slug != slug_key:
         logger.info(f"Composio: Slug remapped: {tool_slug} → {resolved_slug}")
+
+    # Param transformations for specific slug overrides that map to GOOGLEDRIVE_FIND_FILE.
+    # FIND_FILE uses the `q` param for its search query; LLM-invented slugs may use different
+    # param names or omit the folder-type filter entirely.
+    if original_slug == "GOOGLEDRIVE_LIST_FOLDERS":
+        # Inject folder mimeType filter so FIND_FILE returns only folders
+        arguments["q"] = "mimeType='application/vnd.google-apps.folder'"
+        logger.info("Composio: Injected folder mimeType filter for GOOGLEDRIVE_LIST_FOLDERS → FIND_FILE")
+    elif original_slug == "GOOGLEDRIVE_SEARCH_FILES" and "query" in arguments:
+        # Rename `query` → `q` to match FIND_FILE's param name
+        arguments["q"] = arguments.pop("query")
+        logger.info("Composio: Renamed 'query' → 'q' for GOOGLEDRIVE_SEARCH_FILES → FIND_FILE")
 
     tool_display = _friendly_name(resolved_slug)
     ui_name = _display_name(resolved_slug)

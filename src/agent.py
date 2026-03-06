@@ -1561,7 +1561,8 @@ async def entrypoint(ctx: JobContext):
             if _wake_gate_suppress:
                 _wake_gate_suppress = False  # Reset flag; interrupt already issued upstream
                 logger.info("[WakeGate] Suppress flag reset in thinking state — interrupt already fired at transcription")
-                return  # Skip task tracker update
+                _task_tracker.record_agent_responding()  # Fix 2A: task tracker must see LLM inference even when gate suppressed
+                return  # Skip remaining state handling
             _task_tracker.record_agent_responding()
             asyncio.create_task(safe_publish_data(
                 b'{"type":"agent.state","state":"thinking"}',
@@ -1581,7 +1582,9 @@ async def entrypoint(ctx: JobContext):
                 log_type="agent.state"
             ))
         elif "idle" in state_str:
-            _last_agent_listening_time = time.time()
+            # Fix 2B: do NOT update _last_agent_listening_time here — idle fires on every
+            # tool execution pause, which resets the 30s grace period clock prematurely.
+            # Grace period clock is only reset when the agent enters "listening" (post-speech).
             _task_tracker.record_agent_idle()
             total = tracker.end("total_latency")
             if total:
@@ -2518,7 +2521,7 @@ async def entrypoint(ctx: JobContext):
         HEARTBEAT_INTERVAL = 4.0   # Assess every 4 seconds
         TRIM_EVERY_N_CYCLES = 5    # Trim chat_ctx every 5*4=20 seconds
         _hb_count = 0
-        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=6s, max=5, gap=8s, trim=60s)")
+        logger.info("[Heartbeat] Background monitor started (interval=4s, stall=8s, max=5, gap=8s, trim=20s)")
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -2540,6 +2543,21 @@ async def entrypoint(ctx: JobContext):
                 if is_gamma_pending():
                     continue  # Gamma poller is running — stay silent until it completes
 
+                # Fix 2C: check max-continuations exhaustion BEFORE should_inject_continuation
+                # so the agent announces failure exactly once rather than freezing silently.
+                if task_tracker_ref.is_max_continuations_reached():
+                    logger.warning("[Heartbeat] Max continuations exhausted — announcing to user")
+                    try:
+                        await session_ref.say(
+                            "I've attempted this task several times without completing it. "
+                            "Could you rephrase or let me know how you'd like to proceed?",
+                            allow_interruptions=True
+                        )
+                    except Exception as _say_err:
+                        logger.error(f"[Heartbeat] Max-continuations announcement failed: {_say_err}")
+                    task_tracker_ref.mark_objective_complete()  # reset so agent can take new tasks
+                    continue
+
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
 
@@ -2550,6 +2568,24 @@ async def entrypoint(ctx: JobContext):
                     pass
                 prompt = task_tracker_ref.get_continuation_prompt(last_tool_result=_last_result)
                 logger.info(f"[Heartbeat] Stalled task detected — injecting continuation")
+
+                # Fix 2D: inject session context into heartbeat continuations so the LLM
+                # has Gamma URLs and last tool result even after chat_ctx has been trimmed.
+                _sid = _session_id_ref[0] or ""
+                _ctx_parts = []
+                try:
+                    _gamma_url = _get_fact(_sid, "gammaUrl")
+                    if _gamma_url:
+                        _ctx_parts.append(f"[Gamma URL from this session: {_gamma_url}]")
+                except Exception:
+                    pass
+                try:
+                    if _last_result:
+                        _ctx_parts.append(f"[Last tool result: {_last_result[:500]}]")
+                except Exception:
+                    pass
+                if _ctx_parts:
+                    prompt = "[Session context]\n" + "\n".join(_ctx_parts) + "\n\n" + prompt
 
                 try:
                     # generate_reply makes the LLM produce a new turn using the
@@ -2577,7 +2613,7 @@ async def entrypoint(ctx: JobContext):
                 await asyncio.sleep(1.0)  # Brief pause before continuing loop
 
     _heartbeat_task = asyncio.create_task(_heartbeat_monitor(session, _task_tracker))
-    logger.info("[Heartbeat] In-session monitor started (4s interval, 4s stall threshold)")
+    logger.info("[Heartbeat] In-session monitor started (4s interval, 8s stall threshold, max=5)")
 
     async def _composio_health_monitor():
         """Periodic background check: proactively detect EXPIRED/FAILED Composio connections.
