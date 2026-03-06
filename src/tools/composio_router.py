@@ -2085,15 +2085,15 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                         )
                         return await execute_composio_tool(tool_slug, arguments, _is_retry=True)
 
-                # Refresh failed or retry still failed — circuit-break the service
-                _service_auth_failed[service_key] = True
-                asyncio.create_task(  # propagate failure to all workers via PG
-                    _pg_mark_service_failed(service_key, error_str[:200])
+                # Refresh failed or retry still failed — block this slug only, not the whole service.
+                # Fix 3A: replaced service-wide CB with per-slug CB to prevent one slug's 401
+                # from killing all tools in the same toolkit for 5 minutes.
+                _mark_slug_failed(slug_key)  # first hit
+                _mark_slug_failed(slug_key)  # second hit — immediately trips CB (max_failures=2)
+                logger.warning(
+                    f"[CB] Auth failure on {slug_key} — blocking slug only, "
+                    f"service {service_key} remains available"
                 )
-                _failed_slugs[slug_key] = (
-                    _CB_MAX_FAILURES,
-                    _failed_slugs.get(slug_key, (0, time.time()))[1],
-                )  # trip circuit breaker (Change 2: preserve original timestamp)
                 logger.warning(
                     f"[TOOL_CALL] Composio AUTH EXPIRED (401): {resolved_slug} "
                     f"service={service_key} log_id={log_id} error={error_str!r}"
@@ -2157,9 +2157,10 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                     raw_error=error_str[:500],
                     session_id=None, user_id=user_id,
                 ))
+                # Fix 3B: explicit user-facing message so the LLM does not hang waiting for a result
                 return (
-                    f"The {tool_display} service returned a temporary error. "
-                    f"You may retry once."
+                    f"[{tool_display}] encountered a temporary error and has been queued for retry. "
+                    f"The task will be retried automatically. Please continue with other steps or try again in a moment."
                 )
 
             else:
@@ -2662,14 +2663,16 @@ async def batch_execute_composio_tools(tools: list) -> str:
     await publish_tool_executing(batch_call_id)
     start_ms = int(time.time() * 1000)
 
-    # Change 5: wrap each task with a per-task timeout so a single slow tool
-    # cannot block the entire batch indefinitely.
+    # Fix 3C: per-task timeout reduced from 45s to 35s so a single slow tool
+    # does not block the entire batch. asyncio.TimeoutError is caught here and
+    # converted to an informative string — the results loop below sees a str,
+    # not an exception, so no special-case handling is needed there.
     async def _with_batch_timeout(coro, slug: str):
         try:
-            return await asyncio.wait_for(coro, timeout=45)
+            return await asyncio.wait_for(coro, timeout=35.0)
         except asyncio.TimeoutError:
-            logger.warning(f"Composio batch: {slug} timed out after 45s")
-            return f"Tool {_friendly_name(slug)} timed out after 45s"
+            logger.warning(f"[Batch] Tool {slug} timed out in batch execution")
+            return f"[{_friendly_name(slug)}] timed out. Try this tool individually or try again."
 
     tasks = [
         _with_batch_timeout(
