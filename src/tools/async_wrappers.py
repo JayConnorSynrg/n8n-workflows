@@ -771,7 +771,15 @@ async def manage_connections_async(
         # Slug presence in _slugs_by_service is definitive evidence of an active connection.
         from .composio_router import _slugs_by_service as _sbs
         _svc_key = service.lower().strip().replace(" ", "_").replace("-", "_")
-        if _sbs.get(_svc_key):
+        # Only block re-auth for confirmed API-key services that have no OAuth redirect.
+        # OAuth services (Teams, Gmail, Drive, Sheets) MUST be allowed through even when
+        # already in the slug index — the user may need a fresh auth link after token expiry,
+        # or want to add a different account.
+        _API_KEY_ONLY_SERVICES = frozenset({
+            "gamma", "notion", "perplexity", "perplexityai",
+            "composio", "composio_search",
+        })
+        if _sbs.get(_svc_key) and _svc_key in _API_KEY_ONLY_SERVICES:
             service_title = service.strip().title()
             await publish_tool_completed(call_id, f"{service_title} already connected")
             return (
