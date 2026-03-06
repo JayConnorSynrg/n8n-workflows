@@ -34,6 +34,9 @@ _turn_detector_model = None
 # Session greeting registry — prevents re-greeting on reconnect within same process
 _greeted_rooms: dict = {}
 
+# Per-session tool step counter — tracks tool calls toward max_tool_steps limit
+_session_tool_call_counts: dict = {}
+
 # Wake word gate state
 _wake_gate_suppress: bool = False
 _AIO_WAKE_PATTERN = re.compile(
@@ -1761,6 +1764,38 @@ async def entrypoint(ctx: JobContext):
         except Exception as _flush_e:
             logger.debug(f"[FactFlush] Critical fact flush check failed: {_flush_e}")
 
+        # Fix 4D: Per-session tool step counter — warns LLM when approaching max_tool_steps.
+        # Uses module-level dict keyed by session_id; cleared at session disconnect.
+        try:
+            _session_tool_call_counts[session_id] = _session_tool_call_counts.get(session_id, 0) + 1
+            _step_count = _session_tool_call_counts[session_id]
+            _step_limit = getattr(settings, "max_tool_steps", 20)
+            _warn_at = _step_limit - 2  # Warn 2 steps before hard cap
+            if _step_count == _warn_at:
+                logger.warning(
+                    f"[ToolSteps] Session {session_id[:8]} approaching max_tool_steps "
+                    f"({_step_count}/{_step_limit})"
+                )
+                try:
+                    _warn_msg = (
+                        f"[System] You have used {_step_count} of {_step_limit} allowed tool steps "
+                        f"in this turn. Prioritize completing the current task or summarize "
+                        f"progress before calling more tools."
+                    )
+                    session.chat_ctx.add_message(role="system", content=_warn_msg)
+                except Exception as _ctx_e:
+                    logger.debug(f"[ToolSteps] chat_ctx injection failed: {_ctx_e}")
+        except Exception as _step_e:
+            logger.debug(f"[ToolSteps] Step counter update failed: {_step_e}")
+
+        # Fix 4A: Invalidate the session context cache so the next checkContext call
+        # fetches fresh data instead of returning stale pre-tool-call cached results.
+        # invalidate_session_cache is already imported at module level.
+        try:
+            invalidate_session_cache(session_id)
+        except Exception as _inv_e:
+            logger.debug(f"[CacheInvalidate] Session cache invalidation failed: {_inv_e}")
+
     @session.on("metrics_collected")
     def on_metrics_collected(ev):
         """Collect and log metrics."""
@@ -2536,6 +2571,25 @@ async def entrypoint(ctx: JobContext):
                     gc.collect()
                     logger.debug(f"[Heartbeat] GC collected (cycle {_hb_count})")
 
+                    # Fix 4B: Intermediate session facts flush — persists critical in-memory
+                    # facts to Postgres every 60s so Railway container restarts mid-session
+                    # don't lose gammaUrl, generationId, and last_tool_result.
+                    # _session_id_ref and _user_id are captured from enclosing entrypoint scope.
+                    _hb_sid = _session_id_ref[0] if _session_id_ref else None
+                    _hb_pg_url = getattr(settings, "postgres_url", None)
+                    if _hb_sid and _hb_pg_url:
+                        try:
+                            asyncio.create_task(
+                                _immediate_flush_critical_facts(
+                                    _hb_sid,
+                                    _user_id or "_default",
+                                    _hb_pg_url,
+                                ),
+                                name=f"hb_fact_flush_{_hb_count}",
+                            )
+                        except Exception as _hb_flush_e:
+                            logger.debug(f"[Heartbeat] Periodic fact flush failed: {_hb_flush_e}")
+
                 # Suppress continuation while gamma is generating in the background.
                 # Without this guard the heartbeat re-triggers the LLM every 6s,
                 # which calls generatePresentation/generateDocument again in a loop.
@@ -2724,12 +2778,21 @@ async def entrypoint(ctx: JobContext):
                 success = False
                 try:
                     from .tools.composio_router import execute_composio_tool  # type: ignore
+                    # Fix 4C: 15s per-retry timeout prevents slow tools from blocking
+                    # the event loop for a full 60s poll cycle.
                     result = await asyncio.wait_for(
                         execute_composio_tool(slug, arguments, user_id=user_id),
-                        timeout=60.0,
+                        timeout=15.0,
                     )
                     # Consider it success if result doesn't look like an error string
                     success = bool(result and not result.lower().startswith(("error", "failed", "timeout")))
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[DLQ] Retry for slug={slug} dlq_id={dlq_id} timed out after 15s "
+                        f"— leaving in DLQ for next poll cycle"
+                    )
+                    # Don't mark resolved — leave row for next 60s poll cycle
+                    continue
                 except Exception as retry_err:
                     logger.warning(f"[DLQ] Retry failed for slug={slug} dlq_id={dlq_id}: {retry_err}")
 
@@ -2955,6 +3018,9 @@ async def entrypoint(ctx: JobContext):
         cleared_facts = _clear_facts(session_id)
         if cleared_facts:
             logger.info(f"Cleared {cleared_facts} session facts for {session_id}")
+
+        # Fix 4D: Clear per-session tool step counter at session end
+        _session_tool_call_counts.pop(session_id, None)
 
         logger.info("Agent session ended")
 
