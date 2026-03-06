@@ -1084,6 +1084,7 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
             # Try to extract names/titles from first few items
             # Includes OData/Microsoft-specific fields: displayName (drives/users),
             # name (OneDrive items), subject (emails/events), title (documents)
+            # topic (Teams chats), text (Teams messages), id fallback for chaining
             names = []
             for item in items[:5]:
                 if isinstance(item, dict):
@@ -1093,10 +1094,12 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
                         or item.get("title")
                         or item.get("subject")
                         or item.get("fileName")
-                        or ""
+                        or item.get("topic")        # Teams chats, board items
+                        or item.get("text")         # Teams messages body.content or plain text
+                        or item.get("id", "")       # Fallback: include ID for multi-step chaining
                     )
                     if name:
-                        names.append(str(name))
+                        names.append(str(name)[:60])
             if names:
                 listing = " and ".join(names[:3])
                 if count > 3:

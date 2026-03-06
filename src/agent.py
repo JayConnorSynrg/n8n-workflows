@@ -186,6 +186,22 @@ DECISION TREE:
 - User preference/identity → recall("user profile name role company preferences")
 - Prior tool output → recall("<tool name> result output")
 
+## MICROSOFT TEAMS TOOL PATTERNS
+
+### Getting recent chat messages (MANDATORY TWO-STEP SEQUENCE)
+Step 1: Call MICROSOFT_TEAMS_CHATS_GET_ALL_CHATS — extract the id field from each chat in results
+Step 2: Call MICROSOFT_TEAMS_CHATS_GET_ALL_MESSAGES using a REAL chat_id from step 1
+
+CRITICAL: NEVER use meeting thread IDs (format: 19:meeting_xxx@thread.v2) as chat_id — they return 404.
+Real personal chat IDs look like: 19:xxx@unq.gbl.spaces (1:1) or 19:xxx@thread.v2 without "meeting_".
+
+### Getting channel messages (team channels, not personal chats)
+Use TEAMS_LIST_CHANNEL_MESSAGES — requires team_id + channel_id, NOT a chat_id.
+First get team_id via MICROSOFT_TEAMS_LIST_MY_TEAMS, then channel_id via MICROSOFT_TEAMS_LIST_CHANNELS.
+
+### Quick presence / profile
+MICROSOFT_TEAMS_GET_MY_PRESENCE and MICROSOFT_TEAMS_GET_MY_PROFILE require no arguments.
+
 Write tools ask the user to confirm first
 - sendEmail: Send email follow the EMAIL PROTOCOL below
 - knowledgeBase with action store: Save new information
