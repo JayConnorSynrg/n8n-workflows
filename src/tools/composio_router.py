@@ -81,6 +81,29 @@ _SLUG_OVERRIDES: dict[str, str] = {
     "MICROSOFT_TEAMS_LIST_MESSAGES": "MICROSOFT_TEAMS_TEAMS_LIST_CHANNEL_MESSAGES",
 }
 
+# ── Pagination hard cap ───────────────────────────────────────────────────
+_MAX_SLUG_INDEX_PAGES = 100  # prevent unbounded pagination loop
+
+# ── Resilience: tool result cache (read-only slugs only) ──────────────────
+_tool_result_cache: dict = {}  # {cache_key: (result, expires_at_monotonic)}
+_TOOL_RESULT_CACHE_TTL_BY_PREFIX: dict = {
+    "GMAIL": 30.0,
+    "GOOGLEDRIVE": 60.0,
+    "GOOGLESHEETS": 60.0,
+    "MICROSOFT_TEAMS": 30.0,
+    "PERPLEXITYAI": 120.0,
+    "GAMMA": 120.0,
+}
+_DEFAULT_RESULT_CACHE_TTL = 45.0  # seconds — used when prefix not in above dict
+
+# ── Resilience: PG circuit-breaker local cache ────────────────────────────
+_pg_cb_cache: dict = {}  # {service_name: (is_failed: bool, expires_at_monotonic: float)}
+_PG_CB_CACHE_TTL = 60.0  # seconds — re-check PG after this window
+
+# ── Resilience: idempotency keys (write slugs only) ──────────────────────
+_executed_call_keys: dict = {}  # {sha256_key: expires_at_monotonic}
+_IDEM_TTL_SECS = 300.0  # 5 minutes — window for dedup
+
 
 def _is_slug_failed(slug: str) -> bool:
     """Check if a slug is circuit-broken; auto-expires stale entries (Change 2)."""
@@ -322,6 +345,12 @@ def _discover_connected_toolkits(client, user_id: str) -> list[str]:
         # RC1: paginate until no next_cursor
         while True:
             page_num += 1
+            if page_num > _MAX_SLUG_INDEX_PAGES:
+                logger.warning(
+                    f"[SLUG_INDEX] Pagination hard cap reached at {_MAX_SLUG_INDEX_PAGES} pages "
+                    f"— breaking to prevent runaway loop (cursor={cursor!r})"
+                )
+                break
             response = _fetch_page(cursor)
             items = _extract_items_from_response(response)  # RC2
 
@@ -1538,6 +1567,80 @@ async def _pg_check_service_failed(service: str) -> bool:
     return False
 
 
+def _is_read_only_slug(slug: str) -> bool:
+    """Returns True for GET/FIND/LIST/SEARCH/FETCH slugs — idempotency never applies to reads.
+
+    Handles multi-word service prefixes (e.g. MICROSOFT_TEAMS_SEARCH_MESSAGES) by checking
+    each possible split position rather than assuming the service is a single word.
+    """
+    _READ_ACTION_PREFIXES = ("GET_", "FIND_", "LIST_", "SEARCH_", "FETCH_", "QUERY_")
+    # Try every possible split point: if ANY suffix starting at a "_" boundary matches a
+    # read-action prefix, the slug is read-only.  This correctly handles services like
+    # MICROSOFT_TEAMS where split("_", 1) would leave "TEAMS_SEARCH_MESSAGES" as the
+    # action part, missing the SEARCH_ prefix.
+    parts = slug.split("_")
+    for i in range(1, len(parts)):
+        action_part = "_".join(parts[i:]) + "_"  # re-join remainder + trailing _ for prefix check
+        if any(action_part.startswith(p) for p in _READ_ACTION_PREFIXES):
+            return True
+    return False
+
+
+def _make_result_cache_key(slug: str, args: dict) -> str:
+    """Stable cache key for read-only tool results."""
+    import hashlib
+    import json
+    canonical = json.dumps(args, sort_keys=True, default=str)
+    return hashlib.sha256(f"{slug}:{canonical}".encode()).hexdigest()
+
+
+def _check_and_set_idem(slug: str, args: dict) -> bool:
+    """
+    Returns True if this (slug, args) combination was already executed within _IDEM_TTL_SECS.
+    Returns False and registers the key if this is a new call.
+    Never applies to read-only slugs.
+    """
+    import hashlib
+    import json
+    if _is_read_only_slug(slug):
+        return False  # reads are always allowed
+    canonical = json.dumps(args, sort_keys=True, default=str)
+    key = hashlib.sha256(f"{slug}:{canonical}".encode()).hexdigest()
+    now = time.monotonic()
+    if key in _executed_call_keys and _executed_call_keys[key] > now:
+        return True  # duplicate detected — skip
+    _executed_call_keys[key] = now + _IDEM_TTL_SECS
+    return False
+
+
+def _clear_idem_key(slug: str, args_json: str) -> None:
+    """Remove an idempotency key — called on tool failure to allow legitimate retry."""
+    key = _make_result_cache_key(slug, args_json)
+    _executed_call_keys.pop(key, None)
+
+
+async def _pg_check_service_failed_cached(service: str) -> bool:
+    """
+    Cross-worker circuit breaker check with local 60s TTL cache.
+    Eliminates per-tool-call PG round-trips for CB state.
+    Falls back to direct check on cache miss or PG error.
+    """
+    now = time.monotonic()
+    cached = _pg_cb_cache.get(service)
+    if cached is not None:
+        is_failed, expires_at = cached
+        if now < expires_at:
+            return is_failed
+    # Cache miss — query PG
+    try:
+        result = await _pg_check_service_failed(service)
+        _pg_cb_cache[service] = (result, now + _PG_CB_CACHE_TTL)
+        return result
+    except Exception:
+        # PG unavailable — treat as not-failed (don't block tools on monitoring failure)
+        return False
+
+
 async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool = False) -> str:
     """Execute a Composio tool via SDK and return a voice-friendly result string.
 
@@ -1561,6 +1664,21 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     settings = get_settings()
 
     slug_key = tool_slug.upper().strip()
+
+    # Idempotency guard — prevent duplicate writes during parallel_tool_calls + heartbeat storms
+    if _check_and_set_idem(slug_key, arguments):
+        logger.warning(f"[IDEM] Duplicate write detected for slug={slug_key} — skipping to prevent double execution")
+        return "Already executed this action — skipping duplicate to prevent double send."
+
+    # Tool result cache — return cached result for read-only slugs (avoid redundant API calls)
+    if _is_read_only_slug(slug_key):
+        _cache_key = _make_result_cache_key(slug_key, arguments)
+        _cached_entry = _tool_result_cache.get(_cache_key)
+        if _cached_entry is not None:
+            _cached_result, _cache_expires = _cached_entry
+            if time.monotonic() < _cache_expires:
+                logger.debug(f"[RESULT_CACHE] Cache hit for {slug_key}")
+                return _cached_result
 
     # Block Composio MCP meta-tool slugs — these are not callable via client.tools.execute()
     # They belong to the Composio MCP server, not the SDK action registry.
@@ -1613,7 +1731,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     # for this service after a 401. Only runs when local state is clear (fast-path above
     # already short-circuited if this worker knows the service is failed).
     if service_key and not _service_auth_failed.get(service_key):
-        if await _pg_check_service_failed(service_key):
+        if await _pg_check_service_failed_cached(service_key):
             _service_auth_failed[service_key] = True  # sync local state to avoid repeat PG reads
             service_display = service_key.replace("_", " ").title()
             logger.warning(
@@ -1918,6 +2036,12 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                 except Exception as _parse_err:
                     logger.debug(f"Composio: active_connection parse failed: {_parse_err}")
 
+            # Cache successful read-only results
+            if _is_read_only_slug(resolved_slug):
+                _service_prefix = resolved_slug.split("_")[0] if "_" in resolved_slug else "DEFAULT"
+                _ttl = _TOOL_RESULT_CACHE_TTL_BY_PREFIX.get(_service_prefix, _DEFAULT_RESULT_CACHE_TTL)
+                _tool_result_cache[_make_result_cache_key(resolved_slug, arguments)] = (voice_result, time.monotonic() + _ttl)
+
             # Schema NOT included in return — clean voice result only.
             # LLM context stays uncluttered on success. Schema cleared in finally.
             return voice_result
@@ -2061,6 +2185,10 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                         if _retry.get("successful"):
                             _vr = _extract_voice_result(_retry.get("data", {}), resolved_slug, tool_display)
                             await publish_tool_completed(call_id, _vr[:100])
+                            if _is_read_only_slug(resolved_slug):
+                                _sp = resolved_slug.split("_")[0] if "_" in resolved_slug else "DEFAULT"
+                                _rt = _TOOL_RESULT_CACHE_TTL_BY_PREFIX.get(_sp, _DEFAULT_RESULT_CACHE_TTL)
+                                _tool_result_cache[_make_result_cache_key(resolved_slug, arguments)] = (_vr, time.monotonic() + _rt)
                             return _vr
                     except (asyncio.TimeoutError, Exception):  # nosec B110 — fallthrough to circuit-break
                         pass
@@ -2088,8 +2216,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                 # Refresh failed or retry still failed — block this slug only, not the whole service.
                 # Fix 3A: replaced service-wide CB with per-slug CB to prevent one slug's 401
                 # from killing all tools in the same toolkit for 5 minutes.
-                _mark_slug_failed(slug_key)  # first hit
-                _mark_slug_failed(slug_key)  # second hit — immediately trips CB (max_failures=2)
+                _record_slug_failure(slug_key)  # first hit
+                _record_slug_failure(slug_key)  # second hit — immediately trips CB (max_failures=2)
                 logger.warning(
                     f"[CB] Auth failure on {slug_key} — blocking slug only, "
                     f"service {service_key} remains available"
