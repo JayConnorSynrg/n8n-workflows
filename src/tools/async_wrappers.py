@@ -9,6 +9,7 @@ Architecture:
   to the LiveKit data channel for real-time client-side observability
 """
 import time
+from contextvars import ContextVar
 from typing import Optional
 
 try:
@@ -60,6 +61,7 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async, generate_social_async
 from .deep_store_tool import deep_store_async, deep_recall_async
 from .user_profile_tool import update_user_profile_tool as _update_user_profile_tool
+from .tool_executor import delegate_tools as _delegate_tools_impl
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
 try:
@@ -70,6 +72,10 @@ except Exception:
     _memory_store = None  # type: ignore[assignment]
     _memory_capture = None  # type: ignore[assignment]
     _MEMORY_AVAILABLE = False
+
+# Session ID context variable — set by agent.py before each LLM turn
+# Allows delegate_tools_async to know the current session without closure access
+_tool_session_id: ContextVar[str] = ContextVar("_tool_session_id", default="")
 
 
 # =============================================================================
@@ -1223,43 +1229,85 @@ async def update_user_profile_async(
 
 
 # =============================================================================
+# DELEGATE TOOLS - CONV-CLASS (routes external operations to tool executor LLM)
+# =============================================================================
+
+@llm.function_tool(
+    name="delegateTools",
+    description=(
+        "Delegate external tool operations to the tool executor LLM. "
+        "Use this for ALL external operations: sending email, searching Drive, "
+        "managing contacts, Composio tools, presentations, web scraping, etc. "
+        "Describe what you need in natural language — the tool executor handles "
+        "the specifics."
+    ),
+)
+async def delegate_tools_async(request: str) -> str:
+    """Delegate external tool operations to the tool executor LLM.
+
+    Use this for ALL external operations: sending email, searching Drive,
+    managing contacts, Composio tools, presentations, web scraping, etc.
+    Describe what you need in natural language — the tool executor handles
+    the specifics.
+
+    Args:
+        request: Natural language description of what to do (e.g. "search
+                 Google Drive for the Q4 report", "send email to John about
+                 the meeting tomorrow", "generate a presentation about AI trends")
+
+    Returns:
+        Result of the tool operation as a string summary.
+    """
+    session_id = _tool_session_id.get("")
+    return await _delegate_tools_impl(
+        session_id=session_id,
+        request=request,
+        context_hints={},
+        say_callback=None,
+        task_tracker=None,
+        pg_logger_module=None,
+    )
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
 ASYNC_TOOLS = [
-    send_email_async,
-    search_documents_async,
-    get_document_async,
-    list_drive_files_async,
-    recall_data_async,
-    recall_sessions_async,         # SESSION RECALL: semantic search over past session summaries (READ, no gate)
-    recall_drive_data_async,
-    memory_summary_async,
-    deep_store_async,              # DEEP STORE: unlimited cross-session archive (no confirmation gate)
-    deep_recall_async,             # DEEP RECALL: retrieve by label or text search (READ, no gate)
-    update_user_profile_async,     # USER PROFILE: write name/role/company to USER.md for cross-session recognition
-    vector_store_async,
-    database_query_async,
-    vector_search_async,
-    query_context_async,
+    send_email_async,              # TOOL
+    search_documents_async,        # TOOL
+    get_document_async,            # TOOL
+    list_drive_files_async,        # TOOL
+    recall_data_async,             # CONV
+    recall_sessions_async,         # CONV  — SESSION RECALL: semantic search over past session summaries (READ, no gate)
+    recall_drive_data_async,       # TOOL
+    memory_summary_async,          # CONV
+    deep_store_async,              # BOTH  — DEEP STORE: unlimited cross-session archive (no confirmation gate)
+    deep_recall_async,             # BOTH  — DEEP RECALL: retrieve by label or text search (READ, no gate)
+    update_user_profile_async,     # TOOL  — USER PROFILE: write name/role/company to USER.md for cross-session recognition
+    vector_store_async,            # TOOL
+    database_query_async,          # TOOL
+    vector_search_async,           # TOOL
+    query_context_async,           # CONV
+    delegate_tools_async,          # CONV  — DELEGATE: route external operations to tool executor LLM
     # Contacts
-    add_contact_async,
-    get_contact_async,
-    search_contacts_async,
+    add_contact_async,             # TOOL
+    get_contact_async,             # TOOL
+    search_contacts_async,         # TOOL
     # Composio (SDK execution — catalog pre-loaded into system prompt)
-    manage_connections_async,      # CONNECTION MGMT: status + connect new services via email
-    list_composio_tools_async,     # STEP 1: browse exact slugs for a service
-    plan_composio_task_async,      # STEP 2: batch schema fetch for all tools in the plan
-    get_tool_schema_async,         # FALLBACK: single tool schema if not in cache
-    composio_batch_execute_async,  # STEP 3: execute with correct slugs and params
-    composio_execute_async,        # SYNC: single read where LLM needs result before next step
+    manage_connections_async,      # TOOL  — CONNECTION MGMT: status + connect new services via email
+    list_composio_tools_async,     # TOOL  — STEP 1: browse exact slugs for a service
+    plan_composio_task_async,      # TOOL  — STEP 2: batch schema fetch for all tools in the plan
+    get_tool_schema_async,         # TOOL  — FALLBACK: single tool schema if not in cache
+    composio_batch_execute_async,  # TOOL  — STEP 3: execute with correct slugs and params
+    composio_execute_async,        # TOOL  — SYNC: single read where LLM needs result before next step
     # Lead Generation (async background — results delivered via email)
-    run_lead_gen_async,            # ASYNC: scrape + enrich leads, email results
+    run_lead_gen_async,            # TOOL  — ASYNC: scrape + enrich leads, email results
     # Prospect Scraper (async background — LinkedIn scrape via n8n/Apify)
-    scrape_prospects_async,        # ASYNC: LinkedIn prospect search by job title + location
+    scrape_prospects_async,        # TOOL  — ASYNC: LinkedIn prospect search by job title + location
     # Gamma (async background generation with proactive session notification)
-    generate_presentation_async,   # ASYNC: slide decks
-    generate_document_async,       # ASYNC: documents / reports
-    generate_webpage_async,        # ASYNC: webpages / landing pages
-    generate_social_async,         # ASYNC: social media posts (Instagram/LinkedIn/TikTok)
+    generate_presentation_async,   # TOOL  — ASYNC: slide decks
+    generate_document_async,       # TOOL  — ASYNC: documents / reports
+    generate_webpage_async,        # TOOL  — ASYNC: webpages / landing pages
+    generate_social_async,         # TOOL  — ASYNC: social media posts (Instagram/LinkedIn/TikTok)
 ]

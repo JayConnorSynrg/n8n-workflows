@@ -13,6 +13,7 @@ Load assessment:
 """
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,92 @@ async def log_tool_error(
 async def _get_pool():
     """Return the active asyncpg pool, or None if not initialized."""
     return _pool if _pg_available else None
+
+
+async def save_session_context(
+    session_id: str,
+    context_key: str,
+    context_value: str,
+    expires_at: Optional[datetime] = None,
+) -> None:
+    """Upsert a key/value pair into session_context. Fire-and-forget."""
+    if not _pg_available or _pool is None:
+        return
+    try:
+        full_key = f"{session_id}:{context_key}"
+        effective_expires = expires_at or (datetime.utcnow() + timedelta(seconds=300))
+        async with _pool.acquire(timeout=5) as conn:
+            await conn.execute(
+                """
+                INSERT INTO session_context (context_key, context_value, expires_at, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (context_key) DO UPDATE
+                    SET context_value = EXCLUDED.context_value,
+                        expires_at = EXCLUDED.expires_at
+                """,
+                full_key,
+                context_value,
+                effective_expires,
+            )
+    except Exception as e:
+        logger.debug(f"[PgLogger] save_session_context failed (non-critical): {e}")
+
+
+async def get_session_context(session_id: str, context_key: str) -> Optional[str]:
+    """Fetch a single context value by session + key. Returns None if missing or expired."""
+    if not _pg_available or _pool is None:
+        return None
+    try:
+        full_key = f"{session_id}:{context_key}"
+        async with _pool.acquire(timeout=5) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT context_value FROM session_context
+                WHERE context_key = $1
+                  AND (expires_at IS NULL OR expires_at > NOW())
+                """,
+                full_key,
+            )
+            return row["context_value"] if row else None
+    except Exception as e:
+        logger.debug(f"[PgLogger] get_session_context failed (non-critical): {e}")
+        return None
+
+
+async def get_session_gates(session_id: str) -> list:
+    """Return all gate context rows for a session (key prefix 'gate:{session_id}:')."""
+    if not _pg_available or _pool is None:
+        return []
+    try:
+        prefix = f"gate:{session_id}:"
+        async with _pool.acquire(timeout=5) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT context_key, context_value FROM session_context
+                WHERE context_key LIKE $1
+                  AND (expires_at IS NULL OR expires_at > NOW())
+                """,
+                f"{prefix}%",
+            )
+            return [{"key": r["context_key"], "value": r["context_value"]} for r in rows]
+    except Exception as e:
+        logger.debug(f"[PgLogger] get_session_gates failed (non-critical): {e}")
+        return []
+
+
+async def clear_session_context(session_id: str, context_key: str) -> None:
+    """Delete a single session context key. Fire-and-forget."""
+    if not _pg_available or _pool is None:
+        return
+    try:
+        full_key = f"{session_id}:{context_key}"
+        async with _pool.acquire(timeout=5) as conn:
+            await conn.execute(
+                "DELETE FROM session_context WHERE context_key = $1",
+                full_key,
+            )
+    except Exception as e:
+        logger.debug(f"[PgLogger] clear_session_context failed (non-critical): {e}")
 
 
 async def close_pool() -> None:

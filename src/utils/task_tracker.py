@@ -128,6 +128,9 @@ class TaskTracker:
         self._last_continuation_at: float = 0.0
         self._min_continuation_gap: float = min_continuation_gap_seconds
 
+        self._tool_in_flight: bool = False
+        self._tool_start_time: float = 0.0
+
         logger.info(
             f"[Heartbeat] TaskTracker initialized "
             f"(stall={stall_threshold_seconds}s, max_continuations={max_continuations_per_objective}, "
@@ -159,6 +162,8 @@ class TaskTracker:
     def record_tool_call_started(self) -> None:
         """Called when a tool begins executing."""
         with self._lock:
+            self._tool_in_flight = True
+            self._tool_start_time = time.monotonic()
             self._tool_calls_pending += 1
             self._total_tool_calls_for_objective += 1
             self._last_activity_at = time.monotonic()
@@ -175,6 +180,7 @@ class TaskTracker:
         (agent acted, so prior interim speech is resolved).
         """
         with self._lock:
+            self._tool_in_flight = False
             self._tool_calls_pending = max(0, self._tool_calls_pending - 1)
             self._total_tool_calls_for_objective += 1
             self._tool_completed_since_last_response = True  # arm Case 1
@@ -279,6 +285,10 @@ class TaskTracker:
           tool 2, then stalled. Inspired by OpenClaw's isLikelyInterimCronMessage.
         """
         with self._lock:
+            # Tool executor in flight — never interrupt with heartbeat continuation
+            if self.is_tool_in_flight:
+                return False
+
             # No active task
             if self._objective_completed or self._current_objective is None:
                 return False
@@ -382,6 +392,13 @@ class TaskTracker:
     def is_agent_responding(self) -> bool:
         with self._lock:
             return self._agent_is_responding
+
+    @property
+    def is_tool_in_flight(self) -> bool:
+        """True if a tool call is actively executing (< 25s grace period)."""
+        if not self._tool_in_flight:
+            return False
+        return (time.monotonic() - self._tool_start_time) < 25.0
 
     @property
     def session_age_seconds(self) -> float:

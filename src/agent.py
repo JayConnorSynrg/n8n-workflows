@@ -85,8 +85,10 @@ from .tools.agent_context_tool import (
     set_current_session_id,
     set_current_user_id,
 )
-from .tools.async_wrappers import ASYNC_TOOLS
+from .tools.async_wrappers import ASYNC_TOOLS, _tool_session_id
+from .tools.tool_executor import cleanup_session as _cleanup_tool_session, is_delegation_active as _is_delegation_active
 from .tools.user_profile_tool import set_user_mem_dir as _set_profile_mem_dir
+from .prompts import CONVERSATION_PROMPT
 from .tools.gamma_tool import get_notification_queue
 from .utils.logging import setup_logging
 from .utils.metrics import LatencyTracker
@@ -1284,6 +1286,7 @@ async def entrypoint(ctx: JobContext):
             new_message = getattr(ev, "new_message", None) or getattr(ev, "message", None)
             if turn_ctx is not None:
                 _sid = _session_id_ref[0] or ctx.room.name or "livekit-agent"
+                _tool_session_id.set(_sid)
                 _inject_per_turn_context(
                     turn_ctx,
                     new_message,
@@ -1344,7 +1347,7 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Agent tools: {len(all_tools)} total")
 
     # Inject pre-loaded catalog into system prompt via {COMPOSIO_CATALOG} marker
-    active_prompt = SYSTEM_PROMPT
+    active_prompt = CONVERSATION_PROMPT
     if composio_catalog:
         active_prompt = active_prompt.replace(
             "{COMPOSIO_CATALOG}",
@@ -2612,6 +2615,12 @@ async def entrypoint(ctx: JobContext):
                     task_tracker_ref.mark_objective_complete()  # reset so agent can take new tasks
                     continue
 
+                # Skip heartbeat continuation if tool executor is actively running
+                _hb_session_id = _session_id_ref[0] or ""
+                if _hb_session_id and _is_delegation_active(_hb_session_id):
+                    logger.debug("[heartbeat] Skipping continuation — tool delegation active")
+                    continue
+
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
 
@@ -2919,6 +2928,10 @@ async def entrypoint(ctx: JobContext):
 
         # Clean up session greeting registry entry for this room
         _greeted_rooms.pop(ctx.room.name, None)
+
+        # Cancel any active tool delegation tasks
+        _cleanup_tool_session(ctx.room.name or "livekit-agent")
+        logger.debug(f"[disconnect] Tool executor session cleaned up: {ctx.room.name}")
 
         # Clean up session memory when session ends
         session_id = ctx.room.name or "livekit-agent"
