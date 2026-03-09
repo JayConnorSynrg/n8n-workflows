@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 from typing import Optional
+import hashlib
 
 from livekit import rtc
 from livekit.agents import (
@@ -36,6 +37,9 @@ _greeted_rooms: dict = {}
 
 # Per-session tool step counter — tracks tool calls toward max_tool_steps limit
 _session_tool_call_counts: dict = {}
+
+# AGENTS.md dedup guard — skip re-injection if content unchanged since last session injection
+_injected_agents_md_hash: dict = {}
 
 # Wake word gate state
 _wake_gate_suppress: bool = False
@@ -903,13 +907,17 @@ def _inject_per_turn_context(turn_ctx, new_message, session_id: str, user_mem_di
         pass
 
     # 3. AGENTS.md routing rules from user memory dir (compact, up to 300 chars)
+    # Dedup guard: skip re-injection if content unchanged since last injection for this session
     try:
         if user_mem_dir:
             agents_md_path = os.path.join(user_mem_dir, "AGENTS.md")
             if os.path.exists(agents_md_path):
                 agents_content = open(agents_md_path, encoding="utf-8").read().strip()
                 if agents_content and len(agents_content) > 50:
-                    parts.append(f"[Routing rules]\n{agents_content[:300]}")
+                    content_hash = hashlib.md5(agents_content.encode()).hexdigest()
+                    if _injected_agents_md_hash.get(session_id) != content_hash:
+                        _injected_agents_md_hash[session_id] = content_hash
+                        parts.append(f"[Routing rules]\n{agents_content[:300]}")
     except Exception:
         pass
 
@@ -1073,7 +1081,7 @@ def prewarm(proc: JobProcess):
                     _loop.close()
             _t = _threading.Thread(target=_pgvector_startup, daemon=True)
             _t.start()
-            _t.join(timeout=8)  # Short join — allow IPC handshake to complete; backfill continues as daemon
+            _t.join(timeout=7)  # Short join — 1s margin before LiveKit IPC hard limit (8s); backfill continues as daemon
 
 
 async def entrypoint(ctx: JobContext):
