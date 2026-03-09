@@ -1273,7 +1273,9 @@ async def delegate_tools_async(request: str) -> str:
 # TOOL REGISTRY
 # =============================================================================
 
-ASYNC_TOOLS = [
+# All tool functions available to the tool executor LLM for dispatching.
+# 24 TOOL-class + 4 CONV + 2 BOTH + 1 delegateTools = 31 total
+TOOL_EXECUTOR_TOOLS = [
     send_email_async,              # TOOL
     search_documents_async,        # TOOL
     get_document_async,            # TOOL
@@ -1310,4 +1312,16 @@ ASYNC_TOOLS = [
     generate_document_async,       # TOOL  — ASYNC: documents / reports
     generate_webpage_async,        # TOOL  — ASYNC: webpages / landing pages
     generate_social_async,         # TOOL  — ASYNC: social media posts (Instagram/LinkedIn/TikTok)
+]
+
+# Tools registered with the conversation LLM (7 only).
+# Conversation LLM delegates all external operations via delegateTools.
+ASYNC_TOOLS = [
+    recall_data_async,             # CONV
+    recall_sessions_async,         # CONV  — SESSION RECALL: semantic search over past session summaries (READ, no gate)
+    memory_summary_async,          # CONV  — memoryStatus
+    query_context_async,           # CONV  — checkContext
+    deep_store_async,              # BOTH  — DEEP STORE: unlimited cross-session archive (no confirmation gate)
+    deep_recall_async,             # BOTH  — DEEP RECALL: retrieve by label or text search (READ, no gate)
+    delegate_tools_async,          # CONV  — DELEGATE: routes external operations to tool executor LLM
 ]
