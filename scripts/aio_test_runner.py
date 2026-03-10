@@ -136,6 +136,9 @@ PATTERNS: dict[str, dict] = {
     },
 }
 
+# Sessions detected in live mode — populated as new rooms connect
+_seen_session_ids: set[str] = set()
+
 # Tool call sequence tracking patterns for live mode
 _TOOL_CALL_RE = re.compile(r"(?i)(tool[._\s]call|execute.*tool|calling.*tool|tool.*invok)", )
 _TOOL_EXEC_RE = re.compile(r"(?i)(executing.*tool|tool.*execut|running.*slug|composio.*execute)", )
@@ -396,6 +399,40 @@ def run_live(focus: str) -> None:
             # Print the raw line dimmed so the user sees the full stream
             print(dim(line))
             sys.stdout.flush()
+
+            # ── Session detection ────────────────────────────────────────────
+            # LiveKit Agents framework logs the room name when the entrypoint
+            # is called. Patterns observed in Railway logs:
+            #   "Starting job in room <room_name>"
+            #   "Participant <identity> joined room <room_name>"
+            #   "entrypoint called" with room context
+            #   "worker registered" with job/room info
+            # We extract the room name and surface it as the session_id.
+            _session_match = re.search(
+                r"(?i)(?:"
+                r"Starting job in room\s+([A-Za-z0-9_\-]+)"
+                r"|Participant .+? joined room\s+([A-Za-z0-9_\-]+)"
+                r"|room[_\s=:]+([A-Za-z0-9_\-]{6,})"
+                r"|session[_\s=:]+([A-Za-z0-9_\-]{6,})"
+                r")",
+                line,
+            )
+            if _session_match:
+                _sid = next((g for g in _session_match.groups() if g), None)
+                if _sid and _sid not in _seen_session_ids:
+                    _seen_session_ids.add(_sid)
+                    print(
+                        f"\n{ANSI_CYAN}{'═' * 60}{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}  NEW SESSION DETECTED{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}  session_id = {bold(_sid)}{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}  timestamp  = {ts}{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}{'─' * 60}{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}  Post-session analysis:{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}  python scripts/aio_test_runner.py --mode post --session-id {_sid}{ANSI_RESET}\n"
+                        f"{ANSI_CYAN}{'═' * 60}{ANSI_RESET}\n"
+                    )
+                    sys.stdout.flush()
+            # ── End session detection ─────────────────────────────────────────
 
             # Tool call sequence tracking
             stall_warn = tracker.ingest(line)
