@@ -1082,6 +1082,16 @@ def _extract_voice_result(data, tool_slug: str, tool_display: str) -> str:
     4. Body/content/text fields (for content retrieval)
     5. Fallback to generic completion message
     """
+    # Gamma-specific extraction — gammaUrl is not a generic field name
+    if "GAMMA" in tool_slug and isinstance(data, dict):
+        _gamma_url = data.get("gammaUrl") or (
+            data.get("data", {}).get("gammaUrl")
+            if isinstance(data.get("data"), dict)
+            else None
+        )
+        if _gamma_url:
+            return f"Gamma presentation ready: {_gamma_url}"
+
     if not isinstance(data, dict):
         if isinstance(data, str) and len(data) > 5:
             return data[:200]

@@ -39,6 +39,9 @@ _tool_session_chat_ctx: dict[str, list] = {}
 # Active asyncio Tasks per session — used by heartbeat to check is_delegation_active()
 _active_delegation: dict[str, set] = {}
 
+# LiveKit AgentSession registry — keyed by session_id for background delegation callbacks
+_session_registry: dict[str, Any] = {}
+
 # ContextVar allowing _dispatch_tool_call to know the current session without closure
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
 
@@ -557,6 +560,57 @@ def is_delegation_active(session_id: str) -> bool:
 def get_active_delegation(session_id: str) -> set:
     """Return the set of active asyncio Tasks for this session."""
     return _active_delegation.get(session_id, set())
+
+
+def register_session(session_id: str, session: Any) -> None:
+    """Register a LiveKit AgentSession for background delegation callbacks."""
+    _session_registry[session_id] = session
+
+
+def unregister_session(session_id: str) -> None:
+    """Remove a session from the registry when it ends."""
+    _session_registry.pop(session_id, None)
+
+
+async def run_background_delegation(session_id: str, request: str) -> None:
+    """Run tool delegation as a background task and announce completion via session.generate_reply().
+
+    Allows delegate_tools_async to return immediately while Fireworks + Composio
+    execute asynchronously. When delegation completes, the registered session
+    generates a reply to announce the result conversationally.
+    """
+    session = _session_registry.get(session_id)
+    result: str = ""
+    try:
+        result = await delegate_tools(
+            session_id=session_id,
+            request=request,
+            context_hints={},
+            say_callback=None,
+            task_tracker=None,
+            pg_logger_module=None,
+        )
+        if session:
+            try:
+                instructions = (
+                    f"Background tool execution completed. Result: {result[:500]}. "
+                    "Announce this conversationally and concisely to the user. "
+                    "Do NOT repeat any prior response — only announce the result."
+                )
+                await session.generate_reply(instructions=instructions)
+            except Exception as announce_err:
+                logger.warning(f"[bg_delegation] generate_reply failed session={session_id}: {announce_err}")
+    except asyncio.CancelledError:
+        logger.info(f"[bg_delegation] Task cancelled session={session_id}")
+    except Exception as e:
+        logger.error(f"[bg_delegation] Delegation failed session={session_id}: {e}")
+        if session:
+            try:
+                await session.generate_reply(
+                    instructions="A background tool operation encountered an error. Apologize briefly and offer to retry."
+                )
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

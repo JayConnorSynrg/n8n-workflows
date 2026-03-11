@@ -8,6 +8,7 @@ Architecture:
 - Every tool publishes lifecycle events (tool.call → tool.executing → tool.completed)
   to the LiveKit data channel for real-time client-side observability
 """
+import asyncio
 import time
 from contextvars import ContextVar
 from typing import Optional
@@ -61,7 +62,11 @@ from . import email_tool, database_tool, vector_store_tool, google_drive_tool, a
 from .gamma_tool import generate_presentation_async, generate_document_async, generate_webpage_async, generate_social_async
 from .deep_store_tool import deep_store_async, deep_recall_async
 from .user_profile_tool import update_user_profile_tool as _update_user_profile_tool
-from .tool_executor import delegate_tools as _delegate_tools_impl
+from .tool_executor import (
+    delegate_tools as _delegate_tools_impl,
+    run_background_delegation as _run_background_delegation,
+    _active_delegation,
+)
 from ..utils.n8n_client import n8n_post as _n8n_post
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
@@ -1233,22 +1238,35 @@ async def delegate_tools_async(request: str) -> str:
     Describe what you need in natural language — the tool executor handles
     the specifics.
 
+    The tool executor runs in the background — this function returns immediately
+    so the conversation LLM can continue speaking while tools execute.
+
     Args:
         request: Natural language description of what to do (e.g. "search
                  Google Drive for the Q4 report", "send email to John about
                  the meeting tomorrow", "generate a presentation about AI trends")
 
     Returns:
-        Result of the tool operation as a string summary.
+        Immediate acknowledgment — result announced via session.generate_reply() when done.
     """
     session_id = _tool_session_id.get("")
-    return await _delegate_tools_impl(
-        session_id=session_id,
-        request=request,
-        context_hints={},
-        say_callback=None,
-        task_tracker=None,
-        pg_logger_module=None,
+
+    # Spawn background task — delegate_tools runs while conversation continues
+    task = asyncio.create_task(
+        _run_background_delegation(session_id=session_id, request=request)
+    )
+
+    # Register in active delegation so heartbeat skips spurious continuations
+    if session_id not in _active_delegation:
+        _active_delegation[session_id] = set()
+    _active_delegation[session_id].add(task)
+    task.add_done_callback(
+        lambda t: _active_delegation.get(session_id, set()).discard(t)
+    )
+
+    return (
+        "I'm working on that in the background — I'll let you know as soon as it's done. "
+        "Feel free to ask me anything else in the meantime."
     )
 
 

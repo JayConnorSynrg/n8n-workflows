@@ -90,7 +90,12 @@ from .tools.agent_context_tool import (
     set_current_user_id,
 )
 from .tools.async_wrappers import ASYNC_TOOLS, _tool_session_id
-from .tools.tool_executor import cleanup_session as _cleanup_tool_session, is_delegation_active as _is_delegation_active
+from .tools.tool_executor import (
+    cleanup_session as _cleanup_tool_session,
+    is_delegation_active as _is_delegation_active,
+    register_session as _register_session,
+    unregister_session as _unregister_session,
+)
 from .tools.user_profile_tool import set_user_mem_dir as _set_profile_mem_dir
 from .prompts import CONVERSATION_PROMPT
 from .tools.gamma_tool import get_notification_queue
@@ -2269,6 +2274,7 @@ async def entrypoint(ctx: JobContext):
         _session_id_ref[0] = session_id  # Update ref so on_user_turn_completed closure sees it
         set_current_session_id(session_id)
         set_current_user_id(_user_id)
+        _register_session(session_id, session)
         if _MEM_AVAILABLE and _mem_capture is not None:
             _mem_capture.set_user_id(_user_id)
         cache_warm_task = asyncio.create_task(warm_session_cache(session_id))
@@ -2567,6 +2573,8 @@ async def entrypoint(ctx: JobContext):
         HEARTBEAT_INTERVAL = 4.0   # Assess every 4 seconds
         TRIM_EVERY_N_CYCLES = 5    # Trim chat_ctx every 5*4=20 seconds
         _hb_count = 0
+        _delegation_active_since: dict[str, float] = {}
+        _delegation_progress_said: dict[str, float] = {}
         logger.info("[Heartbeat] Background monitor started (interval=4s, stall=8s, max=5, gap=8s, trim=20s)")
         while True:
             try:
@@ -2626,8 +2634,25 @@ async def entrypoint(ctx: JobContext):
                 # Skip heartbeat continuation if tool executor is actively running
                 _hb_session_id = _session_id_ref[0] or ""
                 if _hb_session_id and _is_delegation_active(_hb_session_id):
-                    logger.debug("[heartbeat] Skipping continuation — tool delegation active")
+                    _now_hb = time.monotonic()
+                    if _hb_session_id not in _delegation_active_since:
+                        _delegation_active_since[_hb_session_id] = _now_hb
+                    _hb_elapsed = _now_hb - _delegation_active_since[_hb_session_id]
+                    _hb_last_said = _delegation_progress_said.get(_hb_session_id, 0.0)
+                    if _hb_elapsed > 60.0 and (_now_hb - _hb_last_said) > 60.0:
+                        logger.info(f"[heartbeat] Background delegation > 60s — firing progress update")
+                        asyncio.ensure_future(session_ref.say(
+                            "I'm still working on that in the background — just a moment longer.",
+                            allow_interruptions=True,
+                        ))
+                        _delegation_progress_said[_hb_session_id] = _now_hb
+                    else:
+                        logger.debug("[heartbeat] Skipping continuation — tool delegation active")
                     continue
+                else:
+                    # Clear tracking when delegation ends
+                    _delegation_active_since.pop(_hb_session_id, None)
+                    _delegation_progress_said.pop(_hb_session_id, None)
 
                 if not task_tracker_ref.should_inject_continuation():
                     continue  # Nothing to do — stay silent
@@ -2940,6 +2965,7 @@ async def entrypoint(ctx: JobContext):
         # Cancel any active tool delegation tasks
         _cleanup_tool_session(ctx.room.name or "livekit-agent")
         logger.debug(f"[disconnect] Tool executor session cleaned up: {ctx.room.name}")
+        _unregister_session(ctx.room.name or "livekit-agent")
 
         # Clean up session memory when session ends
         session_id = ctx.room.name or "livekit-agent"
