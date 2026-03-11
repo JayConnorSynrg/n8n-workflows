@@ -92,6 +92,7 @@ from .tools.agent_context_tool import (
 from .tools.async_wrappers import ASYNC_TOOLS, _tool_session_id
 from .tools.tool_executor import (
     cleanup_session as _cleanup_tool_session,
+    evaluate_and_execute_from_speech as _evaluate_and_execute_from_speech,
     is_delegation_active as _is_delegation_active,
     register_session as _register_session,
     unregister_session as _unregister_session,
@@ -1565,6 +1566,29 @@ async def entrypoint(ctx: JobContext):
             except Exception as _wg_err:
                 logger.debug("[WakeGate] Preemptive interrupt() call failed: %s", _wg_err)
         # If _has_active_task and no wake word: allow continuation of current task (don't suppress)
+
+        # Parallel tool track: fire background evaluation simultaneously with conversation LLM
+        # Fires when gate allows (wake word / grace period / active task) and transcript is substantive
+        if not _wake_gate_suppress and text and len(text.split()) >= 3:
+            _eval_ctx: list[str] = []
+            try:
+                _chat_ctx_obj = _get_chat_ctx(session)
+                if _chat_ctx_obj and hasattr(_chat_ctx_obj, "messages"):
+                    _eval_ctx = [
+                        m.content for m in list(_chat_ctx_obj.messages)[-4:]
+                        if getattr(m, "role", "") in ("user", "assistant")
+                        and getattr(m, "content", None)
+                    ]
+            except Exception:
+                pass
+            asyncio.create_task(
+                _evaluate_and_execute_from_speech(
+                    transcript=text,
+                    session_id=session_id,
+                    context_hints={"user_id": _user_id},
+                    recent_context=_eval_ctx,
+                )
+            )
 
     @session.on("agent_state_changed")
     def on_agent_state_changed(ev):

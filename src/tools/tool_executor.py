@@ -52,6 +52,7 @@ _composio_semaphore = asyncio.Semaphore(4)
 
 # Prefix that signals the tool executor wants a user confirmation gate
 _GATE_SENTINEL = "__GATE__:"
+_NO_TOOL_SENTINEL = "NO_ACTION"
 
 # Fireworks API endpoint
 _FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
@@ -639,6 +640,91 @@ async def run_background_delegation(session_id: str, request: str, context_hints
                 )
             except Exception:
                 pass
+
+
+async def evaluate_and_execute_from_speech(
+    transcript: str,
+    session_id: str,
+    context_hints: dict | None = None,
+    recent_context: list[str] | None = None,
+) -> None:
+    """Parallel tool track — evaluates raw user speech and executes tools if actionable.
+
+    Fires on every valid user turn simultaneously with the conversation LLM.
+    Never produces voice output directly — announces via session.generate_reply() on completion.
+    Returns immediately (NO_ACTION) for purely conversational inputs.
+
+    Args:
+        transcript: Raw user speech transcription
+        session_id: Current session identifier
+        context_hints: Dict with user_id for Composio entity resolution
+        recent_context: Last few conversation messages for reference resolution
+    """
+    if not transcript or len(transcript.strip().split()) < 3:
+        return
+
+    # Build request with recent conversation context for pronoun/reference resolution
+    if recent_context:
+        ctx_str = "\n".join(f"- {m}" for m in recent_context[-3:] if m)
+        request = f"[Recent conversation]\n{ctx_str}\n\n[Current user request]\n{transcript}"
+    else:
+        request = transcript
+
+    result: str = ""
+    try:
+        result = await asyncio.wait_for(
+            delegate_tools(
+                session_id=session_id,
+                request=request,
+                context_hints=context_hints or {},
+                say_callback=None,
+                task_tracker=None,
+                pg_logger_module=None,
+            ),
+            timeout=300.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"[speech_eval] Timed out after 300s session={session_id}")
+        _session = _session_registry.get(session_id)
+        if _session:
+            try:
+                await _session.generate_reply(
+                    instructions="A background tool operation timed out. Apologize briefly and offer to retry."
+                )
+            except Exception:
+                pass
+        return
+    except asyncio.CancelledError:
+        logger.info(f"[speech_eval] Cancelled session={session_id}")
+        return
+    except Exception as e:
+        logger.error(f"[speech_eval] Error session={session_id}: {e}")
+        return
+
+    # Purely conversational — tool LLM determined no action needed
+    if not result or result.strip() == _NO_TOOL_SENTINEL:
+        logger.debug(f"[speech_eval] NO_ACTION — no tool execution needed session={session_id}")
+        return
+
+    # Gamma has its own _gamma_notification_monitor — skip to avoid double-announcement
+    if result.startswith("Gamma presentation ready:"):
+        return
+
+    # Announce result via conversation session
+    _session = _session_registry.get(session_id)
+    if _session:
+        _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
+        async with _lock:
+            try:
+                await _session.generate_reply(
+                    instructions=(
+                        f"Tool execution completed. Result: {result[:500]}. "
+                        "Announce this conversationally and concisely to the user. "
+                        "Do NOT repeat any prior response — only announce the new result."
+                    )
+                )
+            except Exception as _ann_err:
+                logger.warning(f"[speech_eval] generate_reply failed session={session_id}: {_ann_err}")
 
 
 # ---------------------------------------------------------------------------

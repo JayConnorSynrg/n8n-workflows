@@ -1327,5 +1327,4 @@ ASYNC_TOOLS = [
     query_context_async,           # CONV  — checkContext
     deep_store_async,              # BOTH  — DEEP STORE: unlimited cross-session archive (no confirmation gate)
     deep_recall_async,             # BOTH  — DEEP RECALL: retrieve by label or text search (READ, no gate)
-    delegate_tools_async,          # CONV  — DELEGATE: routes external operations to tool executor LLM
 ]
