@@ -62,6 +62,7 @@ from .gamma_tool import generate_presentation_async, generate_document_async, ge
 from .deep_store_tool import deep_store_async, deep_recall_async
 from .user_profile_tool import update_user_profile_tool as _update_user_profile_tool
 from .tool_executor import delegate_tools as _delegate_tools_impl
+from ..utils.n8n_client import n8n_post as _n8n_post
 
 # Memory module — cross-session persistent memory (optional, gracefully disabled if unavailable)
 try:
@@ -840,23 +841,9 @@ async def manage_connections_async(
 
         email_sent = False
         try:
-            async with aiohttp.ClientSession() as http_session:
-                async with http_session.post(
-                    _N8N_GMAIL_WEBHOOK,
-                    json=email_payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-AIO-Webhook-Secret": _get_settings().n8n_webhook_secret,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status in (200, 201, 202):
-                        try:
-                            body = await resp.json()
-                            # n8n returns {"status":"FAILED","error":true} on failure
-                            email_sent = not (isinstance(body, dict) and body.get("error"))
-                        except Exception:
-                            email_sent = True  # Non-JSON 200 → assume success
+            _status, _body = await _n8n_post("webhook/execute-gmail", email_payload, timeout=15)
+            if _status in (200, 201, 202):
+                email_sent = not (isinstance(_body, dict) and _body.get("error"))
         except Exception as email_err:
             from ..utils.logging import setup_logging as _sl
             _sl(__name__).warning(f"manageConnections: email send failed: {email_err}")
@@ -1133,25 +1120,16 @@ async def run_lead_gen_async(
     call_id = await publish_tool_start("runLeadGen", {"lead_type": lead_type, "mode": mode, "limit": limit})
     await publish_tool_executing(call_id)
     try:
-        async with aiohttp.ClientSession() as http_session:
-            async with http_session.post(
-                _N8N_LEAD_GEN_WEBHOOK,
-                json={"lead_type": lead_type, "mode": mode, "limit": limit},
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AIO-Webhook-Secret": _get_settings().n8n_webhook_secret,
-                },
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status in (200, 201, 202):
-                    mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
-                    result = f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
-                    await publish_tool_completed(call_id, result)
-                    return result
-                else:
-                    err = f"Lead gen webhook returned {resp.status}"
-                    await publish_tool_error(call_id, err)
-                    return f"Lead generation failed to start. Status: {resp.status}"
+        _status, _body = await _n8n_post("webhook/aio-lead-gen", {"lead_type": lead_type, "mode": mode, "limit": limit}, timeout=15)
+        if _status in (200, 201, 202):
+            mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
+            result = f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
+            await publish_tool_completed(call_id, result)
+            return result
+        else:
+            err = f"Lead gen webhook returned {_status}"
+            await publish_tool_error(call_id, err)
+            return f"Lead generation failed to start. Status: {_status}"
     except Exception as e:
         err = str(e)[:200]
         await publish_tool_error(call_id, err)

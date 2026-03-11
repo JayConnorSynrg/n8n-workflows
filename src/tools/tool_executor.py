@@ -1207,9 +1207,14 @@ async def delegate_tools(
             # Call Fireworks under semaphore
             async with _composio_semaphore:
                 try:
-                    assistant_msg = await _call_fireworks_streaming(
-                        ctx, _ALL_TOOL_SCHEMAS, session_id
+                    assistant_msg = await asyncio.wait_for(
+                        _call_fireworks_streaming(ctx, _ALL_TOOL_SCHEMAS, session_id),
+                        timeout=120.0,
                     )
+                except asyncio.TimeoutError:
+                    logger.error("[tool_executor] Fireworks streaming timed out at step %d (120s limit)", step)
+                    result_str = "I ran into a timeout while processing that request. Please try again."
+                    break
                 except Exception as api_exc:
                     logger.error("[tool_executor] Fireworks API error step %d: %s", step, api_exc)
                     result_str = f"I encountered an API error while processing: {api_exc}"
