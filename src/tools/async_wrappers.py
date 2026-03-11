@@ -467,6 +467,11 @@ async def recall_sessions_async(
         return "Session memory is not available right now."
 
     try:
+        _uid = (
+            agent_context_tool._current_user_id
+            if hasattr(agent_context_tool, "_current_user_id") and agent_context_tool._current_user_id is not None
+            else None
+        ) or "_default"
         results = []
 
         # Try pgvector HNSW first (unified index, faster at scale)
@@ -478,7 +483,7 @@ async def recall_sessions_async(
                 if _q_emb is not None:
                     _pv_rows = await _pv.pgvector_search(
                         query_embedding=_q_emb if isinstance(_q_emb, list) else list(_q_emb),
-                        user_id="_default",
+                        user_id=_uid,
                         top_k=limit,
                         source_filter="session_summary",
                     )
@@ -504,7 +509,7 @@ async def recall_sessions_async(
             results = await _asyncio.to_thread(
                 _memory_store.search_session_summaries,
                 query,
-                "_default",
+                _uid,
                 limit,
             )
     except Exception as _exc:

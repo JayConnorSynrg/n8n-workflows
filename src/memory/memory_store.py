@@ -850,8 +850,8 @@ def deep_store_save(
             with sqlite3.connect(_db_path) as conn:
                 cursor = conn.execute(
                     """
-                    INSERT INTO deep_store (user_id, label, content, session_id)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO deep_store (user_id, label, content, session_id, created_at)
+                    VALUES (?, ?, ?, ?, datetime('now'))
                     """,
                     (user_id, label or None, content, session_id or None),
                 )
