@@ -2641,15 +2641,18 @@ async def entrypoint(ctx: JobContext):
                     _hb_last_said = _delegation_progress_said.get(_hb_session_id, 0.0)
                     if _hb_elapsed > 60.0 and (_now_hb - _hb_last_said) > 60.0:
                         logger.info(f"[heartbeat] Background delegation > 60s — firing progress update")
-                        asyncio.ensure_future(session_ref.say(
+                        _say_task = asyncio.create_task(session_ref.say(
                             "I'm still working on that in the background — just a moment longer.",
                             allow_interruptions=True,
                         ))
+                        _say_task.add_done_callback(
+                            lambda t: logger.warning(f"[heartbeat] progress say() failed: {t.exception()}") if not t.cancelled() and t.exception() else None
+                        )
                         _delegation_progress_said[_hb_session_id] = _now_hb
                     else:
                         logger.debug("[heartbeat] Skipping continuation — tool delegation active")
                     continue
-                else:
+                elif _hb_session_id:
                     # Clear tracking when delegation ends
                     _delegation_active_since.pop(_hb_session_id, None)
                     _delegation_progress_said.pop(_hb_session_id, None)

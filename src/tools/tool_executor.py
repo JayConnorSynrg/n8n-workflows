@@ -19,6 +19,7 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
+import weakref
 from typing import Any, Callable, Optional
 
 import httpx
@@ -40,7 +41,8 @@ _tool_session_chat_ctx: dict[str, list] = {}
 _active_delegation: dict[str, set] = {}
 
 # LiveKit AgentSession registry — keyed by session_id for background delegation callbacks
-_session_registry: dict[str, Any] = {}
+_session_registry: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+_session_delegation_locks: dict[str, asyncio.Lock] = {}
 
 # ContextVar allowing _dispatch_tool_call to know the current session without closure
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
@@ -572,38 +574,64 @@ def unregister_session(session_id: str) -> None:
     _session_registry.pop(session_id, None)
 
 
-async def run_background_delegation(session_id: str, request: str) -> None:
+async def run_background_delegation(session_id: str, request: str, context_hints: dict | None = None) -> None:
     """Run tool delegation as a background task and announce completion via session.generate_reply().
 
     Allows delegate_tools_async to return immediately while Fireworks + Composio
     execute asynchronously. When delegation completes, the registered session
     generates a reply to announce the result conversationally.
+
+    P0-2: session fetched AFTER await to avoid stale reference.
+    P0-1: Gamma results suppressed — _gamma_notification_monitor owns Gamma announcements.
+    P1-1: per-session lock prevents concurrent generate_reply calls.
+    P1-2: context_hints passed through so user_id reaches Composio entity resolution.
+    P3-1: outer 300s timeout prevents infinite hang.
     """
-    session = _session_registry.get(session_id)
+    if context_hints is None:
+        context_hints = {}
     result: str = ""
     try:
-        result = await delegate_tools(
-            session_id=session_id,
-            request=request,
-            context_hints={},
-            say_callback=None,
-            task_tracker=None,
-            pg_logger_module=None,
+        result = await asyncio.wait_for(
+            delegate_tools(
+                session_id=session_id,
+                request=request,
+                context_hints=context_hints,
+                say_callback=None,
+                task_tracker=None,
+                pg_logger_module=None,
+            ),
+            timeout=300.0,
         )
+        # P0-2: Re-fetch session after the long-running await — avoids stale reference
+        session = _session_registry.get(session_id)
+        # P0-1: Gamma has its own _gamma_notification_monitor — skip generate_reply to avoid double-announcement
+        if session and not result.startswith("Gamma presentation ready:"):
+            _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
+            async with _lock:
+                try:
+                    instructions = (
+                        f"Background tool execution completed. Result: {result[:500]}. "
+                        "Announce this conversationally and concisely to the user. "
+                        "Do NOT repeat any prior response — only announce the result."
+                    )
+                    await session.generate_reply(instructions=instructions)
+                except Exception as announce_err:
+                    logger.warning(f"[bg_delegation] generate_reply failed session={session_id}: {announce_err}")
+    except asyncio.TimeoutError:
+        logger.error(f"[bg_delegation] Delegation timed out after 300s session={session_id}")
+        session = _session_registry.get(session_id)
         if session:
             try:
-                instructions = (
-                    f"Background tool execution completed. Result: {result[:500]}. "
-                    "Announce this conversationally and concisely to the user. "
-                    "Do NOT repeat any prior response — only announce the result."
+                await session.generate_reply(
+                    instructions="A background tool operation timed out. Apologize briefly and offer to retry."
                 )
-                await session.generate_reply(instructions=instructions)
-            except Exception as announce_err:
-                logger.warning(f"[bg_delegation] generate_reply failed session={session_id}: {announce_err}")
+            except Exception:
+                pass
     except asyncio.CancelledError:
         logger.info(f"[bg_delegation] Task cancelled session={session_id}")
     except Exception as e:
         logger.error(f"[bg_delegation] Delegation failed session={session_id}: {e}")
+        session = _session_registry.get(session_id)
         if session:
             try:
                 await session.generate_reply(
@@ -1085,27 +1113,19 @@ async def _dispatch_tool_call(
         # LEAD GENERATION / PROSPECT SCRAPER
         # ----------------------------------------------------------------
         elif tool_name == "runLeadGen":
-            import aiohttp
-            from ..config import get_settings as _gs
-            settings = _gs()
-            _N8N_LEAD_GEN_WEBHOOK = "https://jayconnorexe.app.n8n.cloud/webhook/aio-lead-gen"
+            from ..utils.n8n_client import n8n_post as _n8n_tep_post
             lead_type = args.get("lead_type", "")
             mode = args.get("mode", "results")
             limit = args.get("limit", 5)
-            async with aiohttp.ClientSession() as http_session:
-                async with http_session.post(
-                    _N8N_LEAD_GEN_WEBHOOK,
-                    json={"lead_type": lead_type, "mode": mode, "limit": limit},
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-AIO-Webhook-Secret": settings.n8n_webhook_secret,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status in (200, 201, 202):
-                        mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
-                        return f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
-                    return f"Lead generation failed to start. Status: {resp.status}"
+            _status, _body = await _n8n_tep_post(
+                "webhook/aio-lead-gen",
+                {"lead_type": lead_type, "mode": mode, "limit": limit},
+                timeout=15,
+            )
+            if _status in (200, 201, 202):
+                mode_desc = "enriched leads with a Gmail draft" if mode == "enrich" else "a lead list with CSV link"
+                return f"Lead generation started for {lead_type}. You'll receive {mode_desc} via email shortly."
+            return f"Lead generation failed to start. Status: {_status}"
 
         elif tool_name == "scrapeProspects":
             clamped_limit = max(1, min(50, args.get("limit", 10)))

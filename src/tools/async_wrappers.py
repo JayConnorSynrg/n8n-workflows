@@ -699,7 +699,6 @@ async def manage_connections_async(
     """Manage Composio service connections."""
     import time
     import asyncio as _asyncio
-    import aiohttp
     from .composio_router import (
         get_connected_services_status,
         initiate_service_connection,
@@ -1121,7 +1120,6 @@ async def run_lead_gen_async(
     limit: int = 5,
 ) -> str:
     """Fire-and-forget lead gen workflow — n8n returns immediately, results arrive via email."""
-    import aiohttp
     call_id = await publish_tool_start("runLeadGen", {"lead_type": lead_type, "mode": mode, "limit": limit})
     await publish_tool_executing(call_id)
     try:
@@ -1252,8 +1250,13 @@ async def delegate_tools_async(request: str) -> str:
     session_id = _tool_session_id.get("")
 
     # Spawn background task — delegate_tools runs while conversation continues
+    _bg_user_id = (
+        agent_context_tool._current_user_id
+        if hasattr(agent_context_tool, "_current_user_id") and agent_context_tool._current_user_id
+        else "_default"
+    )
     task = asyncio.create_task(
-        _run_background_delegation(session_id=session_id, request=request)
+        _run_background_delegation(session_id=session_id, request=request, context_hints={"user_id": _bg_user_id})
     )
 
     # Register in active delegation so heartbeat skips spurious continuations
