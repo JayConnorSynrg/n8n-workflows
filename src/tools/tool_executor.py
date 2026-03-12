@@ -19,7 +19,6 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
-import weakref
 from typing import Any, Callable, Optional
 
 import httpx
@@ -27,6 +26,13 @@ import httpx
 from ..config import get_settings
 from ..prompts import TOOL_SYSTEM_PROMPT
 from ..utils.session_facts import store_fact
+from ..utils.session_manager import (
+    get_or_create_lock as _sm_get_lock,
+    get_session as _sm_get_session,
+    register_session,
+    unregister_session,
+)
+from ..utils.tool_result import ToolResult, announce_tool_result as _announce_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +45,6 @@ _tool_session_chat_ctx: dict[str, list] = {}
 
 # Active asyncio Tasks per session — used by heartbeat to check is_delegation_active()
 _active_delegation: dict[str, set] = {}
-
-# LiveKit AgentSession registry — keyed by session_id for background delegation callbacks
-_session_registry: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
-_session_delegation_locks: dict[str, asyncio.Lock] = {}
 
 # ContextVar allowing _dispatch_tool_call to know the current session without closure
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
@@ -565,16 +567,6 @@ def get_active_delegation(session_id: str) -> set:
     return _active_delegation.get(session_id, set())
 
 
-def register_session(session_id: str, session: Any) -> None:
-    """Register a LiveKit AgentSession for background delegation callbacks."""
-    _session_registry[session_id] = session
-
-
-def unregister_session(session_id: str) -> None:
-    """Remove a session from the registry when it ends."""
-    _session_registry.pop(session_id, None)
-
-
 async def run_background_delegation(session_id: str, request: str, context_hints: dict | None = None) -> None:
     """Run tool delegation as a background task and announce completion via session.generate_reply().
 
@@ -604,58 +596,49 @@ async def run_background_delegation(session_id: str, request: str, context_hints
             timeout=300.0,
         )
         # P0-2: Re-fetch session after the long-running await — avoids stale reference
-        session = _session_registry.get(session_id)
-        # P0-1: Gamma has its own _gamma_notification_monitor — skip generate_reply to avoid double-announcement
-        # Also suppress CB_TRIPPED results — conversation LLM handles auth errors naturally
-        _is_cb_result = result.startswith("CB_TRIPPED:")
-        if session and not result.startswith("Gamma presentation ready:") and not _is_cb_result:
-            _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
+        session = _sm_get_session(session_id)
+        if session:
+            _lock = _sm_get_lock(session_id)
             async with _lock:
-                try:
-                    # Agent-state backoff: avoid interrupting mid-speech or mid-think
-                    _bg_agent_session = _session_registry.get(session_id)
-                    if _bg_agent_session:
-                        _bg_backoff = 0
-                        while _bg_backoff < 6:
-                            _bg_state = str(getattr(_bg_agent_session, "agent_state", "")).lower()
-                            if "thinking" not in _bg_state and "speaking" not in _bg_state:
-                                break
-                            await asyncio.sleep(0.3)
-                            _bg_agent_session = _session_registry.get(session_id)
-                            if not _bg_agent_session:
-                                break
-                            _bg_backoff += 1
-                        session = _bg_agent_session or session
-                    instructions = (
-                        f"Background tool execution completed. Result: {result[:500]}. "
-                        "Announce this conversationally and concisely to the user. "
-                        "Do NOT repeat any prior response — only announce the result."
-                    )
-                    await session.generate_reply(instructions=instructions)
-                except Exception as announce_err:
-                    logger.warning(f"[bg_delegation] generate_reply failed session={session_id}: {announce_err}")
+                # Agent-state backoff: avoid interrupting mid-speech or mid-think
+                _bg_agent_session = _sm_get_session(session_id)
+                if _bg_agent_session:
+                    _bg_backoff = 0
+                    while _bg_backoff < 6:
+                        _bg_state = str(getattr(_bg_agent_session, "agent_state", "")).lower()
+                        if "thinking" not in _bg_state and "speaking" not in _bg_state:
+                            break
+                        await asyncio.sleep(0.3)
+                        _bg_agent_session = _sm_get_session(session_id)
+                        if not _bg_agent_session:
+                            break
+                        _bg_backoff += 1
+                    session = _bg_agent_session or session
+                await _announce_tool_result(
+                    session,
+                    ToolResult(tool_name="bg_delegation", result=result),
+                    session_id=session_id,
+                )
     except asyncio.TimeoutError:
         logger.error(f"[bg_delegation] Delegation timed out after 300s session={session_id}")
-        session = _session_registry.get(session_id)
+        session = _sm_get_session(session_id)
         if session:
-            try:
-                await session.generate_reply(
-                    instructions="A background tool operation timed out. Apologize briefly and offer to retry."
-                )
-            except Exception:
-                pass
+            await _announce_tool_result(
+                session,
+                ToolResult(tool_name="bg_delegation", result="timeout", is_timeout=True),
+                session_id=session_id,
+            )
     except asyncio.CancelledError:
         logger.info(f"[bg_delegation] Task cancelled session={session_id}")
     except Exception as e:
         logger.error(f"[bg_delegation] Delegation failed session={session_id}: {e}")
-        session = _session_registry.get(session_id)
+        session = _sm_get_session(session_id)
         if session:
-            try:
-                await session.generate_reply(
-                    instructions="A background tool operation encountered an error. Apologize briefly and offer to retry."
-                )
-            except Exception:
-                pass
+            await _announce_tool_result(
+                session,
+                ToolResult(tool_name="bg_delegation", result="error", is_error=True),
+                session_id=session_id,
+            )
 
 
 async def evaluate_and_execute_from_speech(
@@ -701,14 +684,13 @@ async def evaluate_and_execute_from_speech(
         )
     except asyncio.TimeoutError:
         logger.error(f"[speech_eval] Timed out after 300s session={session_id}")
-        _session = _session_registry.get(session_id)
+        _session = _sm_get_session(session_id)
         if _session:
-            try:
-                await _session.generate_reply(
-                    instructions="A background tool operation timed out. Apologize briefly and offer to retry."
-                )
-            except Exception:
-                pass
+            await _announce_tool_result(
+                _session,
+                ToolResult(tool_name="speech_eval", result="timeout", is_timeout=True),
+                session_id=session_id,
+            )
         return
     except asyncio.CancelledError:
         logger.info(f"[speech_eval] Cancelled session={session_id}")
@@ -717,49 +699,30 @@ async def evaluate_and_execute_from_speech(
         logger.error(f"[speech_eval] Error session={session_id}: {e}")
         return
 
-    # Purely conversational — tool LLM determined no action needed
-    if not result or result.strip() == _NO_TOOL_SENTINEL:
-        logger.debug(f"[speech_eval] NO_ACTION — no tool execution needed session={session_id}")
-        return
-
-    # Gamma has its own _gamma_notification_monitor — skip to avoid double-announcement
-    if result.startswith("Gamma presentation ready:"):
-        return
-
-    # CB_TRIPPED sentinel — composio_router prefixes all CB returns with "CB_TRIPPED:"
-    if result.startswith("CB_TRIPPED:"):
-        logger.debug(f"[speech_eval] CB result suppressed — conversation LLM will handle session={session_id}")
-        return
-
     # Announce result via conversation session
-    _session = _session_registry.get(session_id)
+    _session = _sm_get_session(session_id)
     if _session:
-        _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
+        _lock = _sm_get_lock(session_id)
         async with _lock:
-            try:
-                # Agent-state backoff: avoid interrupting mid-speech or mid-think
-                _eval_agent_session = _session_registry.get(session_id)
-                if _eval_agent_session:
-                    _eval_backoff = 0
-                    while _eval_backoff < 6:
-                        _eval_state = str(getattr(_eval_agent_session, "agent_state", "")).lower()
-                        if "thinking" not in _eval_state and "speaking" not in _eval_state:
-                            break
-                        await asyncio.sleep(0.3)
-                        _eval_agent_session = _session_registry.get(session_id)
-                        if not _eval_agent_session:
-                            break
-                        _eval_backoff += 1
-                    _session = _eval_agent_session or _session
-                await _session.generate_reply(
-                    instructions=(
-                        f"Tool execution completed. Result: {result[:500]}. "
-                        "Announce this conversationally and concisely to the user. "
-                        "Do NOT repeat any prior response — only announce the new result."
-                    )
-                )
-            except Exception as _ann_err:
-                logger.warning(f"[speech_eval] generate_reply failed session={session_id}: {_ann_err}")
+            # Agent-state backoff: avoid interrupting mid-speech or mid-think
+            _eval_agent_session = _sm_get_session(session_id)
+            if _eval_agent_session:
+                _eval_backoff = 0
+                while _eval_backoff < 6:
+                    _eval_state = str(getattr(_eval_agent_session, "agent_state", "")).lower()
+                    if "thinking" not in _eval_state and "speaking" not in _eval_state:
+                        break
+                    await asyncio.sleep(0.3)
+                    _eval_agent_session = _sm_get_session(session_id)
+                    if not _eval_agent_session:
+                        break
+                    _eval_backoff += 1
+                _session = _eval_agent_session or _session
+            await _announce_tool_result(
+                _session,
+                ToolResult(tool_name="speech_eval", result=result),
+                session_id=session_id,
+            )
 
 
 # ---------------------------------------------------------------------------
