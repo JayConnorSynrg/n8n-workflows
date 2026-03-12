@@ -832,7 +832,7 @@ async def entrypoint(ctx: JobContext):
 
         # Parallel tool track: fire background evaluation simultaneously with conversation LLM
         # Fires when gate allows (wake word / grace period / active task) and transcript is substantive
-        if not _wake_gate_suppress and text and len(text.split()) >= 3:
+        if not _wake_gate_suppress and text and len(text.split()) >= 5:
             _eval_ctx: list[str] = []
             try:
                 _chat_ctx_obj = _get_chat_ctx(session)

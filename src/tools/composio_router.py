@@ -82,6 +82,8 @@ _SLUG_OVERRIDES: dict[str, str] = {
     "GOOGLEDRIVE_GET_FILE_BY_ID": "GOOGLEDRIVE_GET_FILE_METADATA",
     # Microsoft Teams: old slug cached in session history
     "MICROSOFT_TEAMS_LIST_MESSAGES": "MICROSOFT_TEAMS_TEAMS_LIST_CHANNEL_MESSAGES",
+    "CHATS_GET_ALL_CHATS": "MICROSOFT_TEAMS_CHATS_GET_ALL_CHATS",
+    "CHATS_GET_ALL_MESSAGES": "MICROSOFT_TEAMS_CHATS_GET_ALL_MESSAGES",
 }
 
 # ── Pagination hard cap ───────────────────────────────────────────────────
@@ -143,7 +145,8 @@ def _get_slug_failure_count(slug: str) -> int:
 # Auth failure tracker: services where OAuth token is confirmed expired.
 # Key = toolkit name (e.g. "microsoft_teams"), value = re-auth URL or True.
 # Prevents hammering services that can't execute until user re-authenticates.
-_service_auth_failed: dict[str, bool] = {}
+_service_auth_failed: dict[str, tuple[bool, float]] = {}
+_SERVICE_AUTH_TTL_SECS: float = 3600.0  # 1 hour TTL on auth failure circuit breaker
 
 # INITIATED connection tracking: service_key → timestamp when auth link was sent.
 # Composio INITIATED connections auto-expire after 10 minutes.
@@ -1729,25 +1732,26 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
     # (trip all tools in that service, not just the slug that first failed)
     # COMPOSIO_MANAGE_* are recovery tools — bypass auth CB so reconnect flows work
     service_key = _slug_to_toolkit.get(slug_key)
-    if service_key and _service_auth_failed.get(service_key) and not slug_key.startswith("COMPOSIO_MANAGE"):
-        service_display = service_key.replace("_", " ").title()
-        logger.warning(f"Composio: Auth circuit breaker OPEN for service={service_key} (token expired)")
-        asyncio.create_task(_log_tool_error(
-            slug=slug_key, resolved_slug=None, service=service_key,
-            error_type="CB_TRIPPED", cb_state="OPEN",
-            worker_id=_WORKER_ID, session_id=None,
-        ))
-        return (
-            f"{_CB_TRIPPED_PREFIX} The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
-            f"Do not retry {service_display} tools."
-        )
+    if service_key and service_key in _service_auth_failed and not slug_key.startswith("COMPOSIO_MANAGE"):
+        _failed_at = _service_auth_failed[service_key][1]
+        if time.time() - _failed_at < _SERVICE_AUTH_TTL_SECS:
+            service_display = service_key.replace("_", " ").title()
+            logger.warning(f"Composio: Auth circuit breaker OPEN for service={service_key} (token expired)")
+            asyncio.create_task(_log_tool_error(
+                slug=slug_key, resolved_slug=None, service=service_key,
+                error_type="CB_TRIPPED", cb_state="OPEN",
+                worker_id=_WORKER_ID, session_id=None,
+            ))
+            return _CB_TRIPPED_PREFIX + f"service {service_key} auth failed — retry after TTL"
+        else:
+            del _service_auth_failed[service_key]
 
     # Cross-worker circuit breaker check: another worker may have tripped the breaker
     # for this service after a 401. Only runs when local state is clear (fast-path above
     # already short-circuited if this worker knows the service is failed).
     if service_key and not _service_auth_failed.get(service_key):
         if await _pg_check_service_failed_cached(service_key):
-            _service_auth_failed[service_key] = True  # sync local state to avoid repeat PG reads
+            _service_auth_failed[service_key] = (True, time.time())  # sync local state to avoid repeat PG reads
             service_display = service_key.replace("_", " ").title()
             logger.warning(
                 f"Composio: Auth circuit breaker OPEN (cross-worker) for service={service_key}"
@@ -2386,7 +2390,7 @@ async def get_connected_services_status() -> str:
                         )
                     # Side-effect: keep auth failure state in sync with live data
                     if status in ("EXPIRED", "FAILED", "INACTIVE"):
-                        _service_auth_failed[service_key] = True
+                        _service_auth_failed[service_key] = (True, time.time())
                         asyncio.create_task(  # mirror failure state to PG
                             _pg_mark_service_failed(service_key, f"status={status}")
                         )

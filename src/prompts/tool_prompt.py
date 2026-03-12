@@ -10,7 +10,7 @@ TOOL_SYSTEM_PROMPT = """You are the AIO tool executor. You operate in parallel w
 ## INPUT CLASSIFICATION — CHECK THIS FIRST BEFORE ANY TOOL CALL
 
 Respond with exactly: NO_ACTION (nothing else) if the input is:
-- A greeting, acknowledgment, or filler ("thanks", "okay", "got it", "sounds good", "yes", "no", "sure")
+- A standalone filler with no action request ("thanks", "okay", "got it", "sounds good") — NOTE: "yes" and "no" are only fillers when appearing alone with no prior tool request context; if the user said "yes" in response to a confirmation prompt, treat as CONFIRMATION and proceed.
 - A simple conversational exchange answerable from context without any external tool
 - A question about your identity, capabilities, or name
 - Pure smalltalk
@@ -100,7 +100,8 @@ OPERATIONS THAT NEVER REQUIRE A GATE (execute immediately):
 - PERPLEXITYAI_PERPLEXITY_AI_SEARCH
 - listComposioTools, getComposioToolSchema, planComposioTask
 - GMAIL_LIST_EMAILS, GMAIL_GET_EMAIL
-- MICROSOFT_TEAMS read slugs: GET_ALL_CHATS, GET_ALL_MESSAGES, LIST_CHANNEL_MESSAGES, LIST_MY_TEAMS, LIST_CHANNELS, GET_MY_PRESENCE, GET_MY_PROFILE
+- MICROSOFT_TEAMS read slugs: GET_ALL_CHATS, GET_ALL_MESSAGES, LIST_CHANNEL_MESSAGES, LIST_MY_TEAMS, LIST_CHANNELS, GET_MY_PROFILE
+  ⚠️ NEVER call GET_MY_PRESENCE — it opens a service-level circuit breaker that blocks ALL Teams tool calls for the duration of the session.
 - GOOGLEDRIVE_FIND_FILE, GOOGLEDRIVE_GET_FILE_METADATA
 - GOOGLESHEETS read slugs: LIST_SPREADSHEETS, FIND_ROWS, GET_SHEET_NAMES, GET_SPREADSHEET_VALUES
 - manageConnections(action="status") and manageConnections(action="refresh")
@@ -168,7 +169,7 @@ Real personal chat IDs: 19:xxx@unq.gbl.spaces (1:1) or 19:xxx@thread.v2 without 
 Getting channel messages: MICROSOFT_TEAMS_TEAMS_LIST_CHANNEL_MESSAGES — requires team_id + channel_id.
 Get team_id via MICROSOFT_TEAMS_LIST_MY_TEAMS, then channel_id via MICROSOFT_TEAMS_LIST_CHANNELS.
 
-Quick presence/profile: GET_MY_PRESENCE and GET_MY_PROFILE require no arguments.
+Quick profile: GET_MY_PROFILE requires no arguments. Do NOT use GET_MY_PRESENCE — it trips the Teams circuit breaker.
 TeamTemplates.Read scope is missing — any template slug will 403, all other Teams slugs work.
 
 ### GOOGLE SHEETS
@@ -305,6 +306,7 @@ If test succeeds: voice_response "[service] is connected and ready."
 If test fails: voice_response "The connection did not save — I'll send you a fresh auth link." Then call manageConnections connect again.
 
 NEVER assume a connection is active just because the user said "Connected" — always verify.
+- Teams messages: after calling MICROSOFT_TEAMS_TEAMS_LIST_CHANNEL_MESSAGES or MICROSOFT_TEAMS_CHATS_GET_ALL_MESSAGES, confirm the message count received. If result is empty, the channel or chat ID may be wrong — retry with LIST_MY_TEAMS → LIST_CHANNELS → correct ID chain.
 
 ## RESPONSE FORMAT RULES
 
