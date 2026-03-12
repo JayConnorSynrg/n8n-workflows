@@ -607,7 +607,7 @@ async def run_background_delegation(session_id: str, request: str, context_hints
         session = _session_registry.get(session_id)
         # P0-1: Gamma has its own _gamma_notification_monitor — skip generate_reply to avoid double-announcement
         # Also suppress CB_TRIPPED results — conversation LLM handles auth errors naturally
-        _is_cb_result = "do not retry" in result or "needs to be re-authenticated" in result or "needs to be re-authorized" in result
+        _is_cb_result = result.startswith("CB_TRIPPED:")
         if session and not result.startswith("Gamma presentation ready:") and not _is_cb_result:
             _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
             async with _lock:
@@ -726,8 +726,8 @@ async def evaluate_and_execute_from_speech(
     if result.startswith("Gamma presentation ready:"):
         return
 
-    # CB_TRIPPED or auth-expired — conversation LLM handles naturally; suppress bg announce
-    if "do not retry" in result or "needs to be re-authenticated" in result or "needs to be re-authorized" in result:
+    # CB_TRIPPED sentinel — composio_router prefixes all CB returns with "CB_TRIPPED:"
+    if result.startswith("CB_TRIPPED:"):
         logger.debug(f"[speech_eval] CB result suppressed — conversation LLM will handle session={session_id}")
         return
 

@@ -64,6 +64,9 @@ _failed_slugs: dict[str, tuple] = {}  # slug -> (count, timestamp)
 _CB_MAX_FAILURES = 2
 _FAILED_SLUG_TTL_SECS = 300.0  # 5 minutes — auto-expire transient circuit breaks
 
+# ── Circuit breaker trip sentinel ─────────────────────────────────────────────
+_CB_TRIPPED_PREFIX = "CB_TRIPPED:"  # Prefix all CB-tripped returns for reliable detection
+
 # Slug aliases for renamed/deprecated/non-existent Composio slugs.
 # Applied at the very start of _resolve_slug_fast() before any tier matching.
 # Key = slug LLM may request; Value = actual live Composio slug.
@@ -1720,7 +1723,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
             error_type="CB_TRIPPED", retry_count=_cb_count, cb_state="OPEN",
             worker_id=_WORKER_ID, session_id=None,
         ))
-        return f"This tool does not exist or is not available do not retry it do not call it with different arguments"
+        return f"{_CB_TRIPPED_PREFIX} This tool does not exist or is not available do not retry it do not call it with different arguments"
 
     # Auth circuit breaker: check if this service's OAuth is known to be expired
     # (trip all tools in that service, not just the slug that first failed)
@@ -1735,7 +1738,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
             worker_id=_WORKER_ID, session_id=None,
         ))
         return (
-            f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
+            f"{_CB_TRIPPED_PREFIX} The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
             f"Do not retry {service_display} tools."
         )
 
@@ -1750,7 +1753,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                 f"Composio: Auth circuit breaker OPEN (cross-worker) for service={service_key}"
             )
             return (
-                f"The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
+                f"{_CB_TRIPPED_PREFIX} The {service_display} connection needs to be re-authenticated before any {service_display} tools can run. "
                 f"Do not retry {service_display} tools."
             )
 
@@ -2247,7 +2250,7 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
                     session_id=None, user_id=user_id,
                 ))
                 return (
-                    f"The {service_display} connection needs to be re-authorized. "
+                    f"{_CB_TRIPPED_PREFIX} The {service_display} connection needs to be re-authorized. "
                     f"Tell the user their {service_display} access has expired and they need to reconnect it. "
                     f"You can say 'reconnect {service_display}' to send them a new authorization link via email. "
                     f"Do not retry {service_display} tools until reconnected."

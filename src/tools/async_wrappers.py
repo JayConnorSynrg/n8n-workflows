@@ -1278,7 +1278,7 @@ async def delegate_tools_async(request: str) -> str:
 # =============================================================================
 
 # All tool functions available to the tool executor LLM for dispatching.
-# 24 TOOL-class + 4 CONV + 2 BOTH + 1 delegateTools = 31 total
+# 24 TOOL-class + 4 CONV + 2 BOTH = 30 total
 TOOL_EXECUTOR_TOOLS = [
     send_email_async,              # TOOL
     search_documents_async,        # TOOL
@@ -1295,7 +1295,6 @@ TOOL_EXECUTOR_TOOLS = [
     database_query_async,          # TOOL
     vector_search_async,           # TOOL
     query_context_async,           # CONV
-    delegate_tools_async,          # CONV  — DELEGATE: route external operations to tool executor LLM
     # Contacts
     add_contact_async,             # TOOL
     get_contact_async,             # TOOL
@@ -1318,8 +1317,8 @@ TOOL_EXECUTOR_TOOLS = [
     generate_social_async,         # TOOL  — ASYNC: social media posts (Instagram/LinkedIn/TikTok)
 ]
 
-# Tools registered with the conversation LLM (7 only).
-# Conversation LLM delegates all external operations via delegateTools.
+# Tools registered with the conversation LLM (6 only — memory tools).
+# Conversation LLM does NOT use delegateTools; tool executor fires from raw speech transcription.
 ASYNC_TOOLS = [
     recall_data_async,             # CONV
     recall_sessions_async,         # CONV  — SESSION RECALL: semantic search over past session summaries (READ, no gate)
