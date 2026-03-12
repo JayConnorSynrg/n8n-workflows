@@ -606,7 +606,9 @@ async def run_background_delegation(session_id: str, request: str, context_hints
         # P0-2: Re-fetch session after the long-running await — avoids stale reference
         session = _session_registry.get(session_id)
         # P0-1: Gamma has its own _gamma_notification_monitor — skip generate_reply to avoid double-announcement
-        if session and not result.startswith("Gamma presentation ready:"):
+        # Also suppress CB_TRIPPED results — conversation LLM handles auth errors naturally
+        _is_cb_result = "do not retry" in result or "needs to be re-authenticated" in result or "needs to be re-authorized" in result
+        if session and not result.startswith("Gamma presentation ready:") and not _is_cb_result:
             _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
             async with _lock:
                 try:
@@ -708,6 +710,11 @@ async def evaluate_and_execute_from_speech(
 
     # Gamma has its own _gamma_notification_monitor — skip to avoid double-announcement
     if result.startswith("Gamma presentation ready:"):
+        return
+
+    # CB_TRIPPED or auth-expired — conversation LLM handles naturally; suppress bg announce
+    if "do not retry" in result or "needs to be re-authenticated" in result or "needs to be re-authorized" in result:
+        logger.debug(f"[speech_eval] CB result suppressed — conversation LLM will handle session={session_id}")
         return
 
     # Announce result via conversation session

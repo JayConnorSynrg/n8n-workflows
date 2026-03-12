@@ -859,18 +859,23 @@ def deep_store_save(
                 row_id = cursor.lastrowid or 0
             logger.debug("[DeepStore] Saved id=%d label=%r", row_id, label)
             # Dual-write to pgvector for HNSW-indexed semantic search
+            # Note: this runs inside asyncio.to_thread() — wrap ensure_future separately
+            # so a RuntimeError (no event loop in thread) does not poison the sqlite success
             if _PGVECTOR_AVAILABLE and _pgvector.is_available() and _ds_embedding is not None:
-                asyncio.ensure_future(
-                    _pgvector.pgvector_save(
-                        content=content,
-                        embedding=_ds_embedding if isinstance(_ds_embedding, list) else list(_ds_embedding),
-                        user_id=user_id,
-                        session_id=session_id,
-                        label=label,
-                        source="deep_store",
-                        importance=0.9,  # Deep store entries are high importance
+                try:
+                    asyncio.ensure_future(
+                        _pgvector.pgvector_save(
+                            content=content,
+                            embedding=_ds_embedding if isinstance(_ds_embedding, list) else list(_ds_embedding),
+                            user_id=user_id,
+                            session_id=session_id,
+                            label=label,
+                            source="deep_store",
+                            importance=0.9,
+                        )
                     )
-                )
+                except RuntimeError:
+                    logger.debug("[DeepStore] pgvector dual-write skipped — no event loop in thread")
             return row_id
         except Exception as exc:
             logger.error("[DeepStore] Save error: %s", exc)

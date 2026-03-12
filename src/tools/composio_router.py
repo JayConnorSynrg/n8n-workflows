@@ -1711,7 +1711,8 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
         )
 
     # Circuit breaker: check if this slug has failed too many times (Change 2: TTL-aware check)
-    if _is_slug_failed(slug_key):
+    # COMPOSIO_MANAGE_* are recovery tools — never block them with a service CB
+    if _is_slug_failed(slug_key) and not slug_key.startswith("COMPOSIO_MANAGE"):
         _cb_count = _get_slug_failure_count(slug_key)
         logger.warning(f"Composio: Circuit breaker OPEN for {slug_key} ({_cb_count} failures)")
         asyncio.create_task(_log_tool_error(
@@ -1723,8 +1724,9 @@ async def execute_composio_tool(tool_slug: str, arguments: dict, _is_retry: bool
 
     # Auth circuit breaker: check if this service's OAuth is known to be expired
     # (trip all tools in that service, not just the slug that first failed)
+    # COMPOSIO_MANAGE_* are recovery tools — bypass auth CB so reconnect flows work
     service_key = _slug_to_toolkit.get(slug_key)
-    if service_key and _service_auth_failed.get(service_key):
+    if service_key and _service_auth_failed.get(service_key) and not slug_key.startswith("COMPOSIO_MANAGE"):
         service_display = service_key.replace("_", " ").title()
         logger.warning(f"Composio: Auth circuit breaker OPEN for service={service_key} (token expired)")
         asyncio.create_task(_log_tool_error(
