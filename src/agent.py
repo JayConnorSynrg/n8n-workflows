@@ -1581,11 +1581,19 @@ async def entrypoint(ctx: JobContext):
                     ]
             except Exception:
                 pass
+            _eval_gamma_url = ""
+            try:
+                _eval_gamma_url = _get_fact(session_id, "gammaUrl") or ""
+            except Exception:
+                pass
+            _eval_ctx_hints: dict = {"user_id": _user_id}
+            if _eval_gamma_url:
+                _eval_ctx_hints["gammaUrl"] = _eval_gamma_url
             asyncio.create_task(
                 _evaluate_and_execute_from_speech(
                     transcript=text,
                     session_id=session_id,
-                    context_hints={"user_id": _user_id},
+                    context_hints=_eval_ctx_hints,
                     recent_context=_eval_ctx,
                 )
             )
@@ -2437,7 +2445,14 @@ async def entrypoint(ctx: JobContext):
                 if message:
                     logger.info(f"Gamma monitor: speaking notification job={job_id} content_type={content_type} has_url={bool(gamma_url)}")
                     try:
-                        await session_ref.say(message, allow_interruptions=True)
+                        _gamma_offer_instructions = (
+                            f"The Gamma {content_type} on '{topic}' is ready. "
+                            f"The URL is {gamma_url if gamma_url else 'stored in session facts'} — do NOT say this URL aloud. "
+                            f"Tell the user their {content_type} is complete in one sentence, "
+                            f"then offer to email them the link. "
+                            f"Example: 'Your {content_type} on {topic} is ready — want me to email you the link?'"
+                        )
+                        await session_ref.generate_reply(instructions=_gamma_offer_instructions)
                         logger.info(f"Gamma monitor: notification delivered job={job_id}")
 
                         # Store Gamma context in session facts for multi-turn coherence.
