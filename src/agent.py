@@ -2484,7 +2484,14 @@ async def entrypoint(ctx: JobContext):
                         # Retry once after brief delay (session may be transitioning)
                         await asyncio.sleep(1.0)
                         try:
-                            await session_ref.say(message, allow_interruptions=True)
+                            _retry_offer_instructions = (
+                                f"The Gamma {content_type} on '{topic}' is ready. "
+                                f"The URL is {gamma_url if gamma_url else 'stored in session facts'} — do NOT say this URL aloud. "
+                                f"Tell the user their {content_type} is complete in one sentence, "
+                                f"then offer to email them the link. "
+                                f"Example: 'Your {content_type} on {topic} is ready — want me to email you the link?'"
+                            )
+                            await session_ref.generate_reply(instructions=_retry_offer_instructions)
                             logger.info(f"Gamma monitor: retry notification delivered job={job_id}")
                         except Exception as retry_err:
                             logger.error(f"Gamma monitor: retry also failed job={job_id}: {retry_err}")
@@ -2512,9 +2519,10 @@ async def entrypoint(ctx: JobContext):
                         try:
                             instructions = (
                                 f"The Gamma {content_type} on '{topic}' is ready. "
-                                f"URL: {gamma_url}. "
+                                f"The URL is {gamma_url} — do NOT say this URL aloud. "
                                 + (f"Generation ID: {generation_id}. " if generation_id else "")
-                                + f"Tell the user it's done and share the link. "
+                                + f"Tell the user their {content_type} is complete in one sentence, "
+                                f"then offer to email them the link. "
                                 f"Do NOT call generatePresentation/generateDocument/generateWebpage again."
                             )
                             await session_ref.generate_reply(instructions=instructions)

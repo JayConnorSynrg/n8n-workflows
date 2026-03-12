@@ -612,6 +612,20 @@ async def run_background_delegation(session_id: str, request: str, context_hints
             _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
             async with _lock:
                 try:
+                    # Agent-state backoff: avoid interrupting mid-speech or mid-think
+                    _bg_agent_session = _session_registry.get(session_id)
+                    if _bg_agent_session:
+                        _bg_backoff = 0
+                        while _bg_backoff < 6:
+                            _bg_state = str(getattr(_bg_agent_session, "agent_state", "")).lower()
+                            if "thinking" not in _bg_state and "speaking" not in _bg_state:
+                                break
+                            await asyncio.sleep(0.3)
+                            _bg_agent_session = _session_registry.get(session_id)
+                            if not _bg_agent_session:
+                                break
+                            _bg_backoff += 1
+                        session = _bg_agent_session or session
                     instructions = (
                         f"Background tool execution completed. Result: {result[:500]}. "
                         "Announce this conversationally and concisely to the user. "
@@ -723,6 +737,20 @@ async def evaluate_and_execute_from_speech(
         _lock = _session_delegation_locks.setdefault(session_id, asyncio.Lock())
         async with _lock:
             try:
+                # Agent-state backoff: avoid interrupting mid-speech or mid-think
+                _eval_agent_session = _session_registry.get(session_id)
+                if _eval_agent_session:
+                    _eval_backoff = 0
+                    while _eval_backoff < 6:
+                        _eval_state = str(getattr(_eval_agent_session, "agent_state", "")).lower()
+                        if "thinking" not in _eval_state and "speaking" not in _eval_state:
+                            break
+                        await asyncio.sleep(0.3)
+                        _eval_agent_session = _session_registry.get(session_id)
+                        if not _eval_agent_session:
+                            break
+                        _eval_backoff += 1
+                    _session = _eval_agent_session or _session
                 await _session.generate_reply(
                     instructions=(
                         f"Tool execution completed. Result: {result[:500]}. "
@@ -763,6 +791,7 @@ def _trim_tool_context(session_id: str) -> None:
         m for m in ctx
         if m.get("role") == "assistant" and m.get("tool_calls")
     ]
+    asst_with_tool_calls = asst_with_tool_calls[-8:]
     # Keep last 5 tool-result messages
     tool_results = [m for m in ctx if m.get("role") == "tool"][-5:]
     # Keep last 10 user/assistant messages without tool_calls
